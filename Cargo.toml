@@ -1,0 +1,134 @@
+[package]
+name = "feature-extractor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+authors = ["nagarx"]
+description = "High-performance LOB/MBO feature extraction for deep learning models"
+license = "MIT"
+repository = "https://github.com/nagarx/feature-extractor-MBO-LOB"
+keywords = ["lob", "orderbook", "feature-extraction", "machine-learning", "hft"]
+categories = ["finance", "data-structures", "science"]
+readme = "README.md"
+
+[lib]
+name = "feature_extractor"
+path = "src/lib.rs"
+
+[features]
+default = []
+databento = ["mbo-lob-reconstructor/databento", "dep:dbn"]
+
+[dependencies]
+# MBO-LOB Reconstructor - use git dependency for standalone usage
+# For local development, uncomment the path line and comment out the git line
+mbo-lob-reconstructor = { git = "https://github.com/nagarx/MBO-LOB-Reconstructor.git", branch = "main" }
+# mbo-lob-reconstructor = { path = "../MBO-LOB-reconstructor" }  # For local development
+dbn = { git = "https://github.com/databento/dbn.git", tag = "v0.20.0", optional = true }
+
+# Hash maps
+ahash = "0.8"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+serde_json = "1.0"
+
+# Data export
+ndarray = "0.15"
+ndarray-npy = "0.8"
+chrono = "0.4"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+tempfile = "3.8"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# ============================================================================
+# Examples - Demonstrating library usage
+# ============================================================================
+
+[[example]]
+name = "basic_extraction"
+path = "examples/basic_extraction.rs"
+
+[[example]]
+name = "normalization"
+path = "examples/normalization.rs"
+
+[[example]]
+name = "sequence_builder"
+path = "examples/sequence_builder.rs"
+
+[[example]]
+name = "volume_sampling"
+path = "examples/volume_sampling.rs"
+
+[[example]]
+name = "full_pipeline"
+path = "examples/full_pipeline.rs"
+
+[[example]]
+name = "validate_lob_features"
+path = "examples/validate_lob_features.rs"
+
+[[example]]
+name = "validate_mbo_features"
+path = "examples/validate_mbo_features.rs"
+
+[[example]]
+name = "benchmark_sampling"
+path = "examples/benchmark_sampling.rs"
+
+[[example]]
+name = "validate_sequence_builder"
+path = "examples/validate_sequence_builder.rs"
+
+[[example]]
+name = "validate_hft_labeling"
+path = "examples/validate_hft_labeling.rs"
+
+[[example]]
+name = "validate_nvda_labeling"
+path = "examples/validate_nvda_labeling.rs"
+
+# ============================================================================
+# Tools - Data processing scripts
+# ============================================================================
+
+[[bin]]
+name = "export_dataset"
+path = "tools/export_nvidia_dataset.rs"
+
+[[bin]]
+name = "export_aligned"
+path = "tools/export_nvidia_dataset_aligned.rs"
+
+# ============================================================================
+# Benchmarks
+# ============================================================================
+
+[[bench]]
+name = "feature_extraction"
+harness = false
+
+# ============================================================================
+# Profiles
+# ============================================================================
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

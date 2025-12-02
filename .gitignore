@@ -1,0 +1,39 @@
+# Generated files
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test data (large files)
+/data/
+*.dbn
+*.dbn.zst
+*.npy
+
+# Experiment outputs
+/experiments/
+
+# Logs
+*.log
+
+# Coverage
+/coverage/
+*.profraw
+*.profdata
+
+# Benchmarks output
+/criterion/
+
+# Local development
+.env
+.env.local
+
