@@ -2,8 +2,8 @@
 
 High-performance feature extraction library for Limit Order Book (LOB) and Market-by-Order (MBO) data, designed for deep learning model training in high-frequency trading.
 
-[![Rust](https://img.shields.io/badge/rust-1.83%2B-orange.svg)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/rust-1.83%2B-blue.svg)](https://www.rust-lang.org/)
+[![Build Status](https://github.com/nagarx/feature-extractor-MBO-LOB/workflows/CI/badge.svg)](https://github.com/nagarx/feature-extractor-MBO-LOB/actions)
 
 ## Overview
 
@@ -11,31 +11,13 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 
 ### Key Features
 
-- **Paper-Aligned Presets**: DeepLOB, TLOB, FI-2010, TransLOB, LiT configurations
-- **Comprehensive Feature Set**: 200+ features across multiple categories
-- **Label Generation**: TLOB and DeepLOB labeling methods for supervised learning
-- **Multiple Normalization Strategies**: Z-score, Rolling Z-score, Global Z-score (LOBench), Bilinear
-- **Multi-Scale Sequences**: Fast/Medium/Slow temporal resolution
-- **Validation Module**: Crossed quote detection, feature range checks
-- **High Performance**: Single-pass computation, pre-allocated buffers
-
-## Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-feature-extractor = { git = "https://github.com/nagarx/feature-extractor-MBO-LOB.git" }
-```
-
-### With Databento Support
-
-To use with Databento MBO data files:
-
-```toml
-[dependencies]
-feature-extractor = { git = "https://github.com/nagarx/feature-extractor-MBO-LOB.git", features = ["databento"] }
-```
+- Paper-Aligned Presets: DeepLOB, TLOB, FI-2010, TransLOB, LiT configurations
+- Comprehensive Feature Set: 200+ features across multiple categories
+- Label Generation: TLOB and DeepLOB labeling methods for supervised learning
+- Multiple Normalization Strategies: Z-score, Rolling Z-score, Global Z-score (LOBench), Bilinear
+- Multi-Scale Sequences: Fast/Medium/Slow temporal resolution
+- Validation Module: Crossed quote detection, feature range checks
+- High Performance: Single-pass computation, pre-allocated buffers
 
 ## Quick Start
 
@@ -274,13 +256,13 @@ let mut gen = DeepLobLabelGenerator::with_method(config, DeepLobMethod::VsPastAv
 
 ```rust
 // HFT (short-term, tight threshold)
-let config = LabelConfig::hft();  // h=10, k=5, θ=0.02%
+let config = LabelConfig::hft();  // h=10, k=5, threshold=0.02%
 
 // Short-term trading
-let config = LabelConfig::short_term();  // h=50, k=10, θ=0.2%
+let config = LabelConfig::short_term();  // h=50, k=10, threshold=0.2%
 
 // Medium-term trading
-let config = LabelConfig::medium_term();  // h=100, k=20, θ=0.5%
+let config = LabelConfig::medium_term();  // h=100, k=20, threshold=0.5%
 
 // FI-2010 benchmark (k = h)
 let config = LabelConfig::fi2010(50);
@@ -290,10 +272,10 @@ let config = LabelConfig::fi2010(50);
 
 The library is optimized for HFT environments:
 
-- **Single-pass computation**: Features extracted in one LOB traversal
-- **Pre-allocated buffers**: No allocations in hot paths
-- **Welford's algorithm**: Numerically stable running statistics
-- **Zero-copy normalization**: In-place operations where possible
+- Single-pass computation: Features extracted in one LOB traversal
+- Pre-allocated buffers: No allocations in hot paths
+- Welford's algorithm: Numerically stable running statistics
+- Zero-copy normalization: In-place operations where possible
 
 Run benchmarks:
 
@@ -325,24 +307,16 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design documentation.
 
 This library implements features from:
 
-- **DeepLOB**: Deep Convolutional Neural Networks for Limit Order Books
-- **TLOB**: Transformer Model with Dual Attention for Price Trend Prediction
-- **FI-2010**: Benchmark Dataset for Mid-Price Forecasting
-- **LOBench**: Representation Learning of Limit Order Book
-- **ViT-LOB**: Vision Transformer for Stock Price Trend Prediction
-- **Price Impact**: The Price Impact of Order Book Events (Cont et al.)
-- **Queue Imbalance**: Queue Imbalance as a One-Tick-Ahead Price Predictor
+- DeepLOB: Deep Convolutional Neural Networks for Limit Order Books
+- TLOB: Transformer Model with Dual Attention for Price Trend Prediction
+- FI-2010: Benchmark Dataset for Mid-Price Forecasting
+- LOBench: Representation Learning of Limit Order Book
+- ViT-LOB: Vision Transformer for Stock Price Trend Prediction
+- Price Impact: The Price Impact of Order Book Events (Cont et al.)
+- Queue Imbalance: Queue Imbalance as a One-Tick-Ahead Price Predictor
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Proprietary - All Rights Reserved. See [LICENSE](LICENSE) for details.
 
-## Contributing
-
-Contributions are welcome! Please ensure:
-
-1. All tests pass (`cargo test`)
-2. Code is formatted (`cargo fmt`)
-3. No clippy warnings (`cargo clippy`)
-4. Documentation is updated
-
+No permission is granted to use, copy, modify, or distribute this software.
