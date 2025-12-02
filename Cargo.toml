@@ -22,7 +22,7 @@ databento = ["mbo-lob-reconstructor/databento", "dep:dbn"]
 [dependencies]
 # MBO-LOB Reconstructor - use git dependency for standalone usage
 # For local development, uncomment the path line and comment out the git line
-mbo-lob-reconstructor = { git = "https://github.com/nagarx/MBO-LOB-Reconstructor.git", branch = "main" }
+mbo-lob-reconstructor = { git = "https://github.com/nagarx/MBO-LOB-reconstructor.git", branch = "main" }
 # mbo-lob-reconstructor = { path = "../MBO-LOB-reconstructor" }  # For local development
 dbn = { git = "https://github.com/databento/dbn.git", tag = "v0.20.0", optional = true }
 

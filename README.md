@@ -7,7 +7,7 @@ High-performance feature extraction library for Limit Order Book (LOB) and Marke
 
 ## Overview
 
-This library provides a modular, research-aligned feature extraction pipeline for LOB data. It works in conjunction with [MBO-LOB-Reconstructor](https://github.com/nagarx/MBO-LOB-Reconstructor) to transform raw Market-by-Order data into ML-ready features.
+This library provides a modular, research-aligned feature extraction pipeline for LOB data. It works in conjunction with [MBO-LOB-reconstructor](https://github.com/nagarx/MBO-LOB-reconstructor) to transform raw Market-by-Order data into ML-ready features.
 
 ### Key Features
 
