@@ -365,7 +365,8 @@ fn test_granular_level_by_level_validation() {
 
     // Store MBO states at MBP timestamps
     let mut mbo_states_at_mbp_ts: BTreeMap<u64, LobState> = BTreeMap::new();
-    let mut _current_state: Option<LobState> = None;
+    #[allow(unused_assignments)]
+    let mut current_state: Option<LobState> = None;
     let mut mbo_count = 0u64;
 
     // Get list of MBP timestamps we care about
@@ -382,7 +383,7 @@ fn test_granular_level_by_level_validation() {
 
         // Process message
         if let Ok(state) = reconstructor.process_message(&msg) {
-            _current_state = Some(state.clone());
+            current_state = Some(state.clone());
 
             // Check if we've passed any MBP timestamps
             while mbp_idx < mbp_timestamps.len() && mbp_timestamps[mbp_idx] <= msg_ts {
@@ -585,7 +586,8 @@ fn test_granular_time_of_day_analysis() {
     let mut after_hours_stats = TimeSliceStats::default();
 
     // Process MBO
-    let mut _current_state: Option<LobState> = None;
+    #[allow(unused_assignments)]
+    let mut current_state: Option<LobState> = None;
     let mbp_timestamps: Vec<u64> = mbp_data.keys().cloned().collect();
     let mut mbp_idx = 0;
 
@@ -596,7 +598,7 @@ fn test_granular_time_of_day_analysis() {
         let msg_ts = msg.timestamp.unwrap_or(0) as u64;
 
         if let Ok(state) = reconstructor.process_message(&msg) {
-            _current_state = Some(state.clone());
+            current_state = Some(state.clone());
 
             while mbp_idx < mbp_timestamps.len() && mbp_timestamps[mbp_idx] <= msg_ts {
                 let mbp_ts = mbp_timestamps[mbp_idx];
@@ -765,7 +767,8 @@ fn test_granular_error_pattern_detection() {
     let mut large_bid_errors: Vec<(u64, f64, f64, f64)> = Vec::new(); // (ts, expected, actual, diff)
     let mut large_ask_errors: Vec<(u64, f64, f64, f64)> = Vec::new();
 
-    let mut _current_state: Option<LobState> = None;
+    #[allow(unused_assignments)]
+    let mut current_state: Option<LobState> = None;
     let mbp_timestamps: Vec<u64> = mbp_data.keys().cloned().collect();
     let mut mbp_idx = 0;
     let mut total_comparisons = 0u64;
@@ -777,7 +780,7 @@ fn test_granular_error_pattern_detection() {
         let msg_ts = msg.timestamp.unwrap_or(0) as u64;
 
         if let Ok(state) = reconstructor.process_message(&msg) {
-            _current_state = Some(state.clone());
+            current_state = Some(state.clone());
 
             while mbp_idx < mbp_timestamps.len() && mbp_timestamps[mbp_idx] <= msg_ts {
                 let mbp_ts = mbp_timestamps[mbp_idx];
@@ -1063,7 +1066,8 @@ fn test_granular_multi_day_consistency() {
         };
 
         let mut reconstructor = LobReconstructor::new(10);
-        let mut _current_state: Option<LobState> = None;
+        #[allow(unused_assignments)]
+        let mut current_state: Option<LobState> = None;
         let mbp_timestamps: Vec<u64> = mbp_data.keys().cloned().collect();
         let mut mbp_idx = 0;
 
@@ -1080,7 +1084,7 @@ fn test_granular_multi_day_consistency() {
             let msg_ts = msg.timestamp.unwrap_or(0) as u64;
 
             if let Ok(state) = reconstructor.process_message(&msg) {
-                _current_state = Some(state.clone());
+                current_state = Some(state.clone());
 
                 while mbp_idx < mbp_timestamps.len() && mbp_timestamps[mbp_idx] <= msg_ts {
                     let mbp_ts = mbp_timestamps[mbp_idx];
