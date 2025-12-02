@@ -12,12 +12,30 @@
 //! - **FI-2010**: 144 features (40 raw + 104 handcrafted)
 //! - **TransLOB**: Multi-horizon feature support
 //!
+//! # Quick Start
+//!
+//! For the simplest usage, import the prelude:
+//!
+//! ```ignore
+//! use feature_extractor::prelude::*;
+//!
+//! // Process MBO data through the complete pipeline
+//! let config = PipelineConfig::default();
+//! let mut pipeline = Pipeline::from_config(config)?;
+//! let output = pipeline.process("data/NVDA.mbo.dbn.zst")?;
+//!
+//! // Export to NumPy format
+//! let exporter = NumpyExporter::new("output/");
+//! exporter.export_day("2025-02-03", &output)?;
+//! ```
+//!
 //! # Architecture
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                     Feature Extractor                          │
 //! ├─────────────────────────────────────────────────────────────────┤
+//! │  prelude/       - Convenient imports for common usage          │
 //! │  schema/        - Feature definitions and paper presets        │
 //! │  features/      - Raw feature extraction (no normalization)    │
 //! │  preprocessing/ - Normalization and sampling                   │
@@ -26,7 +44,7 @@
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! # Example
+//! # Detailed Example
 //!
 //! ```ignore
 //! use feature_extractor::{FeatureExtractor, schema::{Preset, FeatureSchema}};
@@ -39,12 +57,14 @@
 //! let features = extractor.extract_lob_features(&lob_state)?;
 //! ```
 
+pub mod builder;
 pub mod config;
 pub mod export;
 pub mod export_aligned;
 pub mod features;
 pub mod labeling;
 pub mod pipeline;
+pub mod prelude;
 pub mod preprocessing;
 pub mod schema;
 pub mod sequence_builder;
@@ -96,3 +116,6 @@ pub use labeling::{
 // Re-exports - Pipeline
 pub use mbo_lob_reconstructor::{LobState, Result};
 pub use pipeline::{Pipeline, PipelineOutput};
+
+// Re-exports - Builder
+pub use builder::PipelineBuilder;

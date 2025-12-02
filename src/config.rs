@@ -263,8 +263,41 @@ impl Default for MultiScaleConfig {
 
 impl PipelineConfig {
     /// Create a new pipeline configuration with default values.
+    ///
+    /// The default configuration uses:
+    /// - 10 LOB levels (40 raw features)
+    /// - Window size: 100, stride: 1
+    /// - Volume-based sampling (1000 shares)
+    /// - Feature count is automatically synchronized
     pub fn new() -> Self {
         Self::default()
+    }
+    
+    /// Create a pipeline configuration with specific feature settings.
+    ///
+    /// This automatically computes and sets the correct feature count
+    /// in the sequence configuration.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::{PipelineConfig, FeatureConfig};
+    ///
+    /// let config = PipelineConfig::with_feature_config(
+    ///     FeatureConfig::default().with_derived(true).with_mbo(true)
+    /// );
+    /// // feature_count is automatically set to 84
+    /// ```
+    pub fn with_feature_config(features: FeatureConfig) -> Self {
+        let feature_count = features.feature_count();
+        let mut config = Self {
+            features,
+            sequence: SequenceConfig::default(),
+            sampling: Some(SamplingConfig::default()),
+            metadata: None,
+        };
+        config.sequence.feature_count = feature_count;
+        config
     }
 
     /// Set experiment metadata.
@@ -273,15 +306,43 @@ impl PipelineConfig {
         self
     }
 
-    /// Set feature configuration.
+    /// Set feature configuration and auto-update sequence feature count.
+    ///
+    /// This method automatically synchronizes the sequence's feature_count
+    /// with the feature configuration, preventing mismatches.
     pub fn with_features(mut self, config: FeatureConfig) -> Self {
+        let feature_count = config.feature_count();
         self.features = config;
+        self.sequence.feature_count = feature_count;
         self
     }
 
     /// Set sequence configuration.
+    ///
+    /// # Warning
+    ///
+    /// If you manually set the sequence config, ensure `feature_count` matches
+    /// your feature configuration. Consider using [`PipelineConfig::with_features()`]
+    /// which auto-syncs the feature count.
     pub fn with_sequence(mut self, config: SequenceConfig) -> Self {
         self.sequence = config;
+        self
+    }
+    
+    /// Set window size and stride for sequence building.
+    ///
+    /// This is a convenience method that preserves the auto-computed feature count.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let config = PipelineConfig::default()
+    ///     .with_features(FeatureConfig::default().with_derived(true))
+    ///     .with_window(100, 10);  // window=100, stride=10, feature_count preserved
+    /// ```
+    pub fn with_window(mut self, window_size: usize, stride: usize) -> Self {
+        self.sequence.window_size = window_size;
+        self.sequence.stride = stride;
         self
     }
 
@@ -289,6 +350,14 @@ impl PipelineConfig {
     pub fn with_sampling(mut self, config: SamplingConfig) -> Self {
         self.sampling = Some(config);
         self
+    }
+    
+    /// Synchronize the sequence feature count with the feature configuration.
+    ///
+    /// Call this after making manual changes to ensure consistency.
+    /// This is called automatically by [`PipelineConfig::with_features()`].
+    pub fn sync_feature_count(&mut self) {
+        self.sequence.feature_count = self.features.feature_count();
     }
 
     /// Enable Phase 1 adaptive sampling with default parameters.
@@ -358,7 +427,17 @@ impl PipelineConfig {
     /// Validate the configuration.
     ///
     /// Returns Ok(()) if valid, Err(msg) otherwise.
+    ///
+    /// # Validation Checks
+    ///
+    /// 1. Sequence configuration is valid
+    /// 2. Sampling configuration is valid (if present)
+    /// 3. Feature configuration is valid
+    /// 4. Feature count in sequence matches feature configuration
     pub fn validate(&self) -> Result<(), String> {
+        // Validate feature config
+        self.features.validate()?;
+        
         // Validate sequence config
         self.sequence.validate()?;
 
@@ -367,11 +446,8 @@ impl PipelineConfig {
             sampling.validate()?;
         }
 
-        // ✅ FIX: Validate feature count consistency with all possible combinations
-        let base_lob = 40; // Raw LOB features (10 levels × 4 features/level)
-        let derived_count = if self.features.include_derived { 8 } else { 0 };
-        let mbo_count = if self.features.include_mbo { 36 } else { 0 };
-        let expected_features = base_lob + derived_count + mbo_count;
+        // Validate feature count consistency using the authoritative feature_count() method
+        let expected_features = self.features.feature_count();
 
         if self.sequence.feature_count != expected_features {
             let config_desc = match (self.features.include_derived, self.features.include_mbo) {
@@ -381,8 +457,9 @@ impl PipelineConfig {
                 (true, true) => "LOB + derived + MBO",
             };
             return Err(format!(
-                "Feature count mismatch: sequence expects {}, but {} suggests {} (40 base + {} derived + {} MBO)",
-                self.sequence.feature_count, config_desc, expected_features, derived_count, mbo_count
+                "Feature count mismatch: sequence expects {}, but FeatureConfig ({}) computes {}. \
+                 Use PipelineConfig::with_features() to auto-sync, or call sync_feature_count().",
+                self.sequence.feature_count, config_desc, expected_features
             ));
         }
 

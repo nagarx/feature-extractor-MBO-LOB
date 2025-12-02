@@ -77,6 +77,19 @@ impl std::error::Error for SequenceError {}
 /// Configuration for sequence building.
 ///
 /// Controls how sequences are generated from the feature buffer.
+///
+/// # Auto-Computing Feature Count
+///
+/// Instead of manually specifying `feature_count`, use [`SequenceConfig::from_feature_config()`]
+/// to automatically compute it from your [`FeatureConfig`]:
+///
+/// ```ignore
+/// use feature_extractor::{FeatureConfig, SequenceConfig};
+///
+/// let feature_config = FeatureConfig::default().with_derived(true);
+/// let seq_config = SequenceConfig::from_feature_config(100, 10, &feature_config);
+/// assert_eq!(seq_config.feature_count, 48); // Auto-computed!
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SequenceConfig {
     /// Number of snapshots per sequence (transformer input length)
@@ -104,17 +117,31 @@ pub struct SequenceConfig {
     /// Recommended: 2-3× window_size
     pub max_buffer_size: usize,
 
-    /// Number of features per snapshot (e.g., 40 for raw LOB, 48 for LOB+derived, 76 for LOB+MBO, 84 for LOB+derived+MBO)
+    /// Number of features per snapshot.
+    ///
+    /// This should match the output of your feature extractor.
+    /// Use [`SequenceConfig::from_feature_config()`] to auto-compute this value.
+    ///
+    /// Common values:
+    /// - 40: Raw LOB only (10 levels x 4)
+    /// - 48: LOB + derived (40 + 8)
+    /// - 76: LOB + MBO (40 + 36)
+    /// - 84: LOB + derived + MBO (40 + 8 + 36)
     pub feature_count: usize,
 }
 
 impl SequenceConfig {
-    /// Create a new sequence configuration.
+    /// Create a new sequence configuration with manual feature count.
     ///
     /// # Arguments
     ///
     /// * `window_size` - Number of snapshots per sequence (e.g., 100)
     /// * `stride` - Number of snapshots to skip between sequences (e.g., 1)
+    ///
+    /// # Note
+    ///
+    /// This uses a default feature count of 40 (raw LOB features).
+    /// For automatic feature count computation, use [`SequenceConfig::from_feature_config()`].
     ///
     /// # Example
     ///
@@ -123,6 +150,7 @@ impl SequenceConfig {
     ///
     /// // TLOB standard: 100 snapshots, stride 1
     /// let config = SequenceConfig::new(100, 1);
+    /// assert_eq!(config.feature_count, 40); // Default for raw LOB
     /// ```
     pub fn new(window_size: usize, stride: usize) -> Self {
         let max_buffer_size = window_size.max(1000); // At least 1000 or window_size
@@ -131,11 +159,51 @@ impl SequenceConfig {
             window_size,
             stride,
             max_buffer_size,
-            feature_count: 40, // ✅ FIX: Default for raw LOB features (derived disabled)
+            feature_count: 40, // Default for raw LOB features
+        }
+    }
+    
+    /// Create a sequence configuration with feature count auto-computed from FeatureConfig.
+    ///
+    /// This is the recommended way to create a SequenceConfig as it ensures
+    /// the feature count matches your feature extraction configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `window_size` - Number of snapshots per sequence (e.g., 100)
+    /// * `stride` - Number of snapshots to skip between sequences (e.g., 10)
+    /// * `feature_config` - Feature extraction configuration
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::{FeatureConfig, SequenceConfig};
+    ///
+    /// let feature_config = FeatureConfig::default().with_derived(true).with_mbo(true);
+    /// let seq_config = SequenceConfig::from_feature_config(100, 10, &feature_config);
+    ///
+    /// assert_eq!(seq_config.window_size, 100);
+    /// assert_eq!(seq_config.stride, 10);
+    /// assert_eq!(seq_config.feature_count, 84); // Auto-computed: 40 + 8 + 36
+    /// ```
+    pub fn from_feature_config(
+        window_size: usize,
+        stride: usize,
+        feature_config: &crate::features::FeatureConfig,
+    ) -> Self {
+        let max_buffer_size = window_size.max(1000);
+        
+        Self {
+            window_size,
+            stride,
+            max_buffer_size,
+            feature_count: feature_config.feature_count(),
         }
     }
 
-    /// Set the feature count (40 for raw LOB, 48 for LOB+derived, 76 for LOB+MBO, 84 for LOB+derived+MBO).
+    /// Set the feature count manually.
+    ///
+    /// Prefer using [`SequenceConfig::from_feature_config()`] for automatic computation.
     pub fn with_feature_count(mut self, count: usize) -> Self {
         self.feature_count = count;
         self

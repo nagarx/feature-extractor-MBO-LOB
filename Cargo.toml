@@ -21,9 +21,8 @@ databento = ["mbo-lob-reconstructor/databento", "dep:dbn"]
 
 [dependencies]
 # MBO-LOB Reconstructor - use git dependency for standalone usage
-# For local development, uncomment the path line and comment out the git line
+# For local development, use: mbo-lob-reconstructor = { path = "../MBO-LOB-reconstructor" }
 mbo-lob-reconstructor = { git = "https://github.com/nagarx/MBO-LOB-reconstructor.git", branch = "main" }
-# mbo-lob-reconstructor = { path = "../MBO-LOB-reconstructor" }  # For local development
 dbn = { git = "https://github.com/databento/dbn.git", tag = "v0.20.0", optional = true }
 
 # Hash maps
@@ -94,6 +93,10 @@ path = "examples/validate_hft_labeling.rs"
 [[example]]
 name = "validate_nvda_labeling"
 path = "examples/validate_nvda_labeling.rs"
+
+[[example]]
+name = "builder_validation"
+path = "examples/builder_validation.rs"
 
 # ============================================================================
 # Tools - Data processing scripts

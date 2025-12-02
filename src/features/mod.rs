@@ -36,6 +36,41 @@ pub mod order_flow;
 use mbo_lob_reconstructor::{LobState, Result};
 
 /// Configuration for feature extraction.
+///
+/// # Feature Count Calculation
+///
+/// The total number of features is automatically computed based on configuration:
+///
+/// | Configuration | Feature Count | Breakdown |
+/// |--------------|---------------|-----------|
+/// | Default (LOB only) | 40 | 10 levels x 4 features |
+/// | LOB + derived | 48 | 40 + 8 derived |
+/// | LOB + MBO | 76 | 40 + 36 MBO |
+/// | LOB + derived + MBO | 84 | 40 + 8 + 36 |
+///
+/// Use [`FeatureConfig::feature_count()`] to get the computed count.
+///
+/// # Example
+///
+/// ```
+/// use feature_extractor::FeatureConfig;
+///
+/// // Default: 40 features (raw LOB only)
+/// let config = FeatureConfig::default();
+/// assert_eq!(config.feature_count(), 40);
+///
+/// // With derived features: 48 features
+/// let config = FeatureConfig::default().with_derived(true);
+/// assert_eq!(config.feature_count(), 48);
+///
+/// // With MBO features: 76 features
+/// let config = FeatureConfig::default().with_mbo(true);
+/// assert_eq!(config.feature_count(), 76);
+///
+/// // Full feature set: 84 features
+/// let config = FeatureConfig::default().with_derived(true).with_mbo(true);
+/// assert_eq!(config.feature_count(), 84);
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FeatureConfig {
     /// Number of LOB levels to extract (typically 10)
@@ -44,14 +79,102 @@ pub struct FeatureConfig {
     /// Minimum tick size for price normalization (e.g., 0.01 for US stocks)
     pub tick_size: f64,
 
-    /// Whether to include derived features
+    /// Whether to include derived features (8 additional features)
     pub include_derived: bool,
 
-    /// Whether to include MBO features
+    /// Whether to include MBO features (36 additional features)
     pub include_mbo: bool,
 
     /// MBO window size (number of messages to track)
     pub mbo_window_size: usize,
+}
+
+impl FeatureConfig {
+    /// Number of derived features when enabled.
+    pub const DERIVED_FEATURE_COUNT: usize = 8;
+    
+    /// Number of MBO features when enabled.
+    pub const MBO_FEATURE_COUNT: usize = 36;
+    
+    /// Create a new feature configuration with default values.
+    pub fn new(lob_levels: usize) -> Self {
+        Self {
+            lob_levels,
+            ..Default::default()
+        }
+    }
+    
+    /// Enable or disable derived features.
+    ///
+    /// Derived features include: mid-price, spread, spread_bps, total_bid_volume,
+    /// total_ask_volume, volume_imbalance, weighted_mid_price, price_impact.
+    pub fn with_derived(mut self, enabled: bool) -> Self {
+        self.include_derived = enabled;
+        self
+    }
+    
+    /// Enable or disable MBO features.
+    ///
+    /// MBO features include order flow imbalance, trade intensity, order arrival
+    /// rates, cancellation rates, and other microstructure metrics.
+    pub fn with_mbo(mut self, enabled: bool) -> Self {
+        self.include_mbo = enabled;
+        self
+    }
+    
+    /// Set the MBO window size.
+    pub fn with_mbo_window(mut self, window_size: usize) -> Self {
+        self.mbo_window_size = window_size;
+        self
+    }
+    
+    /// Set the tick size.
+    pub fn with_tick_size(mut self, tick_size: f64) -> Self {
+        self.tick_size = tick_size;
+        self
+    }
+    
+    /// Compute the total number of features based on configuration.
+    ///
+    /// This is the authoritative source for feature count calculation.
+    /// Use this method instead of manually computing feature counts.
+    ///
+    /// # Returns
+    ///
+    /// Total number of features:
+    /// - Base: `lob_levels * 4` (ask_price, ask_size, bid_price, bid_size per level)
+    /// - If `include_derived`: + 8 derived features
+    /// - If `include_mbo`: + 36 MBO features
+    #[inline]
+    pub fn feature_count(&self) -> usize {
+        let base = self.lob_levels * 4;
+        let derived = if self.include_derived { Self::DERIVED_FEATURE_COUNT } else { 0 };
+        let mbo = if self.include_mbo { Self::MBO_FEATURE_COUNT } else { 0 };
+        base + derived + mbo
+    }
+    
+    /// Get the number of raw LOB features.
+    #[inline]
+    pub fn lob_feature_count(&self) -> usize {
+        self.lob_levels * 4
+    }
+    
+    /// Validate the configuration.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.lob_levels == 0 {
+            return Err("lob_levels must be > 0".to_string());
+        }
+        if self.lob_levels > 50 {
+            return Err("lob_levels must be <= 50 (practical limit)".to_string());
+        }
+        if self.tick_size <= 0.0 {
+            return Err("tick_size must be > 0".to_string());
+        }
+        if self.include_mbo && self.mbo_window_size == 0 {
+            return Err("mbo_window_size must be > 0 when MBO is enabled".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl Default for FeatureConfig {
@@ -59,7 +182,7 @@ impl Default for FeatureConfig {
         Self {
             lob_levels: 10,
             tick_size: 0.01,
-            include_derived: false, // ✅ FIX: Disabled derived features for research paper compliance
+            include_derived: false,
             include_mbo: false,
             mbo_window_size: 1000,
         }
