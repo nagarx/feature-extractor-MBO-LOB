@@ -3,7 +3,8 @@
 //! This test validates both libraries with real NVIDIA MBO data (Feb 10, 2025)
 //! to ensure correctness, consistency, and accuracy.
 //!
-//! Run with: cargo test --test comprehensive_validation --release -- --nocapture
+//! **Note**: These tests require real MBO data files and are skipped in CI.
+//! Run locally with: cargo test --test comprehensive_validation --release -- --nocapture
 
 use feature_extractor::{
     // Labeling
@@ -24,6 +25,7 @@ use feature_extractor::{
     ZScoreNormalizer,
 };
 use mbo_lob_reconstructor::{DbnLoader, LobReconstructor, LobState};
+use std::path::Path;
 use std::time::Instant;
 
 /// Test data path - using Feb 10, 2025 (different from commonly used Feb 3)
@@ -35,12 +37,26 @@ const MAX_MESSAGES: usize = 500_000;
 /// Sample interval for feature extraction
 const SAMPLE_INTERVAL: usize = 100;
 
+/// Check if test data is available, skip test if not
+fn require_test_data() -> bool {
+    if !Path::new(TEST_DATA_PATH).exists() {
+        println!("⚠️  Test data not found at: {}", TEST_DATA_PATH);
+        println!("   Skipping test (this is expected in CI environments)");
+        return false;
+    }
+    true
+}
+
 // ============================================================================
 // Test 1: MBO-LOB-reconstructor Validation
 // ============================================================================
 
 #[test]
 fn test_lob_reconstructor_correctness() {
+    if !require_test_data() {
+        return;
+    }
+
     println!("\n{}", "=".repeat(70));
     println!("TEST 1: MBO-LOB-reconstructor Validation");
     println!("{}\n", "=".repeat(70));
@@ -249,6 +265,10 @@ fn test_lob_reconstructor_correctness() {
 
 #[test]
 fn test_feature_extractor_correctness() {
+    if !require_test_data() {
+        return;
+    }
+
     println!("\n{}", "=".repeat(70));
     println!("TEST 2: Feature Extractor Validation");
     println!("{}\n", "=".repeat(70));
@@ -464,6 +484,10 @@ fn test_feature_extractor_correctness() {
 
 #[test]
 fn test_order_flow_features() {
+    if !require_test_data() {
+        return;
+    }
+
     println!("\n{}", "=".repeat(70));
     println!("TEST 3: Order Flow Features Validation");
     println!("{}\n", "=".repeat(70));
@@ -505,7 +529,7 @@ fn test_order_flow_features() {
         }
 
         // Update trackers
-        if let Some(ref prev) = prev_state {
+        if let Some(ref _prev) = prev_state {
             ofi_tracker.update(&state, msg.timestamp.unwrap_or(0) as u64);
             mlofi_tracker.update(&state);
 
@@ -599,6 +623,10 @@ fn test_order_flow_features() {
 
 #[test]
 fn test_labeling_correctness() {
+    if !require_test_data() {
+        return;
+    }
+
     println!("\n{}", "=".repeat(70));
     println!("TEST 4: Labeling Validation");
     println!("{}\n", "=".repeat(70));
@@ -782,6 +810,10 @@ fn test_labeling_correctness() {
 
 #[test]
 fn test_normalization_correctness() {
+    if !require_test_data() {
+        return;
+    }
+
     println!("\n{}", "=".repeat(70));
     println!("TEST 5: Normalization Validation");
     println!("{}\n", "=".repeat(70));
@@ -964,6 +996,10 @@ fn test_normalization_correctness() {
 
 #[test]
 fn test_end_to_end_pipeline() {
+    if !require_test_data() {
+        return;
+    }
+
     println!("\n{}", "=".repeat(70));
     println!("TEST 6: End-to-End Pipeline Validation");
     println!("{}\n", "=".repeat(70));

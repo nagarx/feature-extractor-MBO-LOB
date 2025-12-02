@@ -43,7 +43,7 @@ fn main() {
         // Timestamp: 1 second apart
         let timestamp = i * 1_000_000_000; // i seconds in nanoseconds
 
-        builder.push(timestamp, features);
+        let _ = builder.push(timestamp, features);
     }
 
     let (buf_len, total_pushed, _, utilization) = builder.statistics();
@@ -91,7 +91,7 @@ fn main() {
     for i in 0..200 {
         let features: Vec<f64> = (0..48).map(|f| (i + f) as f64).collect();
         let timestamp = i * 500_000_000; // 0.5 seconds apart
-        builder.push(timestamp, features);
+        let _ = builder.push(timestamp, features);
     }
 
     // Generate all sequences with stride

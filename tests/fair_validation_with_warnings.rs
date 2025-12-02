@@ -19,6 +19,7 @@ const MBP10_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP1
 
 /// Results structure for fair comparison
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 struct FairValidationResults {
     // Basic stats
     total_mbo_messages: u64,

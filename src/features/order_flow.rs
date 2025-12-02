@@ -649,9 +649,9 @@ impl MultiLevelOfiTracker {
     /// Extract MLOFI features as a vector.
     ///
     /// Returns:
-    /// - [0]: Total MLOFI (sum across all levels)
-    /// - [1]: Weighted MLOFI (level-weighted sum)
-    /// - [2..2+levels]: OFI per level (bid + ask combined)
+    /// - \[0\]: Total MLOFI (sum across all levels)
+    /// - \[1\]: Weighted MLOFI (level-weighted sum)
+    /// - \[2..2+levels\]: OFI per level (bid + ask combined)
     #[inline]
     pub fn extract_features(&self) -> Vec<f64> {
         let mut features = Vec::with_capacity(2 + self.levels);

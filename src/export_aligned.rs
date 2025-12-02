@@ -101,8 +101,8 @@ impl AlignedBatchExporter {
     /// 4. Export both with validation
     ///
     /// # Output Files
-    /// - {day}_sequences.npy: [N_seq, window, features] float32
-    /// - {day}_labels.npy: [N_seq] int8  
+    /// - {day}_sequences.npy: \[N_seq, window, features\] float32
+    /// - {day}_labels.npy: \[N_seq\] int8  
     /// - {day}_metadata.json: Metadata with validation info
     pub fn export_day(&self, day_name: &str, output: &PipelineOutput) -> Result<AlignedDayExport> {
         // Create output directory

@@ -388,11 +388,11 @@ mod tests {
         // Set up 5 levels of bids and asks
         for i in 0..5 {
             // Asks: $100.01, $100.02, $100.03, $100.04, $100.05
-            state.ask_prices[i] = (100_010_000_000 + i as i64 * 10_000_000);
+            state.ask_prices[i] = 100_010_000_000 + i as i64 * 10_000_000;
             state.ask_sizes[i] = (100 + i * 10) as u32;
 
             // Bids: $100.00, $99.99, $99.98, $99.97, $99.96
-            state.bid_prices[i] = (100_000_000_000 - i as i64 * 10_000_000);
+            state.bid_prices[i] = 100_000_000_000 - i as i64 * 10_000_000;
             state.bid_sizes[i] = (100 + i * 10) as u32;
         }
 

@@ -38,6 +38,7 @@ fn is_valid_price(price: i64) -> bool {
 
 /// Track details about large errors
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct LargeErrorEvent {
     timestamp: u64,
     mbo_bid: f64,

@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Statistics
-    let (sample_count, total_volume, avg_volume) = sampler.statistics();
+    let (_sample_count, total_volume, avg_volume) = sampler.statistics();
 
     println!("\n✅ Complete!");
     println!("  Messages processed: {msg_count}");

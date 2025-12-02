@@ -146,8 +146,8 @@ impl NumpyExporter {
     /// Export pipeline output to NumPy format
     ///
     /// Creates:
-    /// - features.npy: [N_samples, N_features] array
-    /// - mid_prices.npy: [N_samples] array (for labeling)
+    /// - features.npy: \[N_samples, N_features\] array
+    /// - mid_prices.npy: \[N_samples\] array (for labeling)
     /// - metadata.json: Dataset metadata
     pub fn export(&self, output: &PipelineOutput) -> Result<()> {
         // Create output directory
@@ -345,8 +345,8 @@ impl BatchExporter {
     /// Export a single day of data
     ///
     /// Creates files:
-    /// - {day_name}_features.npy: [N_samples, N_features] features
-    /// - {day_name}_labels.npy: [N_labels] labels (if label_generator provided)
+    /// - {day_name}_features.npy: \[N_samples, N_features\] features
+    /// - {day_name}_labels.npy: \[N_labels\] labels (if label_generator provided)
     /// - {day_name}_metadata.json: Metadata for this day
     ///
     /// # Arguments

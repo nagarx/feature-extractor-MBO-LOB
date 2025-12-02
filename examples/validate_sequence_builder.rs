@@ -255,7 +255,7 @@ fn run_pipeline_test(dbn_path: &Path) -> Result<PipelineStats, Box<dyn std::erro
         features_extracted += 1;
 
         // 4. Push to sequence builder
-        sequence_builder.push(timestamp, features);
+        let _ = sequence_builder.push(timestamp, features);
 
         // 5. Try to build a sequence
         if let Some(seq) = sequence_builder.try_build_sequence() {

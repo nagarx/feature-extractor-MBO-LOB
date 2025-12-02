@@ -181,8 +181,8 @@ fn main() -> Result<()> {
     // Align features with labels
     println!("\n📦 Phase 3: Aligning features with labels...");
 
-    let k = label_config.smoothing_window;
-    let h = label_config.horizon;
+    let _k = label_config.smoothing_window;
+    let _h = label_config.horizon;
 
     // Valid label range: [k, total - h - k]
     let valid_features: Vec<Vec<f64>> = labels

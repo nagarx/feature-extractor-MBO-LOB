@@ -236,16 +236,11 @@ fn test_lob_state_consistency() {
             );
         }
 
-        // Verify volumes are non-negative
+        // Verify volumes are valid (u32 is always non-negative)
         for i in 0..state.levels {
-            assert!(
-                state.bid_sizes[i] >= 0,
-                "Bid size should be non-negative at level {i}"
-            );
-            assert!(
-                state.ask_sizes[i] >= 0,
-                "Ask size should be non-negative at level {i}"
-            );
+            // Sizes are u32, so always >= 0; just verify they exist
+            let _ = state.bid_sizes[i];
+            let _ = state.ask_sizes[i];
         }
     }
 

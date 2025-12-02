@@ -2,7 +2,7 @@
 name = "feature-extractor"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.83"
 authors = ["nagarx"]
 description = "High-performance LOB/MBO feature extraction for deep learning models"
 license = "MIT"

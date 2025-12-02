@@ -23,6 +23,7 @@ const MBO_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-0
 const MBP10_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07";
 
 /// Test configuration for fair validation
+#[allow(dead_code)]
 struct ValidationConfig {
     /// Number of days to test (use all available for fair results)
     max_days: usize,
@@ -93,6 +94,7 @@ struct DayValidationStats {
     processing_time_ms: u64,
 }
 
+#[allow(dead_code)]
 impl DayValidationStats {
     fn new(day: &str) -> Self {
         Self {

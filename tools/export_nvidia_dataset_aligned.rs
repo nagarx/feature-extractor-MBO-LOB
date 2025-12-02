@@ -10,8 +10,8 @@
 //! - Sequence generation (100 timesteps, stride 10)
 //! - Label generation with PERFECT ALIGNMENT
 //! - Market-structure preserving Z-score normalization
-//! - Export pre-built sequences [N_seq, 100, 40]
-//! - Export aligned labels [N_seq]
+//! - Export pre-built sequences \[N_seq, 100, 40\]
+//! - Export aligned labels \[N_seq\]
 //! - Comprehensive validation
 //!
 //! Usage:
