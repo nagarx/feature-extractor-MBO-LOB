@@ -272,7 +272,7 @@ impl PipelineConfig {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Create a pipeline configuration with specific feature settings.
     ///
     /// This automatically computes and sets the correct feature count
@@ -328,7 +328,7 @@ impl PipelineConfig {
         self.sequence = config;
         self
     }
-    
+
     /// Set window size and stride for sequence building.
     ///
     /// This is a convenience method that preserves the auto-computed feature count.
@@ -351,7 +351,7 @@ impl PipelineConfig {
         self.sampling = Some(config);
         self
     }
-    
+
     /// Synchronize the sequence feature count with the feature configuration.
     ///
     /// Call this after making manual changes to ensure consistency.
@@ -437,7 +437,7 @@ impl PipelineConfig {
     pub fn validate(&self) -> Result<(), String> {
         // Validate feature config
         self.features.validate()?;
-        
+
         // Validate sequence config
         self.sequence.validate()?;
 

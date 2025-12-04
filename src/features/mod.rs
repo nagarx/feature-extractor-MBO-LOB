@@ -92,10 +92,10 @@ pub struct FeatureConfig {
 impl FeatureConfig {
     /// Number of derived features when enabled.
     pub const DERIVED_FEATURE_COUNT: usize = 8;
-    
+
     /// Number of MBO features when enabled.
     pub const MBO_FEATURE_COUNT: usize = 36;
-    
+
     /// Create a new feature configuration with default values.
     pub fn new(lob_levels: usize) -> Self {
         Self {
@@ -103,7 +103,7 @@ impl FeatureConfig {
             ..Default::default()
         }
     }
-    
+
     /// Enable or disable derived features.
     ///
     /// Derived features include: mid-price, spread, spread_bps, total_bid_volume,
@@ -112,7 +112,7 @@ impl FeatureConfig {
         self.include_derived = enabled;
         self
     }
-    
+
     /// Enable or disable MBO features.
     ///
     /// MBO features include order flow imbalance, trade intensity, order arrival
@@ -121,19 +121,19 @@ impl FeatureConfig {
         self.include_mbo = enabled;
         self
     }
-    
+
     /// Set the MBO window size.
     pub fn with_mbo_window(mut self, window_size: usize) -> Self {
         self.mbo_window_size = window_size;
         self
     }
-    
+
     /// Set the tick size.
     pub fn with_tick_size(mut self, tick_size: f64) -> Self {
         self.tick_size = tick_size;
         self
     }
-    
+
     /// Compute the total number of features based on configuration.
     ///
     /// This is the authoritative source for feature count calculation.
@@ -148,17 +148,25 @@ impl FeatureConfig {
     #[inline]
     pub fn feature_count(&self) -> usize {
         let base = self.lob_levels * 4;
-        let derived = if self.include_derived { Self::DERIVED_FEATURE_COUNT } else { 0 };
-        let mbo = if self.include_mbo { Self::MBO_FEATURE_COUNT } else { 0 };
+        let derived = if self.include_derived {
+            Self::DERIVED_FEATURE_COUNT
+        } else {
+            0
+        };
+        let mbo = if self.include_mbo {
+            Self::MBO_FEATURE_COUNT
+        } else {
+            0
+        };
         base + derived + mbo
     }
-    
+
     /// Get the number of raw LOB features.
     #[inline]
     pub fn lob_feature_count(&self) -> usize {
         self.lob_levels * 4
     }
-    
+
     /// Validate the configuration.
     pub fn validate(&self) -> std::result::Result<(), String> {
         if self.lob_levels == 0 {

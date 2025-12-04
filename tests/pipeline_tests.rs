@@ -184,6 +184,8 @@ fn test_pipeline_with_no_sampling_config() {
 
 #[test]
 fn test_pipeline_config_serialization_round_trip() {
+    // Note: feature_count must match: lob_levels * 4 + derived(8) + mbo(36)
+    // With 20 levels, derived=true, mbo=false: 20*4 + 8 = 88 features
     let config = PipelineConfig {
         features: FeatureConfig {
             lob_levels: 20,
@@ -195,7 +197,7 @@ fn test_pipeline_config_serialization_round_trip() {
         sequence: SequenceConfig {
             window_size: 200,
             stride: 2,
-            feature_count: 48,
+            feature_count: 88, // 20*4 + 8 derived = 88
             max_buffer_size: 5000,
         },
         sampling: Some(SamplingConfig {

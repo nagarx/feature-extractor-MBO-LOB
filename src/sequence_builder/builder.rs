@@ -81,7 +81,7 @@ impl std::error::Error for SequenceError {}
 /// # Auto-Computing Feature Count
 ///
 /// Instead of manually specifying `feature_count`, use [`SequenceConfig::from_feature_config()`]
-/// to automatically compute it from your [`FeatureConfig`]:
+/// to automatically compute it from your [`crate::features::FeatureConfig`]:
 ///
 /// ```ignore
 /// use feature_extractor::{FeatureConfig, SequenceConfig};
@@ -162,7 +162,7 @@ impl SequenceConfig {
             feature_count: 40, // Default for raw LOB features
         }
     }
-    
+
     /// Create a sequence configuration with feature count auto-computed from FeatureConfig.
     ///
     /// This is the recommended way to create a SequenceConfig as it ensures
@@ -192,7 +192,7 @@ impl SequenceConfig {
         feature_config: &crate::features::FeatureConfig,
     ) -> Self {
         let max_buffer_size = window_size.max(1000);
-        
+
         Self {
             window_size,
             stride,

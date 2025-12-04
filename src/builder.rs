@@ -168,9 +168,7 @@ impl PipelineBuilder {
             }
             Preset::Full => {
                 // Full: All features enabled
-                builder.features = FeatureConfig::new(10)
-                    .with_derived(true)
-                    .with_mbo(true);
+                builder.features = FeatureConfig::new(10).with_derived(true).with_mbo(true);
                 builder.window_size = 100;
                 builder.stride = 1;
             }
@@ -683,4 +681,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-

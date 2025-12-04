@@ -36,10 +36,13 @@ fn main() -> Result<()> {
         .window(100, 10)
         .build()?;
 
-    println!("Builder summary:\n{}", PipelineBuilder::new()
-        .volume_sampling(5000)
-        .window(100, 10)
-        .summary());
+    println!(
+        "Builder summary:\n{}",
+        PipelineBuilder::new()
+            .volume_sampling(5000)
+            .window(100, 10)
+            .summary()
+    );
 
     let output = pipeline.process(data_path)?;
     let elapsed = start.elapsed();
@@ -56,13 +59,18 @@ fn main() -> Result<()> {
         let first_seq = &output.sequences[0];
         println!("\nSequence validation:");
         println!("  Window size: {} (expected: 100)", first_seq.length);
-        println!("  Features per snapshot: {} (expected: 40)", first_seq.features[0].len());
-        
+        println!(
+            "  Features per snapshot: {} (expected: 40)",
+            first_seq.features[0].len()
+        );
+
         assert_eq!(first_seq.length, 100, "Window size mismatch");
         assert_eq!(first_seq.features[0].len(), 40, "Feature count mismatch");
-        
+
         // Check for NaN/Inf
-        let has_nan = first_seq.features.iter()
+        let has_nan = first_seq
+            .features
+            .iter()
             .flat_map(|f| f.iter())
             .any(|&v| v.is_nan() || v.is_infinite());
         println!("  Contains NaN/Inf: {}", has_nan);
@@ -96,9 +104,16 @@ fn main() -> Result<()> {
     if !output.sequences.is_empty() {
         let first_seq = &output.sequences[0];
         println!("\nSequence validation:");
-        println!("  Features per snapshot: {} (expected: 48)", first_seq.features[0].len());
-        
-        assert_eq!(first_seq.features[0].len(), 48, "Feature count mismatch for derived");
+        println!(
+            "  Features per snapshot: {} (expected: 48)",
+            first_seq.features[0].len()
+        );
+
+        assert_eq!(
+            first_seq.features[0].len(),
+            48,
+            "Feature count mismatch for derived"
+        );
     }
 
     println!("  [PASS] Derived features test passed");
@@ -128,9 +143,16 @@ fn main() -> Result<()> {
     if !output.sequences.is_empty() {
         let first_seq = &output.sequences[0];
         println!("\nSequence validation:");
-        println!("  Features per snapshot: {} (expected: 76)", first_seq.features[0].len());
-        
-        assert_eq!(first_seq.features[0].len(), 76, "Feature count mismatch for MBO");
+        println!(
+            "  Features per snapshot: {} (expected: 76)",
+            first_seq.features[0].len()
+        );
+
+        assert_eq!(
+            first_seq.features[0].len(),
+            76,
+            "Feature count mismatch for MBO"
+        );
     }
 
     println!("  [PASS] MBO features test passed");
@@ -161,9 +183,16 @@ fn main() -> Result<()> {
     if !output.sequences.is_empty() {
         let first_seq = &output.sequences[0];
         println!("\nSequence validation:");
-        println!("  Features per snapshot: {} (expected: 84)", first_seq.features[0].len());
-        
-        assert_eq!(first_seq.features[0].len(), 84, "Feature count mismatch for full");
+        println!(
+            "  Features per snapshot: {} (expected: 84)",
+            first_seq.features[0].len()
+        );
+
+        assert_eq!(
+            first_seq.features[0].len(),
+            84,
+            "Feature count mismatch for full"
+        );
     }
 
     println!("  [PASS] Full feature set test passed");
@@ -213,7 +242,11 @@ fn main() -> Result<()> {
 
     if !output.sequences.is_empty() {
         let first_seq = &output.sequences[0];
-        assert_eq!(first_seq.features[0].len(), 40, "DeepLOB should have 40 features");
+        assert_eq!(
+            first_seq.features[0].len(),
+            40,
+            "DeepLOB should have 40 features"
+        );
     }
 
     println!("  [PASS] Preset-based configuration test passed");
@@ -229,4 +262,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
