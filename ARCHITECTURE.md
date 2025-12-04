@@ -6,17 +6,23 @@ Based on analysis of 20+ research papers (DeepLOB, TLOB, FI-2010, TransLOB, LiT,
 
 1. **Feature Quality > Model Complexity**: Research consistently shows feature engineering matters more than architecture
 2. **Paper-Aligned Presets**: Easy reproduction of published results
-3. **Separation of Concerns**: Raw features → Derived features → Normalization → Sequences
+3. **Separation of Concerns**: Raw features -> Derived features -> Normalization -> Sequences
 4. **Modular & Composable**: Each component works independently
 5. **Versioned Schema**: Track feature definitions for reproducibility
 6. **Speed & Accuracy**: Optimized for HFT environments with nanosecond precision
+7. **Streaming First**: Process data incrementally to avoid memory issues
 
-## Current Module Structure
+## Module Structure
 
 ```
 feature_extractor/
 ├── src/
 │   ├── lib.rs                    # Public API and re-exports
+│   ├── prelude.rs                # Convenience re-exports for common use
+│   │
+│   ├── builder.rs                # PipelineBuilder fluent API
+│   ├── config.rs                 # Pipeline configuration
+│   ├── pipeline.rs               # High-level pipeline orchestrator
 │   │
 │   ├── schema/                   # Feature schema definitions
 │   │   ├── mod.rs               # Schema registry and version
@@ -27,7 +33,7 @@ feature_extractor/
 │   │   ├── mod.rs               # FeatureExtractor, FeatureConfig
 │   │   ├── lob_features.rs      # Raw LOB features (prices, volumes)
 │   │   ├── derived_features.rs  # Derived analytics (spread, microprice, etc.)
-│   │   ├── order_flow.rs        # OFI, MLOFI, queue imbalance, trade flow
+│   │   ├── order_flow.rs        # OFI, queue imbalance, trade flow
 │   │   ├── fi2010.rs            # FI-2010 handcrafted features (80)
 │   │   ├── market_impact.rs     # Market impact estimation (slippage, VWAP)
 │   │   └── mbo_features.rs      # MBO-specific features
@@ -51,8 +57,6 @@ feature_extractor/
 │   │   └── multiscale.rs        # Multi-scale sequences (fast/medium/slow)
 │   │
 │   ├── validation.rs             # Feature validation (crossed quotes, NaN checks)
-│   ├── config.rs                 # Pipeline configuration
-│   ├── pipeline.rs               # High-level pipeline orchestrator
 │   ├── export.rs                 # NumPy export
 │   └── export_aligned.rs         # Aligned batch export
 │
@@ -60,7 +64,73 @@ feature_extractor/
 │   └── feature_extraction.rs     # Criterion benchmarks
 │
 ├── examples/                      # Usage examples
-└── tests/                         # Integration tests
+│   ├── builder_validation.rs     # PipelineBuilder with real data
+│   ├── full_pipeline.rs          # Complete pipeline example
+│   └── ...
+│
+├── tests/                         # Integration tests
+│   ├── comprehensive_validation.rs
+│   ├── pipeline_tests.rs
+│   └── ...
+│
+└── docs/
+    └── USAGE_GUIDE.md            # Comprehensive usage documentation
+```
+
+## Key Components
+
+### 1. PipelineBuilder (Recommended Entry Point)
+
+Fluent API for configuring and building pipelines:
+
+```rust
+use feature_extractor::prelude::*;
+
+let pipeline = PipelineBuilder::new()
+    .lob_levels(10)           // 10 levels -> 40 raw features
+    .with_derived_features()  // +8 derived features
+    .window(100, 10)          // 100 snapshots, stride 10
+    .event_sampling(1000)     // Sample every 1000 events
+    .build()?;
+```
+
+### 2. Feature Count Auto-Computation
+
+Feature count is automatically computed:
+
+| Configuration | Feature Count | Formula |
+|--------------|---------------|---------|
+| Raw LOB only | 40 | 10 levels × 4 |
+| + Derived | 48 | 40 + 8 |
+| + MBO | 76 | 40 + 36 |
+| + Both | 84 | 40 + 8 + 36 |
+
+### 3. Streaming Sequence Generation
+
+The pipeline uses streaming mode to avoid buffer eviction:
+
+```
+Messages -> LOB Reconstruction -> Feature Extraction -> Sequence Building
+                                                              ↓
+                                              try_build_sequence() after each push
+                                                              ↓
+                                              Accumulated sequences (no data loss)
+```
+
+### 4. Prelude Module
+
+Single import for all common types:
+
+```rust
+use feature_extractor::prelude::*;
+
+// Now you have access to:
+// - Pipeline, PipelineBuilder, PipelineConfig
+// - FeatureExtractor, FeatureConfig
+// - SequenceBuilder, Sequence, SequenceConfig
+// - LabelGenerator, LabelConfig, TrendLabel
+// - All normalizers
+// - All mbo-lob-reconstructor types (LobReconstructor, DbnLoader, etc.)
 ```
 
 ## Feature Categories
@@ -68,162 +138,63 @@ feature_extractor/
 | Category | Count | Source | Description |
 |----------|-------|--------|-------------|
 | Raw LOB | 40 | All papers | (P_ask, V_ask, P_bid, V_bid) × 10 levels |
-| Order Flow | 8 | Cont et al. | OFI, queue imbalance, trade flow, arrival rates |
+| Derived | 8 | TLOB, DeepLOB | Microprice, spread, imbalance |
+| Order Flow | 8 | Cont et al. | OFI, queue imbalance, trade flow |
 | Multi-Level OFI | 10 | LOB-feature-analysis | OFI at each LOB level |
-| FI-2010 Time-Insensitive | 20 | FI-2010 | Spread, mid-price, price/volume diffs |
-| FI-2010 Time-Sensitive | 20 | FI-2010 | Derivatives, intensity measures |
-| FI-2010 Depth | 40 | FI-2010 | Accumulated volumes and price diffs |
-| Derived | 8 | TLOB, DeepLOB | Microprice, VWAP, imbalance |
-| Market Impact | 8 | OrderBook-rs | Slippage, VWAP, levels consumed |
-| MBO Features | 36 | MBO Paper | Order lifecycle, institutional patterns |
+| FI-2010 | 80 | FI-2010 benchmark | Handcrafted features |
+| Market Impact | 8 | OrderBook-rs | Slippage, VWAP |
+| MBO Features | 36 | MBO Paper | Order lifecycle patterns |
 
 ## Normalization Strategies
 
 | Strategy | Source | Use Case |
 |----------|--------|----------|
 | Z-Score | DeepLOB, FI-2010 | Standard ML preprocessing |
-| Rolling Z-Score | LOBFrame | Non-stationary data (multi-day) |
-| Global Z-Score | LOBench | Preserve LOB constraints (bid < ask) |
-| Bilinear | TLOB, BiN-CTABL | LOB structure preservation |
+| Rolling Z-Score | LOBFrame | Non-stationary data |
+| Global Z-Score | LOBench | Preserve LOB constraints |
+| Bilinear | TLOB | LOB structure preservation |
 | Percentage Change | HLOB | Cross-instrument training |
-| Min-Max | General | Bounded features |
-| Per-Feature | General | Feature-specific normalization |
 
 ## Paper-Aligned Presets
 
 ```rust
 pub enum Preset {
-    /// DeepLOB: 40 raw + Z-score, seq_len=100, k=10/20/50
-    DeepLOB,
-    
-    /// TLOB: 40 raw + bilinear normalization, dual attention
-    TLOB,
-    
-    /// FI-2010: 120 features (40 raw + 80 handcrafted)
-    FI2010,
-    
-    /// TransLOB: 40 raw + multi-horizon, transformer-ready
-    TransLOB,
-    
-    /// LiT: 80 features (20 levels × 4), patched input
-    LiT,
-    
-    /// Minimal: 40 raw LOB only
-    Minimal,
-    
-    /// Full: All available features
-    Full,
+    DeepLOB,   // 40 raw + Z-score, seq_len=100
+    TLOB,      // 40 raw + bilinear normalization
+    FI2010,    // 120 features (40 raw + 80 handcrafted)
+    TransLOB,  // 40 raw + multi-horizon
+    LiT,       // 80 features (20 levels × 4)
+    Minimal,   // 40 raw LOB only
+    Full,      // All available features (84)
 }
 ```
-
-## Key Components
-
-### 1. FI2010Extractor
-
-Implements the 80 handcrafted features from the FI-2010 benchmark paper:
-
-```rust
-let mut extractor = FI2010Extractor::new(FI2010Config::default());
-let features = extractor.extract(&lob_state, timestamp)?;
-// Returns 80 features: 20 time-insensitive + 20 time-sensitive + 40 depth
-```
-
-### 2. OrderFlowTracker
-
-Computes Order Flow Imbalance (OFI) and related features:
-
-```rust
-let mut tracker = OrderFlowTracker::new();
-tracker.update(&lob_state);
-let features = tracker.features();
-// OFI, queue imbalance, trade imbalance, depth imbalance, arrival rates
-```
-
-### 3. MultiLevelOfiTracker
-
-Computes OFI at each LOB level:
-
-```rust
-let mut tracker = MultiLevelOfiTracker::new(10);
-tracker.update(&lob_state);
-let ofi_levels = tracker.ofi_by_level();
-// 10 OFI values, one per level
-```
-
-### 4. GlobalZScoreNormalizer (LOBench)
-
-Normalizes all features within a snapshot together:
-
-```rust
-let normalizer = GlobalZScoreNormalizer::new();
-let normalized = normalizer.normalize_snapshot(&features);
-// Preserves bid < ask constraint, handles scale disparity
-```
-
-### 5. FeatureValidator
-
-Validates LOB data quality:
-
-```rust
-let validator = FeatureValidator::new();
-let result = validator.validate_lob(&lob_state);
-if result.has_errors() {
-    // Handle crossed quotes, invalid prices, etc.
-}
-```
-
-### 6. TlobLabelGenerator
-
-Generates labels using the TLOB paper method (decoupled horizon and smoothing):
-
-```rust
-let config = LabelConfig {
-    horizon: 10,           // Predict 10 steps ahead
-    smoothing_window: 5,   // Average 5 prices for smoothing
-    threshold: 0.002,      // 0.2% threshold
-};
-let mut generator = TlobLabelGenerator::new(config);
-generator.add_prices(&mid_prices);
-let labels = generator.generate_labels()?;
-// Returns Vec<(index, TrendLabel, pct_change)>
-```
-
-### 7. DeepLobLabelGenerator
-
-Generates labels using the simpler DeepLOB method (k = horizon):
-
-```rust
-let config = LabelConfig::fi2010(50);  // k = h = 50
-let mut generator = DeepLobLabelGenerator::new(config);
-generator.add_prices(&mid_prices);
-let labels = generator.generate_labels()?;
-```
-
-## Test Coverage
-
-- **298+ unit tests** covering all modules
-- **49 doc tests** with working examples
-- **Integration tests** with real NVIDIA MBO data
-- **Labeling integration tests** (18 tests)
-- **Benchmark suite** for performance tracking
 
 ## Performance Characteristics
 
-- Single-pass feature computation
-- Pre-allocated buffers in hot paths
-- Zero-copy where possible
-- Welford's algorithm for numerical stability
-- O(1) updates for rolling statistics
+- **Single-pass computation**: Features extracted in one LOB traversal
+- **Streaming sequences**: No buffer eviction, 100% sequence efficiency
+- **Pre-allocated buffers**: No allocations in hot paths
+- **Welford's algorithm**: Numerically stable running statistics
+- **O(1) updates**: Constant time for rolling statistics
+
+## Test Coverage
+
+- **300+ unit tests** covering all modules
+- **100+ integration tests** with real NVIDIA MBO data
+- **50+ doc tests** with working examples
+- **Comprehensive validation**: 151M+ messages, 21 days data
+- **99.42% price accuracy** against MBP-10 ground truth
 
 ## Dependencies
 
 - `mbo-lob-reconstructor`: LOB reconstruction from MBO data
 - `serde`: Serialization for configuration
+- `ndarray-npy`: NumPy export
 - `criterion` (dev): Benchmarking
 
 ## Roadmap
 
-### Completed ✅
+### Completed
 - [x] Raw LOB features (40)
 - [x] Order Flow features (OFI, MLOFI, queue imbalance)
 - [x] FI-2010 features (80)
@@ -233,11 +204,16 @@ let labels = generator.generate_labels()?;
 - [x] Validation module
 - [x] Benchmark suite
 - [x] Labeling module (TLOB + DeepLOB methods)
-- [x] README.md and documentation
-- [x] Standalone extraction to separate repository
-- [x] Comprehensive real-data validation (151M+ messages, 21 days NVIDIA data)
+- [x] Documentation (README, ARCHITECTURE, USAGE_GUIDE)
+- [x] Standalone repository
+- [x] CI workflow (GitHub Actions)
+- [x] PipelineBuilder fluent API
+- [x] Prelude module
+- [x] Feature count auto-computation
+- [x] Streaming sequence generation fix
+- [x] Comprehensive real-data validation (151M+ messages, 21 days)
 
-### Pending 📋
-- [ ] CI workflow (GitHub Actions)
+### Pending
 - [ ] crates.io publication
 - [ ] Statistical validation tests (OFI vs ΔP correlation)
+- [ ] Additional paper presets (HLOB, ViT-LOB)

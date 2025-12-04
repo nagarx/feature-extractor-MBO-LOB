@@ -341,22 +341,42 @@ let lob_config = LobConfig::new(10)
 let mut reconstructor = LobReconstructor::with_config(lob_config);
 
 let feature_config = FeatureConfig::default().with_derived(true);
-let mut extractor = FeatureExtractor::with_config(feature_config);
+let extractor = FeatureExtractor::with_config(feature_config.clone());
 
 let seq_config = SequenceConfig::from_feature_config(100, 10, &feature_config);
 let mut sequence_builder = SequenceBuilder::with_config(seq_config);
 
-// Process messages
+// Process messages - use streaming mode to avoid buffer eviction
 let loader = DbnLoader::new("data/SYMBOL.mbo.dbn.zst")?;
+let mut sequences = Vec::new();
+
 for msg in loader.iter_messages()? {
+    // Skip system messages (order_id=0, etc.)
+    // Note: LobReconstructor does this by default if skip_system_messages=true
+    
     let lob_state = reconstructor.process_message(&msg)?;
+    
+    // Skip if LOB not ready
+    if lob_state.mid_price().is_none() {
+        continue;
+    }
+    
     let features = extractor.extract_lob_features(&lob_state)?;
     sequence_builder.push(msg.timestamp.unwrap_or(0) as u64, features)?;
+    
+    // IMPORTANT: Build sequences incrementally (streaming mode)
+    // This prevents data loss from buffer eviction
+    if let Some(seq) = sequence_builder.try_build_sequence() {
+        sequences.push(seq);
+    }
 }
 
-// Generate sequences
-let sequences = sequence_builder.generate_all_sequences();
+println!("Generated {} sequences", sequences.len());
 ```
+
+> **Important**: Always use `try_build_sequence()` after each push for streaming mode.
+> Using `generate_all_sequences()` at the end will only return sequences from the
+> buffer's current contents (default 1000 snapshots), losing earlier data.
 
 ### Multi-Day Processing
 
@@ -536,4 +556,46 @@ for day in days {
     let output = pipeline.process(&path)?;
 }
 ```
+
+### Sequence Loss (Streaming vs Batch)
+
+If you see far fewer sequences than expected, you may be using batch mode incorrectly:
+
+```rust
+// WRONG: generate_all_sequences() only returns sequences from current buffer
+for msg in messages {
+    sequence_builder.push(ts, features)?;
+}
+let sequences = sequence_builder.generate_all_sequences();  // May lose data!
+
+// RIGHT: Use streaming mode (try_build_sequence after each push)
+let mut sequences = Vec::new();
+for msg in messages {
+    sequence_builder.push(ts, features)?;
+    if let Some(seq) = sequence_builder.try_build_sequence() {
+        sequences.push(seq);  // Capture immediately
+    }
+}
+```
+
+The `PipelineBuilder` handles this automatically.
+
+### System Messages
+
+If you see "Invalid order ID: 0" errors, system messages aren't being filtered:
+
+```rust
+// LobReconstructor filters system messages by default
+let config = LobConfig::new(10)
+    .with_skip_system_messages(true);  // Default
+
+// Check stats after processing
+let stats = reconstructor.stats();
+println!("System messages skipped: {}", stats.system_messages_skipped);
+```
+
+System messages (~6% of real data) have:
+- `order_id = 0` (heartbeats, status)
+- `size = 0` (invalid)
+- `price <= 0` (invalid)
 

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2025-12-04
+
+### Added
+
+- **PipelineBuilder API**
+  - `PipelineBuilder` - Fluent API for configuring and building pipelines
+  - `PipelineBuilder::from_preset(Preset)` - Create from paper-aligned presets
+  - Auto-computed feature count (no manual calculation required)
+  - Research presets: DeepLOB, TLOB, FI-2010, TransLOB, LiT, Minimal, Full
+
+- **Prelude Module**
+  - `feature_extractor::prelude::*` - Single import for all common types
+  - Re-exports both feature-extractor and mbo-lob-reconstructor types
+
+- **FeatureConfig Improvements**
+  - `FeatureConfig::feature_count()` - Auto-compute total feature count
+  - `SequenceConfig::from_feature_config()` - Auto-sync feature count
+
+### Fixed
+
+- **Critical: Streaming Sequence Generation**
+  - Fixed sequence loss bug where ~98.8% of sequences were lost due to buffer eviction
+  - Pipeline now accumulates sequences during streaming instead of batch generation at end
+  - Before: 96 sequences from 79,834 features (1.2% efficiency)
+  - After: 7,979 sequences from 79,834 features (100% efficiency)
+
+- Fixed rustdoc broken intra-doc links
+- Fixed clippy warnings (unnecessary parentheses, unused variables)
+- Fixed test assertions for feature count validation
+
+### Changed
+
+- `Pipeline::process()` now uses streaming mode for sequence generation
+- MSRV updated to 1.83 (required by transitive dependency `pest`)
+
 ## [0.1.0] - 2025-12-01
 
 ### Added
@@ -66,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Comprehensive README with usage examples
 - Architecture documentation (ARCHITECTURE.md)
+- Usage guide (docs/USAGE_GUIDE.md)
 - Inline documentation for all public APIs
 - Doc tests for key functions
 
@@ -78,6 +114,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validated against 151M+ MBO messages (21 days NVIDIA data)
 - 99.42% price accuracy against MBP-10 ground truth
 
-[Unreleased]: https://github.com/nagarx/feature-extractor-MBO-LOB/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/nagarx/feature-extractor-MBO-LOB/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/nagarx/feature-extractor-MBO-LOB/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nagarx/feature-extractor-MBO-LOB/releases/tag/v0.1.0
-
