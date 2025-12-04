@@ -16,9 +16,34 @@
 //! let output = pipeline.process("data/NVDA.mbo.dbn.zst")?;
 //! ```
 //!
+//! # Feature Count Reference
+//!
+//! The feature count is automatically computed based on configuration:
+//!
+//! | Configuration | Formula | Count |
+//! |--------------|---------|-------|
+//! | Raw LOB only | levels × 4 | 40 (10 levels) |
+//! | + Derived | + 8 | 48 |
+//! | + MBO | + 36 | 76 |
+//! | + Both | + 8 + 36 | 84 |
+//!
+//! Raw LOB features per level: ask_price, ask_size, bid_price, bid_size
+//!
+//! # Presets Reference
+//!
+//! | Preset | Features | Window | Stride | Use Case |
+//! |--------|----------|--------|--------|----------|
+//! | `DeepLOB` | 40 | 100 | 1 | CNN-LSTM models |
+//! | `TLOB` | 40 | 100 | 1 | Transformer models |
+//! | `FI2010` | 48 | 100 | 1 | Benchmark comparison |
+//! | `TransLOB` | 40 | 100 | 1 | Multi-horizon |
+//! | `LiT` | 80 | 100 | 1 | 20-level LOB |
+//! | `Minimal` | 40 | 1 | 1 | Testing/debugging |
+//! | `Full` | 84 | 100 | 1 | Maximum features |
+//!
 //! # Common Configurations
 //!
-//! ## DeepLOB Style (40 features, Z-score normalization)
+//! ## DeepLOB Style (40 features)
 //!
 //! ```ignore
 //! let pipeline = PipelineBuilder::new()
@@ -28,11 +53,11 @@
 //!     .build()?;
 //! ```
 //!
-//! ## TLOB Style (40 features, bilinear normalization)
+//! ## TLOB Style (40 features)
 //!
 //! ```ignore
-//! let pipeline = PipelineBuilder::new()
-//!     .preset(Preset::TLOB)
+//! let pipeline = PipelineBuilder::from_preset(Preset::TLOB)
+//!     .volume_sampling(1000)
 //!     .build()?;
 //! ```
 //!
@@ -41,8 +66,8 @@
 //! ```ignore
 //! let pipeline = PipelineBuilder::new()
 //!     .lob_levels(10)
-//!     .with_derived_features()
-//!     .with_mbo_features()
+//!     .with_derived_features()   // +8 features
+//!     .with_mbo_features()       // +36 features
 //!     .window(100, 10)
 //!     .event_sampling(1000)
 //!     .build()?;

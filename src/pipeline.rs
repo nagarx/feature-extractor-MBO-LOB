@@ -1,25 +1,69 @@
 //! Unified Pipeline for LOB Feature Extraction
 //!
 //! This module provides a simple, composable pipeline that connects all components:
-//! - LOB Reconstruction
-//! - Feature Extraction  
-//! - Sampling
-//! - Normalization
-//! - Sequence Building
-//! - Labeling
+//! - LOB Reconstruction (via `mbo-lob-reconstructor`)
+//! - Feature Extraction (raw LOB, derived, MBO features)
+//! - Sampling (volume-based, event-based, adaptive)
+//! - Sequence Building (streaming mode)
+//! - Label alignment support
+//!
+//! # Architecture
+//!
+//! ```text
+//! MBO Messages → LobReconstructor → LobState → FeatureExtractor → Features
+//!                                                                    ↓
+//!                                                    SequenceBuilder.push()
+//!                                                                    ↓
+//!                                                    try_build_sequence() [streaming]
+//!                                                                    ↓
+//!                                                    Accumulated Sequences
+//! ```
+//!
+//! # Streaming Sequence Generation (Critical)
+//!
+//! The pipeline uses **streaming mode** for sequence generation:
+//! - After each feature is pushed, `try_build_sequence()` is called
+//! - Complete sequences are immediately accumulated
+//! - This prevents data loss from buffer eviction
+//!
+//! Without streaming mode, ~98% of sequences would be lost due to the
+//! bounded buffer (default 1000 snapshots).
 //!
 //! # Philosophy
-//! - Simple: Easy to understand and use
-//! - Modular: Components are independent and composable
-//! - Fast: Zero-copy where possible
-//! - Configurable: Driven by PipelineConfig
+//! - **Simple**: Easy to understand and use
+//! - **Modular**: Components are independent and composable
+//! - **Fast**: Streaming processing, minimal allocations
+//! - **Correct**: No silent data loss
 //!
 //! # Example
+//!
 //! ```ignore
-//! let config = PipelineConfig::load_toml("config.toml")?;
-//! let mut pipeline = Pipeline::from_config(config)?;
-//! let result = pipeline.process("data.dbn.zst")?;
+//! use feature_extractor::prelude::*;
+//!
+//! // Using PipelineBuilder (recommended)
+//! let mut pipeline = PipelineBuilder::new()
+//!     .with_derived_features()
+//!     .event_sampling(1000)
+//!     .build()?;
+//!
+//! let output = pipeline.process("data.dbn.zst")?;
+//!
+//! // Multi-day processing
+//! for day in days {
+//!     pipeline.reset();  // Critical: clear state between days
+//!     let output = pipeline.process(&path)?;
+//! }
 //! ```
+//!
+//! # Output Structure
+//!
+//! | Field | Type | Description |
+//! |-------|------|-------------|
+//! | `sequences` | `Vec<Sequence>` | Generated sequences |
+//! | `mid_prices` | `Vec<f64>` | Mid-prices for labeling |
+//! | `messages_processed` | `usize` | Total MBO messages |
+//! | `features_extracted` | `usize` | Sampled LOB snapshots |
+//! | `sequences_generated` | `usize` | Complete sequences |
 
 use crate::{
     config::{PipelineConfig, SamplingStrategy},
