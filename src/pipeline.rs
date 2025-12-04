@@ -213,6 +213,7 @@ impl Pipeline {
         let mut messages_processed = 0;
         let mut features_extracted = 0;
         let mut mid_prices = Vec::new(); // For labeling
+        let mut accumulated_sequences: Vec<Sequence> = Vec::new(); // Accumulate sequences during streaming
 
         // Process messages
         for msg in loader.iter_messages()? {
@@ -282,6 +283,12 @@ impl Pipeline {
                     // Log the error but continue processing
                     // This is a configuration error that should be caught during setup
                     log::error!("Sequence builder push failed: {}", e);
+                } else {
+                    // ✅ FIX: Try to build sequence immediately after push (streaming mode)
+                    // This ensures we don't lose sequences due to buffer eviction
+                    if let Some(seq) = self.sequence_builder.try_build_sequence() {
+                        accumulated_sequences.push(seq);
+                    }
                 }
 
                 // Store mid-price (for labeling)
@@ -291,16 +298,17 @@ impl Pipeline {
             }
         }
 
-        // Phase 1: Generate sequences (multi-scale or regular)
+        // Phase 1: Finalize sequences (multi-scale or regular)
         let (sequences, multiscale_sequences) =
             if let Some(ref mut ms_window) = self.multiscale_window {
                 // Multi-scale: try to build all scales
                 let ms_seq = ms_window.try_build_all();
                 (Vec::new(), ms_seq)
             } else {
-                // Regular: generate all sequences
-                let seqs = self.sequence_builder.generate_all_sequences();
-                (seqs, None)
+                // Regular: use accumulated sequences from streaming phase
+                // Note: We already built sequences during streaming via try_build_sequence()
+                // This ensures we capture all sequences without buffer eviction losses
+                (accumulated_sequences, None)
             };
 
         let sequences_generated = sequences.len()
