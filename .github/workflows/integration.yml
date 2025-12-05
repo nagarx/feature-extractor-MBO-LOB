@@ -1,0 +1,105 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # Allow manual trigger
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  integration:
+    name: Cross-Library Integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature-extractor
+        uses: actions/checkout@v4
+        with:
+          path: feature-extractor-MBO-LOB
+
+      - name: Checkout MBO-LOB-reconstructor
+        uses: actions/checkout@v4
+        with:
+          repository: nagarx/MBO-LOB-reconstructor
+          path: MBO-LOB-reconstructor
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Update feature-extractor to use local reconstructor
+        run: |
+          cd feature-extractor-MBO-LOB
+          # Replace git dependency with path dependency
+          sed -i 's|mbo-lob-reconstructor = { git = "[^"]*"[^}]*}|mbo-lob-reconstructor = { path = "../MBO-LOB-reconstructor" }|g' Cargo.toml
+          cat Cargo.toml | grep mbo-lob
+
+      - name: Build both libraries together
+        run: |
+          cd feature-extractor-MBO-LOB
+          cargo build --all-features
+
+      - name: Run feature-extractor tests with local reconstructor
+        run: |
+          cd feature-extractor-MBO-LOB
+          cargo test --all-features
+
+      - name: Verify API compatibility
+        run: |
+          cd feature-extractor-MBO-LOB
+          # Ensure all public APIs compile
+          cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Check feature counts are consistent
+        run: |
+          cd feature-extractor-MBO-LOB
+          cargo test feature_count --all-features -- --nocapture
+
+  # Ensure both libraries pass their own CI independently
+  verify-reconstructor:
+    name: Verify MBO-LOB-reconstructor CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout MBO-LOB-reconstructor
+        uses: actions/checkout@v4
+        with:
+          repository: nagarx/MBO-LOB-reconstructor
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-reconstructor-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run full CI checks
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-features -- -D warnings
+          cargo test --all-features
+          cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
