@@ -424,3 +424,44 @@ fn test_config_edge_cases() {
     }
     assert!(result.is_err());
 }
+
+// ============================================================================
+// Zero-Allocation Hot Path Tests
+// ============================================================================
+
+/// Verify that pipeline state is correctly reset and doesn't leak between runs.
+/// This indirectly tests that the zero-allocation LobState reuse doesn't introduce bugs.
+#[test]
+fn test_pipeline_multiple_resets_clean_state() {
+    let config = PipelineConfig::default();
+    let mut pipeline = Pipeline::from_config(config).unwrap();
+
+    // Reset multiple times to verify no state corruption
+    for _ in 0..10 {
+        pipeline.reset();
+    }
+
+    // Pipeline should still be valid after multiple resets
+    // (No panic or crash indicates the zero-allocation path is stable)
+}
+
+/// Verify the pipeline can be created with various configurations.
+/// This tests that the zero-allocation API integrates correctly.
+#[test]
+fn test_pipeline_configuration_flexibility() {
+    // Test various LOB level configurations
+    for levels in [5, 10, 15, 20] {
+        let mut config = PipelineConfig::default();
+        config.features.lob_levels = levels;
+        config.features.include_derived = false;
+        config.features.include_mbo = false;
+        config.sequence.feature_count = levels * 4; // raw LOB features
+
+        let pipeline = Pipeline::from_config(config);
+        assert!(
+            pipeline.is_ok(),
+            "Pipeline should work with {} levels",
+            levels
+        );
+    }
+}

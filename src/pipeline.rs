@@ -72,7 +72,7 @@ use crate::{
     sequence_builder::{MultiScaleSequence, MultiScaleWindow},
     FeatureExtractor, Sequence, SequenceBuilder,
 };
-use mbo_lob_reconstructor::{DbnLoader, LobReconstructor, Result};
+use mbo_lob_reconstructor::{DbnLoader, LobReconstructor, LobState, Result};
 use std::path::Path;
 
 /// Output from pipeline processing
@@ -245,6 +245,12 @@ impl Pipeline {
     /// - MBO features (36, if enabled) - requires processing MBO events
     ///
     /// The feature count must match `sequence.feature_count` in the config.
+    ///
+    /// # Performance
+    ///
+    /// Uses zero-allocation hot path via `process_message_into()` - a single
+    /// pre-allocated `LobState` is reused across all messages, eliminating
+    /// heap allocations in the critical processing loop.
     pub fn process<P: AsRef<Path>>(&mut self, input_path: P) -> Result<PipelineOutput> {
         let path = input_path.as_ref();
 
@@ -252,6 +258,11 @@ impl Pipeline {
         let loader = DbnLoader::new(path)?;
         let mut lob = LobReconstructor::new(self.config.features.lob_levels);
         let mut sampler = self.create_sampler()?;
+
+        // ✅ PERF: Pre-allocate a single LobState for reuse (zero-allocation hot path)
+        // This eliminates heap allocations in the critical processing loop.
+        // The LobState is stack-allocated (fixed-size arrays) and reused for every message.
+        let mut lob_state = LobState::new(self.config.features.lob_levels);
 
         // Statistics
         let mut messages_processed = 0;
@@ -269,8 +280,10 @@ impl Pipeline {
                 continue;
             }
 
-            // Update LOB
-            lob.process_message(&msg)?;
+            // ✅ PERF: Update LOB and fill pre-allocated state (zero-allocation)
+            // This uses process_message_into() which fills the existing lob_state
+            // instead of allocating a new one on each call.
+            lob.process_message_into(&msg, &mut lob_state)?;
 
             // ✅ FIX: Process MBO event for MBO feature aggregation
             // This is critical for MBO features to work correctly
@@ -283,7 +296,7 @@ impl Pipeline {
             let ts = msg.timestamp.unwrap_or(0) as u64;
 
             // Phase 1: Determine threshold (adaptive or fixed)
-            let lob_state = lob.get_lob_state();
+            // Note: lob_state is already populated by process_message_into above
             let current_threshold = if let (Some(ref mut adaptive), Some(mid_price)) =
                 (&mut self.adaptive_threshold, lob_state.mid_price())
             {
