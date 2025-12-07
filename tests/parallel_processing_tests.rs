@@ -11,8 +11,8 @@
 #![cfg(feature = "parallel")]
 
 use feature_extractor::batch::{
-    BatchConfig, BatchOutput, BatchProcessor, ConsoleProgress, ErrorMode, ProgressCallback,
-    ProgressInfo,
+    BatchConfig, BatchOutput, BatchProcessor, CancellationToken, ConsoleProgress, ErrorMode,
+    ProgressCallback, ProgressInfo,
 };
 use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig, PipelineOutput};
 use std::collections::HashSet;
@@ -484,10 +484,236 @@ fn test_console_progress_callback() {
         errors: vec![],
         elapsed: Duration::from_secs(120),
         threads_used: 4,
+        was_cancelled: false,
+        skipped_count: 0,
     };
 
     // Note: callback.on_complete(&_output) would print to console
 
     println!("   ✅ Console progress callback works!");
+}
+
+// ============================================================================
+// Cancellation Tests
+// ============================================================================
+
+#[test]
+fn test_cancellation_token_basic() {
+    println!("\n📊 CancellationToken Basic Test");
+
+    let token = CancellationToken::new();
+
+    // Initially not cancelled
+    assert!(!token.is_cancelled(), "Token should not be cancelled initially");
+
+    // Cancel
+    token.cancel();
+    assert!(token.is_cancelled(), "Token should be cancelled after cancel()");
+
+    // Clone should share state
+    let token2 = token.clone();
+    assert!(token2.is_cancelled(), "Cloned token should also be cancelled");
+
+    // Reset
+    token.reset();
+    assert!(!token.is_cancelled(), "Token should not be cancelled after reset()");
+    assert!(
+        !token2.is_cancelled(),
+        "Cloned token should also be reset (shared state)"
+    );
+
+    println!("   ✅ CancellationToken basic operations work correctly!");
+}
+
+#[test]
+fn test_cancellation_immediate() {
+    let files = get_test_files();
+    if files.len() < 3 {
+        println!("⚠️  Skipping test: Need at least 3 files");
+        return;
+    }
+
+    println!("\n📊 Immediate Cancellation Test");
+    println!("   Files: {}", files.len());
+
+    let test_files: Vec<&str> = files.iter().take(5).map(|s| s.as_str()).collect();
+    let pipeline_config = create_test_config();
+    let batch_config = BatchConfig::new().with_threads(2);
+
+    let token = CancellationToken::new();
+
+    // Cancel BEFORE processing
+    token.cancel();
+
+    let processor = BatchProcessor::new(pipeline_config, batch_config)
+        .with_cancellation_token(token.clone());
+
+    let output = processor.process_files(&test_files).unwrap();
+
+    println!("   was_cancelled: {}", output.was_cancelled);
+    println!("   skipped_count: {}", output.skipped_count);
+    println!("   successful_count: {}", output.successful_count());
+
+    // All files should be skipped when cancelled immediately
+    assert!(output.was_cancelled, "Output should indicate cancellation");
+    assert_eq!(
+        output.skipped_count,
+        test_files.len(),
+        "All files should be skipped"
+    );
+    assert_eq!(output.successful_count(), 0, "No files should be processed");
+
+    println!("   ✅ Immediate cancellation works correctly!");
+}
+
+#[test]
+fn test_cancellation_processor_methods() {
+    println!("\n📊 BatchProcessor Cancellation Methods Test");
+
+    let pipeline_config = create_test_config();
+    let batch_config = BatchConfig::new();
+
+    let processor = BatchProcessor::new(pipeline_config, batch_config);
+
+    // Get token from processor
+    let token = processor.cancellation_token();
+    assert!(!processor.is_cancelled(), "Should not be cancelled initially");
+
+    // Cancel via processor method
+    processor.cancel();
+    assert!(processor.is_cancelled(), "Should be cancelled after cancel()");
+    assert!(token.is_cancelled(), "Token should also show cancelled");
+
+    println!("   ✅ BatchProcessor cancellation methods work correctly!");
+}
+
+#[test]
+fn test_cancellation_with_custom_token() {
+    let files = get_test_files();
+    if files.len() < 2 {
+        println!("⚠️  Skipping test: Need at least 2 files");
+        return;
+    }
+
+    println!("\n📊 Custom Cancellation Token Test");
+
+    let test_files: Vec<&str> = files.iter().take(3).map(|s| s.as_str()).collect();
+    let pipeline_config = create_test_config();
+    let batch_config = BatchConfig::new().with_threads(1); // Single thread for determinism
+
+    // Create external token
+    let external_token = CancellationToken::new();
+
+    let processor = BatchProcessor::new(pipeline_config, batch_config)
+        .with_cancellation_token(external_token.clone());
+
+    // Don't cancel - should process normally
+    let output = processor.process_files(&test_files).unwrap();
+
+    assert!(!output.was_cancelled, "Should not be cancelled");
+    assert_eq!(output.skipped_count, 0, "No files should be skipped");
+    assert_eq!(
+        output.successful_count(),
+        test_files.len(),
+        "All files should be processed"
+    );
+
+    println!("   Processed {} files successfully", output.successful_count());
+    println!("   ✅ Custom token integration works correctly!");
+}
+
+#[test]
+fn test_cancellation_output_fields() {
+    println!("\n📊 Cancellation Output Fields Test");
+
+    let pipeline_config = create_test_config();
+    let batch_config = BatchConfig::new();
+
+    let processor = BatchProcessor::new(pipeline_config, batch_config);
+
+    // Process empty list
+    let output = processor.process_files::<&str>(&[]).unwrap();
+
+    // Verify output has cancellation fields
+    assert!(!output.was_cancelled, "Should not be cancelled");
+    assert_eq!(output.skipped_count, 0, "No files to skip");
+
+    println!("   was_cancelled: {}", output.was_cancelled);
+    println!("   skipped_count: {}", output.skipped_count);
+    println!("   ✅ Output cancellation fields are present and correct!");
+}
+
+#[test]
+fn test_cancellation_with_error_mode() {
+    let files = get_test_files();
+    if files.is_empty() {
+        println!("⚠️  Skipping test: No test files available");
+        return;
+    }
+
+    println!("\n📊 Cancellation with ErrorMode Test");
+
+    // Mix valid and invalid files
+    let mut test_files: Vec<String> = files.iter().take(2).cloned().collect();
+    test_files.push("/nonexistent/file.dbn.zst".to_string());
+    let test_files_ref: Vec<&str> = test_files.iter().map(|s| s.as_str()).collect();
+
+    let pipeline_config = create_test_config();
+    let batch_config = BatchConfig::new()
+        .with_threads(1)
+        .with_error_mode(ErrorMode::CollectErrors);
+
+    let token = CancellationToken::new();
+    token.cancel(); // Cancel immediately
+
+    let processor = BatchProcessor::new(pipeline_config, batch_config)
+        .with_cancellation_token(token);
+
+    let output = processor.process_files(&test_files_ref).unwrap();
+
+    // All should be skipped due to cancellation (not error)
+    assert!(output.was_cancelled, "Should be cancelled");
+    assert_eq!(
+        output.skipped_count,
+        test_files.len(),
+        "All files should be skipped"
+    );
+    // No errors should be collected because we didn't even try to process
+    assert_eq!(output.failed_count(), 0, "No errors should be collected");
+
+    println!("   skipped: {}", output.skipped_count);
+    println!("   errors: {}", output.failed_count());
+    println!("   ✅ Cancellation correctly skips files instead of erroring!");
+}
+
+#[test]
+fn test_cancellation_thread_safety() {
+    println!("\n📊 Cancellation Thread Safety Test");
+
+    let token = CancellationToken::new();
+
+    // Spawn multiple threads that check/cancel
+    let handles: Vec<_> = (0..4)
+        .map(|i| {
+            let t = token.clone();
+            std::thread::spawn(move || {
+                // Some threads check, some cancel
+                if i % 2 == 0 {
+                    t.cancel();
+                }
+                t.is_cancelled()
+            })
+        })
+        .collect();
+
+    // Wait for all threads
+    for handle in handles {
+        let _ = handle.join().unwrap();
+    }
+
+    // Token should be cancelled (at least one thread called cancel)
+    assert!(token.is_cancelled(), "Token should be cancelled");
+
+    println!("   ✅ CancellationToken is thread-safe!");
 }
 

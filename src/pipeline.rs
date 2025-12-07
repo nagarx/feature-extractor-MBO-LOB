@@ -87,7 +87,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// Output from pipeline processing
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PipelineOutput {
     /// Generated sequences [N_sequences, window_size, features]
     pub sequences: Vec<Sequence>,

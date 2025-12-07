@@ -33,6 +33,7 @@
 //! - **Configurable parallelism**: Set thread count based on hardware
 //! - **Error handling modes**: Fail fast or collect errors and continue
 //! - **Progress reporting**: Optional callbacks for monitoring
+//! - **Graceful cancellation**: Cancel long-running jobs from any thread
 //! - **Memory efficient**: Each thread manages its own memory
 //!
 //! # Example
@@ -56,6 +57,34 @@
 //! println!("Throughput: {:.2} msg/sec", results.throughput_msg_per_sec);
 //! ```
 //!
+//! # Cancellation Support
+//!
+//! Long-running batch jobs can be cancelled gracefully using a `CancellationToken`:
+//!
+//! ```ignore
+//! use feature_extractor::batch::{BatchProcessor, CancellationToken};
+//! use std::thread;
+//!
+//! // Create a cancellation token
+//! let token = CancellationToken::new();
+//! let processor = BatchProcessor::new(pipeline_config, batch_config)
+//!     .with_cancellation_token(token.clone());
+//!
+//! // Start processing in a background thread
+//! let handle = thread::spawn(move || processor.process_files(&day_files));
+//!
+//! // Cancel after timeout or user request
+//! thread::sleep(Duration::from_secs(30));
+//! token.cancel();
+//!
+//! // Get partial results
+//! let result = handle.join().unwrap().unwrap();
+//! if result.was_cancelled {
+//!     println!("Cancelled after processing {} files", result.successful_count());
+//!     println!("Skipped {} files", result.skipped_count);
+//! }
+//! ```
+//!
 //! # Hardware Configuration
 //!
 //! The `BatchConfig` allows fine-tuning based on your hardware:
@@ -74,7 +103,7 @@ use crate::pipeline::{Pipeline, PipelineOutput};
 use mbo_lob_reconstructor::Result;
 use rayon::prelude::*;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -99,6 +128,90 @@ pub enum ErrorMode {
     /// Use this for batch jobs where you want to process as much
     /// data as possible and handle failures later.
     CollectErrors,
+}
+
+// ============================================================================
+// Cancellation Support
+// ============================================================================
+
+/// Token for cancelling batch processing.
+///
+/// The `CancellationToken` provides a thread-safe way to signal cancellation
+/// to a running batch job. It can be cloned and shared across threads.
+///
+/// # Thread Safety
+///
+/// The token uses atomic operations internally, so it's safe to:
+/// - Call `cancel()` from any thread
+/// - Check `is_cancelled()` from any thread
+/// - Clone and share across threads
+///
+/// # Example
+///
+/// ```ignore
+/// use feature_extractor::batch::{BatchProcessor, CancellationToken};
+/// use std::thread;
+/// use std::time::Duration;
+///
+/// let token = CancellationToken::new();
+/// let processor = BatchProcessor::new(config, batch_config)
+///     .with_cancellation_token(token.clone());
+///
+/// // Start processing in background
+/// let handle = thread::spawn(move || {
+///     processor.process_files(&files)
+/// });
+///
+/// // Cancel after 30 seconds
+/// thread::sleep(Duration::from_secs(30));
+/// token.cancel();
+///
+/// // Wait for graceful shutdown
+/// let result = handle.join().unwrap();
+/// assert!(result.unwrap().was_cancelled);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken {
+    /// Internal flag indicating cancellation was requested.
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    /// Create a new cancellation token.
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Request cancellation.
+    ///
+    /// This signals all workers to stop processing after their current file.
+    /// Already-completed files are preserved in the output.
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is safe to call from any thread at any time.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    /// Check if cancellation was requested.
+    ///
+    /// Workers check this periodically and stop if true.
+    #[inline]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Reset the token (for reuse).
+    ///
+    /// # Warning
+    ///
+    /// Only call this when no processing is active.
+    pub fn reset(&self) {
+        self.cancelled.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Configuration for batch processing.
@@ -215,7 +328,7 @@ impl BatchConfig {
 // ============================================================================
 
 /// Result from processing a single day/file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DayResult {
     /// Day identifier (extracted from filename).
     pub day: String,
@@ -279,6 +392,16 @@ pub struct BatchOutput {
 
     /// Number of threads used.
     pub threads_used: usize,
+
+    /// Whether processing was cancelled before completion.
+    ///
+    /// If true, `results` contains only the files that completed before
+    /// cancellation was detected. Files that were in-progress when
+    /// cancellation was requested will complete normally.
+    pub was_cancelled: bool,
+
+    /// Number of files that were skipped due to cancellation.
+    pub skipped_count: usize,
 }
 
 impl BatchOutput {
@@ -528,6 +651,9 @@ pub struct BatchProcessor {
 
     /// Optional progress callback.
     progress_callback: Option<Arc<dyn ProgressCallback>>,
+
+    /// Cancellation token for graceful shutdown.
+    cancellation_token: CancellationToken,
 }
 
 impl BatchProcessor {
@@ -542,6 +668,7 @@ impl BatchProcessor {
             pipeline_config: Arc::new(pipeline_config),
             batch_config,
             progress_callback: None,
+            cancellation_token: CancellationToken::new(),
         }
     }
 
@@ -561,6 +688,66 @@ impl BatchProcessor {
     pub fn with_progress_callback(mut self, callback: Box<dyn ProgressCallback>) -> Self {
         self.progress_callback = Some(Arc::from(callback));
         self
+    }
+
+    /// Set a cancellation token for graceful shutdown.
+    ///
+    /// The token can be used to cancel processing from another thread.
+    /// After cancellation, any files that were in-progress will complete,
+    /// but no new files will be started.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::batch::{BatchProcessor, CancellationToken};
+    /// use std::thread;
+    ///
+    /// let token = CancellationToken::new();
+    /// let processor = BatchProcessor::new(config, batch_config)
+    ///     .with_cancellation_token(token.clone());
+    ///
+    /// // Cancel from another thread
+    /// let token_handle = token.clone();
+    /// thread::spawn(move || {
+    ///     thread::sleep(std::time::Duration::from_secs(5));
+    ///     token_handle.cancel();
+    /// });
+    ///
+    /// let result = processor.process_files(&files)?;
+    /// if result.was_cancelled {
+    ///     println!("Processing was cancelled after {} files", result.successful_count());
+    /// }
+    /// ```
+    pub fn with_cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.cancellation_token = token;
+        self
+    }
+
+    /// Get a clone of the cancellation token.
+    ///
+    /// Use this to share the token with other threads for external cancellation.
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
+    /// Request cancellation of the current batch processing.
+    ///
+    /// This is a convenience method equivalent to `processor.cancellation_token().cancel()`.
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is safe to call from any thread.
+    pub fn cancel(&self) {
+        self.cancellation_token.cancel();
+    }
+
+    /// Check if cancellation was requested.
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is safe to call from any thread.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation_token.is_cancelled()
     }
 
     /// Get the batch configuration.
@@ -611,14 +798,28 @@ impl BatchProcessor {
         // Counters for progress tracking
         let completed = AtomicUsize::new(0);
         let failed = AtomicUsize::new(0);
+        let skipped = AtomicUsize::new(0);
+
+        // Internal result type to handle cancellation
+        enum ProcessResult {
+            Success(DayResult),
+            Error(FileError),
+            Skipped,
+        }
 
         // Process files in parallel
-        let results: Vec<std::result::Result<DayResult, FileError>> = files
+        let results: Vec<ProcessResult> = files
             .par_iter()
             .enumerate()
             .map(|(index, file)| {
                 let file_path = file.as_ref().to_string_lossy().to_string();
                 let day = extract_day_from_path(&file_path);
+
+                // Check for cancellation BEFORE starting work
+                if self.cancellation_token.is_cancelled() {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    return ProcessResult::Skipped;
+                }
 
                 // Report progress if callback is set
                 if let Some(ref callback) = self.progress_callback {
@@ -638,26 +839,27 @@ impl BatchProcessor {
 
                 // Update counters
                 match &result {
-                    Ok(_) => {
+                    Ok(day_result) => {
                         completed.fetch_add(1, Ordering::Relaxed);
+                        ProcessResult::Success(day_result.clone())
                     }
-                    Err(_) => {
+                    Err(err) => {
                         failed.fetch_add(1, Ordering::Relaxed);
+                        ProcessResult::Error(err.clone())
                     }
                 }
-
-                result
             })
             .collect();
 
         // Partition results
         let mut successful = Vec::new();
         let mut errors = Vec::new();
+        let mut skipped_count = 0usize;
 
         for result in results {
             match result {
-                Ok(day_result) => successful.push(day_result),
-                Err(file_error) => {
+                ProcessResult::Success(day_result) => successful.push(day_result),
+                ProcessResult::Error(file_error) => {
                     if self.batch_config.error_mode == ErrorMode::FailFast {
                         return Err(mbo_lob_reconstructor::TlobError::generic(format!(
                             "Failed to process {}: {}",
@@ -666,14 +868,21 @@ impl BatchProcessor {
                     }
                     errors.push(file_error);
                 }
+                ProcessResult::Skipped => {
+                    skipped_count += 1;
+                }
             }
         }
+
+        let was_cancelled = self.cancellation_token.is_cancelled();
 
         let output = BatchOutput {
             results: successful,
             errors,
             elapsed: start.elapsed(),
             threads_used,
+            was_cancelled,
+            skipped_count,
         };
 
         // Report completion
@@ -921,12 +1130,16 @@ mod tests {
             errors: vec![],
             elapsed: Duration::from_secs(10),
             threads_used: 4,
+            was_cancelled: false,
+            skipped_count: 0,
         };
 
         assert_eq!(output.successful_count(), 0);
         assert_eq!(output.failed_count(), 0);
         assert_eq!(output.total_messages(), 0);
         assert!(output.all_successful());
+        assert!(!output.was_cancelled);
+        assert_eq!(output.skipped_count, 0);
     }
 
     #[test]

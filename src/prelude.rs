@@ -200,5 +200,6 @@ pub type LabeledSample = (usize, TrendLabel, f64);
 #[cfg(feature = "parallel")]
 pub use crate::batch::{
     process_files_parallel, process_files_with_threads, BatchConfig, BatchOutput, BatchProcessor,
-    ConsoleProgress, DayResult, ErrorMode, FileError, ProgressCallback, ProgressInfo,
+    CancellationToken, ConsoleProgress, DayResult, ErrorMode, FileError, ProgressCallback,
+    ProgressInfo,
 };

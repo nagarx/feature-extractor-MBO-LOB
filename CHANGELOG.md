@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **BIT-LEVEL identical** results to sequential processing
   - Enable with: `cargo build --features parallel`
 
+- **Graceful Cancellation Support**
+  - `CancellationToken` - Thread-safe token for cancelling batch jobs
+  - `BatchProcessor::with_cancellation_token()` - Set external cancellation token
+  - `BatchProcessor::cancel()` - Convenience method to request cancellation
+  - `BatchProcessor::is_cancelled()` - Check if cancellation was requested
+  - `BatchOutput.was_cancelled` - Flag indicating if processing was cancelled
+  - `BatchOutput.skipped_count` - Number of files skipped due to cancellation
+  - In-progress files complete normally; only pending files are skipped
+  - Comprehensive test suite for cancellation scenarios
+
 ### Changed
 
 - **Pipeline Hot Path Optimization (Phase 2)**
