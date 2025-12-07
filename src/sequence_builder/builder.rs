@@ -661,9 +661,61 @@ impl Default for SequenceBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     fn create_test_features(value: f64, count: usize) -> Vec<f64> {
         vec![value; count]
+    }
+
+    /// Performance test: Measure sequence building throughput.
+    ///
+    /// This test demonstrates the performance benefit of Arc-based storage.
+    /// Building 10,000 sequences with 100 snapshots × 84 features each.
+    #[test]
+    fn test_sequence_building_performance() {
+        let window_size = 100;
+        let feature_count = 84; // Full feature set (40 raw + 8 derived + 36 MBO)
+        let num_sequences = 1000;
+        let stride = 10;
+
+        let config = SequenceConfig::new(window_size, stride)
+            .with_feature_count(feature_count)
+            .with_max_buffer_size(window_size + stride * num_sequences);
+
+        let mut builder = SequenceBuilder::with_config(config);
+
+        // Push enough snapshots for all sequences
+        let total_snapshots = window_size + stride * (num_sequences - 1);
+        for i in 0..total_snapshots {
+            let features = create_test_features((i % 100) as f64, feature_count);
+            builder.push(i as u64 * 1000, features).unwrap();
+        }
+
+        // Measure sequence building time
+        let start = Instant::now();
+        let sequences = builder.generate_all_sequences();
+        let duration = start.elapsed();
+
+        // Verify we got the expected number of sequences
+        assert_eq!(sequences.len(), num_sequences);
+
+        // Log performance metrics
+        let sequences_per_sec = sequences.len() as f64 / duration.as_secs_f64();
+        let bytes_saved_per_seq = window_size * feature_count * 8; // Would have been cloned without Arc
+        let total_bytes_saved = bytes_saved_per_seq * sequences.len();
+
+        println!("\n=== Sequence Building Performance ===");
+        println!("Sequences generated: {}", sequences.len());
+        println!("Time: {:?}", duration);
+        println!("Throughput: {:.0} sequences/sec", sequences_per_sec);
+        println!("Data NOT cloned (saved): {:.2} MB", total_bytes_saved as f64 / 1_000_000.0);
+        println!("Per-sequence savings: {:.2} KB", bytes_saved_per_seq as f64 / 1000.0);
+
+        // Verify numerical correctness
+        for seq in &sequences {
+            assert_eq!(seq.features.len(), window_size);
+            assert_eq!(seq.features[0].len(), feature_count);
+        }
     }
 
     #[test]
