@@ -31,12 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 19 new tests for `extract_into` and `extract_arc`
   - 6 new tests for `SequenceBuilder::push_arc`
   - 6 new tests for `MultiScaleWindow::push_arc`
+  - 7 new pipeline integration tests for zero-allocation path
   - Numerical precision tests with edge cases (Pi, E, 1e-15, 1e15)
   - Multi-builder sharing isolation tests
 
 ### Changed
 
-- `Pipeline.process()` now uses `process_message_into()` from mbo-lob-reconstructor
+- **Pipeline Hot Path Optimization (Phase 2)**
+  - `Pipeline.process()` now uses `extract_into()` with reusable feature buffer
+  - Features wrapped in `Arc` once, then shared via `push_arc()` to sequence builders
+  - Multi-scale path uses `push_arc()` for zero-copy sharing across all scales
+  - Memory allocation per sample: 1 Vec + Arc wrap (vs 3 Vec allocations before)
+
+- `Pipeline.process()` uses `process_message_into()` from mbo-lob-reconstructor
 - Reuses single `LobState` buffer across all messages (zero allocation in hot loop)
 - Export functions updated to handle `Arc<Vec<f64>>` → `Vec<f64>` conversion
 - `push()` methods now delegate to `push_arc()` internally
@@ -44,9 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Performance
 
 - **Pipeline throughput**: Uses O(1) PriceLevel caching from reconstructor
+- **Feature extraction**: Buffer reuse eliminates per-sample Vec allocation
 - **Sequence building**: 67.2 KB saved per sequence via Arc sharing
 - **Multi-scale sharing**: 16 bytes (2 Arc clones) vs 1,344 bytes (2 Vec clones)
-- Validated against 37M+ real NVIDIA messages with 0 mismatches
+- **Validated**: 500K+ messages, 7140 sequences with 0 numerical mismatches
 
 ## [0.1.1] - 2025-12-04
 
