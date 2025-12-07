@@ -14,7 +14,7 @@ use feature_extractor::batch::{
     BatchConfig, BatchOutput, BatchProcessor, ConsoleProgress, ErrorMode, ProgressCallback,
     ProgressInfo,
 };
-use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig};
+use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig, PipelineOutput};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
