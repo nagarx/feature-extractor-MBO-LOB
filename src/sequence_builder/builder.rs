@@ -433,9 +433,11 @@ impl SequenceBuilder {
         }
     }
 
-    /// Push a new snapshot into the buffer.
+    /// Push a new snapshot into the buffer (convenience method).
     ///
-    /// If the buffer is at capacity, the oldest snapshot is evicted.
+    /// This is a convenience wrapper that wraps the `Vec<f64>` in an `Arc`
+    /// and delegates to [`push_arc`]. If the buffer is at capacity, the oldest
+    /// snapshot is evicted.
     ///
     /// # Arguments
     ///
@@ -450,9 +452,53 @@ impl SequenceBuilder {
     /// # Performance
     ///
     /// - O(1) amortized insertion
-    /// - May allocate if features.len() != capacity
+    /// - Allocates Arc wrapping overhead (16 bytes)
+    ///
+    /// # Note
+    ///
+    /// If you already have an `Arc<Vec<f64>>` (e.g., from [`FeatureExtractor::extract_arc`]),
+    /// use [`push_arc`] instead to avoid the wrapping overhead and enable zero-copy
+    /// sharing across multiple sequence builders (e.g., in multi-scale mode).
     #[inline]
     pub fn push(&mut self, timestamp: u64, features: Vec<f64>) -> Result<(), SequenceError> {
+        self.push_arc(timestamp, Arc::new(features))
+    }
+
+    /// Push a snapshot using a shared feature vector (zero-copy path).
+    ///
+    /// This is the **primary API for maximum performance**. When you have features
+    /// wrapped in `Arc<Vec<f64>>` (e.g., from `FeatureExtractor::extract_arc`),
+    /// use this method to avoid unnecessary Arc wrapping.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - Timestamp for this snapshot (nanoseconds since epoch)
+    /// * `features` - Feature vector wrapped in Arc for zero-copy sharing
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Snapshot added successfully
+    /// * `Err(FeatureCountMismatch)` - If feature count doesn't match config
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use std::sync::Arc;
+    ///
+    /// // Extract features as Arc
+    /// let features: Arc<Vec<f64>> = extractor.extract_arc(&lob_state)?;
+    ///
+    /// // Push directly (no additional wrapping)
+    /// builder.push_arc(timestamp, features)?;
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// - **O(1)** amortized insertion
+    /// - **No allocation** in the hot path (Arc is stored directly)
+    /// - Ideal for multi-scale sharing where the same Arc is pushed to multiple builders
+    #[inline]
+    pub fn push_arc(&mut self, timestamp: u64, features: FeatureVec) -> Result<(), SequenceError> {
         if features.len() != self.config.feature_count {
             return Err(SequenceError::FeatureCountMismatch {
                 expected: self.config.feature_count,
@@ -470,10 +516,10 @@ impl SequenceBuilder {
             }
         }
 
-        // Add new snapshot (wrap features in Arc for zero-copy sharing)
+        // Store Arc directly (no wrapping needed)
         self.buffer.push_back(Snapshot {
             timestamp,
-            features: Arc::new(features),
+            features,
         });
         self.total_pushed += 1;
 
@@ -1130,6 +1176,197 @@ mod tests {
                     assert_eq!(v, first);
                 }
             }
+        }
+    }
+
+    // ========================================================================
+    // push_arc Tests (Zero-Copy API)
+    // ========================================================================
+
+    #[test]
+    fn test_push_arc_basic() {
+        let config = SequenceConfig::new(3, 1)
+            .with_feature_count(4)
+            .with_max_buffer_size(10);
+
+        let mut builder = SequenceBuilder::with_config(config);
+
+        // Push using Arc directly
+        let features = Arc::new(vec![1.0, 2.0, 3.0, 4.0]);
+        builder.push_arc(1000, features).unwrap();
+        builder.push_arc(2000, Arc::new(vec![5.0, 6.0, 7.0, 8.0])).unwrap();
+        builder.push_arc(3000, Arc::new(vec![9.0, 10.0, 11.0, 12.0])).unwrap();
+
+        let seq = builder.try_build_sequence().unwrap();
+        assert_eq!(seq.features.len(), 3);
+        assert_eq!(seq.features[0][0], 1.0);
+        assert_eq!(seq.features[2][3], 12.0);
+    }
+
+    #[test]
+    fn test_push_arc_shared_reference() {
+        let config = SequenceConfig::new(3, 1)
+            .with_feature_count(4)
+            .with_max_buffer_size(10);
+
+        let mut builder = SequenceBuilder::with_config(config);
+
+        // Create Arc and keep a reference
+        let features = Arc::new(vec![1.0, 2.0, 3.0, 4.0]);
+        let features_clone = features.clone();
+
+        // Arc count should be 2
+        assert_eq!(Arc::strong_count(&features), 2);
+
+        // Push (this clones the Arc internally)
+        builder.push_arc(1000, features).unwrap();
+
+        // Our reference still works
+        assert_eq!(features_clone[0], 1.0);
+
+        // After pushing more, build sequence
+        builder.push_arc(2000, Arc::new(vec![5.0, 6.0, 7.0, 8.0])).unwrap();
+        builder.push_arc(3000, Arc::new(vec![9.0, 10.0, 11.0, 12.0])).unwrap();
+
+        let seq = builder.try_build_sequence().unwrap();
+
+        // Sequence has our data
+        assert_eq!(seq.features[0][0], 1.0);
+
+        // Our clone still references the same data
+        assert_eq!(features_clone[0], 1.0);
+    }
+
+    #[test]
+    fn test_push_arc_multi_builder_sharing() {
+        // This tests the critical multi-scale use case
+        let config = SequenceConfig::new(2, 1)
+            .with_feature_count(3)
+            .with_max_buffer_size(10);
+
+        let mut fast_builder = SequenceBuilder::with_config(config.clone());
+        let mut slow_builder = SequenceBuilder::with_config(config);
+
+        // Create shared Arc
+        let shared_features = Arc::new(vec![100.0, 200.0, 300.0]);
+
+        // Arc count should be 1
+        assert_eq!(Arc::strong_count(&shared_features), 1);
+
+        // Push to fast builder (clone Arc)
+        fast_builder.push_arc(1000, shared_features.clone()).unwrap();
+        assert_eq!(Arc::strong_count(&shared_features), 2);
+
+        // Push to slow builder (clone Arc)
+        slow_builder.push_arc(1000, shared_features.clone()).unwrap();
+        assert_eq!(Arc::strong_count(&shared_features), 3);
+
+        // Drop original (count was 3, now becomes 2)
+        drop(shared_features);
+
+        // Add more and build sequences
+        fast_builder.push_arc(2000, Arc::new(vec![101.0, 201.0, 301.0])).unwrap();
+        slow_builder.push_arc(2000, Arc::new(vec![101.0, 201.0, 301.0])).unwrap();
+
+        let fast_seq = fast_builder.try_build_sequence().unwrap();
+        let slow_seq = slow_builder.try_build_sequence().unwrap();
+
+        // Both sequences should have the same first value
+        assert_eq!(fast_seq.features[0][0], 100.0);
+        assert_eq!(slow_seq.features[0][0], 100.0);
+    }
+
+    #[test]
+    fn test_push_arc_matches_push() {
+        let config = SequenceConfig::new(3, 1)
+            .with_feature_count(5)
+            .with_max_buffer_size(10);
+
+        let mut builder_vec = SequenceBuilder::with_config(config.clone());
+        let mut builder_arc = SequenceBuilder::with_config(config);
+
+        let test_data = vec![
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![10.0, 20.0, 30.0, 40.0, 50.0],
+            vec![100.0, 200.0, 300.0, 400.0, 500.0],
+        ];
+
+        // Push using push() (Vec)
+        for (i, data) in test_data.iter().enumerate() {
+            builder_vec.push(i as u64 * 1000, data.clone()).unwrap();
+        }
+
+        // Push using push_arc() (Arc)
+        for (i, data) in test_data.iter().enumerate() {
+            builder_arc.push_arc(i as u64 * 1000, Arc::new(data.clone())).unwrap();
+        }
+
+        // Build sequences
+        let seq_vec = builder_vec.try_build_sequence().unwrap();
+        let seq_arc = builder_arc.try_build_sequence().unwrap();
+
+        // Must be IDENTICAL
+        assert_eq!(seq_vec.features.len(), seq_arc.features.len());
+        for (i, (vec_feat, arc_feat)) in seq_vec.features.iter().zip(seq_arc.features.iter()).enumerate() {
+            for (j, (&v1, &v2)) in vec_feat.iter().zip(arc_feat.iter()).enumerate() {
+                assert_eq!(v1, v2, "Mismatch at [{i}][{j}]: push={v1}, push_arc={v2}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_push_arc_feature_count_validation() {
+        let config = SequenceConfig::new(3, 1)
+            .with_feature_count(5)
+            .with_max_buffer_size(10);
+
+        let mut builder = SequenceBuilder::with_config(config);
+
+        // Wrong size should fail
+        let wrong_size = Arc::new(vec![1.0, 2.0, 3.0]); // Only 3, expected 5
+        let result = builder.push_arc(1000, wrong_size);
+        assert!(result.is_err());
+
+        match result {
+            Err(SequenceError::FeatureCountMismatch { expected, actual }) => {
+                assert_eq!(expected, 5);
+                assert_eq!(actual, 3);
+            }
+            _ => panic!("Expected FeatureCountMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_push_arc_numerical_precision() {
+        let config = SequenceConfig::new(2, 1)
+            .with_feature_count(6)
+            .with_max_buffer_size(10);
+
+        let mut builder = SequenceBuilder::with_config(config);
+
+        // Test edge cases for numerical precision
+        let edge_values = vec![
+            std::f64::consts::PI,
+            std::f64::consts::E,
+            1e15,
+            1e-15,
+            -0.0,
+            std::f64::MIN_POSITIVE,
+        ];
+
+        builder.push_arc(1000, Arc::new(edge_values.clone())).unwrap();
+        builder.push_arc(2000, Arc::new(vec![1.0; 6])).unwrap();
+
+        let seq = builder.try_build_sequence().unwrap();
+
+        // Verify EXACT preservation
+        for (i, &expected) in edge_values.iter().enumerate() {
+            let actual = seq.features[0][i];
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "Bit-level mismatch at index {i}: expected {expected:?}, got {actual:?}"
+            );
         }
     }
 }

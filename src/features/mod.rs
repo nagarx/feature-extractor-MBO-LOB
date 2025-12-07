@@ -312,27 +312,143 @@ impl FeatureExtractor {
     /// - LOB + derived: 48 features (40 raw + 8 derived)
     /// - LOB + MBO: 76 features (40 raw + 36 MBO)
     /// - LOB + derived + MBO: 84 features (40 raw + 8 derived + 36 MBO)
+    ///
+    /// # Performance Note
+    ///
+    /// This method allocates a new Vec on every call. For maximum performance
+    /// in hot loops, use [`extract_into`] with a pre-allocated buffer.
     pub fn extract_all_features(&mut self, lob_state: &LobState) -> Result<Vec<f64>> {
         let mut features = Vec::with_capacity(self.feature_count());
+        self.extract_into(lob_state, &mut features)?;
+        Ok(features)
+    }
 
-        // ✅ FIX: Extract RAW LOB features (absolute prices in dollars, sizes in shares)
-        lob_features::extract_raw_features(lob_state, self.config.lob_levels, &mut features);
+    // ========================================================================
+    // Zero-Allocation API (Phase 1 Long-Term Architecture)
+    // ========================================================================
 
+    /// Extract all features into a pre-allocated buffer (zero-allocation hot path).
+    ///
+    /// This is the **recommended method for maximum performance**. It writes features
+    /// directly into the provided buffer without allocating new memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `lob_state` - Current LOB state
+    /// * `output` - Pre-allocated buffer to write features into (will be cleared first)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Features successfully written to output buffer
+    /// * `Err(...)` - If feature extraction fails (e.g., invalid LOB state)
+    ///
+    /// # Feature Order
+    ///
+    /// Features are written in this order:
+    /// 1. Ask prices (levels 1-10) - RAW prices in dollars
+    /// 2. Ask sizes (levels 1-10) - RAW sizes in shares
+    /// 3. Bid prices (levels 1-10) - RAW prices in dollars
+    /// 4. Bid sizes (levels 1-10) - RAW sizes in shares
+    /// 5. Derived features (8, if enabled)
+    /// 6. MBO features (36, if enabled)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::FeatureExtractor;
+    ///
+    /// let mut extractor = FeatureExtractor::new(10);
+    ///
+    /// // Pre-allocate buffer ONCE outside the loop
+    /// let mut buffer = Vec::with_capacity(extractor.feature_count());
+    ///
+    /// for lob_state in lob_states {
+    ///     // Reuse buffer - no allocation in hot path
+    ///     extractor.extract_into(&lob_state, &mut buffer)?;
+    ///     
+    ///     // Process features...
+    ///     process(&buffer);
+    /// }
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// - **Zero heap allocations** in the hot path
+    /// - Buffer is cleared and reused on each call
+    /// - Capacity is preserved across calls
+    #[inline]
+    pub fn extract_into(&mut self, lob_state: &LobState, output: &mut Vec<f64>) -> Result<()> {
+        // Clear buffer but preserve capacity
+        output.clear();
+        output.reserve(self.feature_count());
+
+        // Extract RAW LOB features (prices in dollars, sizes in shares)
+        lob_features::extract_raw_features(lob_state, self.config.lob_levels, output);
+
+        // Extract derived features if enabled
         if self.config.include_derived {
             let derived =
                 derived_features::compute_derived_features(lob_state, self.config.lob_levels)?;
-            features.extend_from_slice(&derived);
+            output.extend_from_slice(&derived);
         }
 
         // Extract MBO features if enabled
         if self.config.include_mbo {
             if let Some(ref mut aggregator) = self.mbo_aggregator {
                 let mbo_feats = aggregator.extract_features(lob_state);
-                features.extend_from_slice(&mbo_feats);
+                output.extend_from_slice(&mbo_feats);
             }
         }
 
-        Ok(features)
+        Ok(())
+    }
+
+    /// Extract all features and wrap in Arc for zero-copy sharing.
+    ///
+    /// This is a convenience method that:
+    /// 1. Allocates a new Vec with appropriate capacity
+    /// 2. Extracts features using [`extract_into`]
+    /// 3. Wraps the result in `Arc` for sharing
+    ///
+    /// Use this when you need to share features across multiple consumers
+    /// (e.g., multi-scale sequence building) without deep copying.
+    ///
+    /// # Arguments
+    ///
+    /// * `lob_state` - Current LOB state
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Arc<Vec<f64>>)` - Shared feature vector
+    /// * `Err(...)` - If feature extraction fails
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::FeatureExtractor;
+    /// use std::sync::Arc;
+    ///
+    /// let mut extractor = FeatureExtractor::new(10);
+    ///
+    /// // Extract and wrap in Arc
+    /// let features: Arc<Vec<f64>> = extractor.extract_arc(&lob_state)?;
+    ///
+    /// // Share across multiple consumers (cheap Arc clone)
+    /// let features_for_fast = features.clone();   // 8 bytes
+    /// let features_for_medium = features.clone(); // 8 bytes
+    /// let features_for_slow = features;           // move
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// - **One allocation** per call (the Vec)
+    /// - Arc wrapping is essentially free
+    /// - Subsequent clones are O(1) (just atomic increment)
+    #[inline]
+    pub fn extract_arc(&mut self, lob_state: &LobState) -> Result<std::sync::Arc<Vec<f64>>> {
+        let mut buffer = Vec::with_capacity(self.feature_count());
+        self.extract_into(lob_state, &mut buffer)?;
+        Ok(std::sync::Arc::new(buffer))
     }
 
     /// Get the configuration.
@@ -892,5 +1008,253 @@ mod tests {
             &features2[..40],
             "Raw LOB features should be deterministic"
         );
+    }
+
+    // ========================================================================
+    // Zero-Allocation API Tests (extract_into, extract_arc)
+    // ========================================================================
+
+    #[test]
+    fn test_extract_into_basic() {
+        let mut extractor = FeatureExtractor::new(10);
+        let state = create_test_lob_state();
+        let mut buffer = Vec::new();
+
+        // Extract into empty buffer
+        extractor.extract_into(&state, &mut buffer).unwrap();
+
+        assert_eq!(buffer.len(), 40);
+    }
+
+    #[test]
+    fn test_extract_into_reuses_buffer() {
+        let mut extractor = FeatureExtractor::new(10);
+        let state = create_test_lob_state();
+        let mut buffer = Vec::with_capacity(100);
+
+        // First extraction
+        extractor.extract_into(&state, &mut buffer).unwrap();
+        assert_eq!(buffer.len(), 40);
+        assert!(buffer.capacity() >= 100); // Capacity preserved
+
+        // Second extraction should reuse same buffer
+        extractor.extract_into(&state, &mut buffer).unwrap();
+        assert_eq!(buffer.len(), 40);
+        assert!(buffer.capacity() >= 100); // Capacity still preserved
+    }
+
+    #[test]
+    fn test_extract_into_clears_previous_data() {
+        let mut extractor = FeatureExtractor::new(10);
+        let state = create_test_lob_state();
+        let mut buffer = vec![999.0; 200]; // Pre-fill with garbage
+
+        extractor.extract_into(&state, &mut buffer).unwrap();
+
+        // Should have exactly 40 features, not 240
+        assert_eq!(buffer.len(), 40);
+        // First value should not be 999.0
+        assert_ne!(buffer[0], 999.0);
+    }
+
+    #[test]
+    fn test_extract_into_matches_extract_all_features() {
+        let config = FeatureConfig {
+            lob_levels: 10,
+            tick_size: 0.01,
+            include_derived: true,
+            include_mbo: true,
+            mbo_window_size: 100,
+        };
+        let mut extractor = FeatureExtractor::with_config(config);
+        let state = create_test_lob_state();
+
+        // Process some MBO events for consistency
+        for i in 0..50 {
+            let event = mbo_features::MboEvent::new(
+                1_000_000_000 + i * 1_000_000,
+                mbo_lob_reconstructor::Action::Add,
+                if i % 2 == 0 { Side::Bid } else { Side::Ask },
+                100_000_000_000,
+                100,
+                10000 + i,
+            );
+            extractor.process_mbo_event(event);
+        }
+
+        // Extract using both methods
+        let vec_result = extractor.extract_all_features(&state).unwrap();
+
+        let mut buffer = Vec::new();
+        extractor.extract_into(&state, &mut buffer).unwrap();
+
+        // Results must be IDENTICAL
+        assert_eq!(
+            vec_result.len(),
+            buffer.len(),
+            "Length mismatch: extract_all_features={}, extract_into={}",
+            vec_result.len(),
+            buffer.len()
+        );
+
+        for (i, (&expected, &actual)) in vec_result.iter().zip(buffer.iter()).enumerate() {
+            assert_eq!(
+                expected, actual,
+                "Feature {} mismatch: expected {}, got {}",
+                i, expected, actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_into_with_all_feature_types() {
+        let config = FeatureConfig {
+            lob_levels: 10,
+            tick_size: 0.01,
+            include_derived: true,
+            include_mbo: true,
+            mbo_window_size: 100,
+        };
+        let mut extractor = FeatureExtractor::with_config(config);
+        let state = create_test_lob_state();
+
+        let mut buffer = Vec::new();
+        extractor.extract_into(&state, &mut buffer).unwrap();
+
+        // Should have 84 features: 40 raw + 8 derived + 36 MBO
+        assert_eq!(buffer.len(), 84);
+    }
+
+    #[test]
+    fn test_extract_arc_basic() {
+        let mut extractor = FeatureExtractor::new(10);
+        let state = create_test_lob_state();
+
+        let arc_result = extractor.extract_arc(&state).unwrap();
+
+        assert_eq!(arc_result.len(), 40);
+        // Arc should have strong count of 1
+        assert_eq!(std::sync::Arc::strong_count(&arc_result), 1);
+    }
+
+    #[test]
+    fn test_extract_arc_sharing() {
+        let mut extractor = FeatureExtractor::new(10);
+        let state = create_test_lob_state();
+
+        let arc1 = extractor.extract_arc(&state).unwrap();
+        let arc2 = arc1.clone(); // Cheap clone
+        let arc3 = arc1.clone(); // Another cheap clone
+
+        // All point to same data
+        assert_eq!(std::sync::Arc::strong_count(&arc1), 3);
+        assert_eq!(std::sync::Arc::strong_count(&arc2), 3);
+        assert_eq!(std::sync::Arc::strong_count(&arc3), 3);
+
+        // Values are identical
+        assert_eq!(arc1[0], arc2[0]);
+        assert_eq!(arc1[0], arc3[0]);
+
+        // Dropping reduces count
+        drop(arc2);
+        assert_eq!(std::sync::Arc::strong_count(&arc1), 2);
+    }
+
+    #[test]
+    fn test_extract_arc_matches_extract_all_features() {
+        let config = FeatureConfig {
+            lob_levels: 10,
+            tick_size: 0.01,
+            include_derived: true,
+            include_mbo: false,
+            mbo_window_size: 100,
+        };
+        let mut extractor = FeatureExtractor::with_config(config);
+        let state = create_test_lob_state();
+
+        let vec_result = extractor.extract_all_features(&state).unwrap();
+        let arc_result = extractor.extract_arc(&state).unwrap();
+
+        // Must be identical
+        assert_eq!(vec_result.len(), arc_result.len());
+        for (i, (&expected, &actual)) in vec_result.iter().zip(arc_result.iter()).enumerate() {
+            assert_eq!(
+                expected, actual,
+                "Feature {} mismatch: expected {}, got {}",
+                i, expected, actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_into_numerical_precision() {
+        let config = FeatureConfig {
+            lob_levels: 10,
+            tick_size: 0.01,
+            include_derived: true,
+            include_mbo: false,
+            mbo_window_size: 100,
+        };
+        let mut extractor = FeatureExtractor::with_config(config);
+        let state = create_test_lob_state();
+
+        let mut buffer = Vec::new();
+        extractor.extract_into(&state, &mut buffer).unwrap();
+
+        // Verify no NaN or Inf values
+        for (i, &value) in buffer.iter().enumerate() {
+            assert!(
+                value.is_finite(),
+                "Feature {} is not finite: {}",
+                i,
+                value
+            );
+        }
+
+        // Verify prices are in reasonable range (test state has $100 prices)
+        let ask_price_0 = buffer[0];
+        assert!(
+            ask_price_0 > 99.0 && ask_price_0 < 101.0,
+            "Ask price 0 out of range: {}",
+            ask_price_0
+        );
+
+        let bid_price_0 = buffer[20];
+        assert!(
+            bid_price_0 > 99.0 && bid_price_0 < 101.0,
+            "Bid price 0 out of range: {}",
+            bid_price_0
+        );
+    }
+
+    #[test]
+    fn test_extract_into_multiple_calls_consistency() {
+        let config = FeatureConfig {
+            lob_levels: 10,
+            tick_size: 0.01,
+            include_derived: true,
+            include_mbo: false,
+            mbo_window_size: 100,
+        };
+        let mut extractor = FeatureExtractor::with_config(config);
+        let state = create_test_lob_state();
+
+        let mut buffer = Vec::new();
+
+        // Extract 10 times, verify identical results
+        let mut results: Vec<Vec<f64>> = Vec::new();
+        for _ in 0..10 {
+            extractor.extract_into(&state, &mut buffer).unwrap();
+            results.push(buffer.clone());
+        }
+
+        // All results should be identical
+        for (i, result) in results.iter().enumerate().skip(1) {
+            assert_eq!(
+                results[0], *result,
+                "Extraction {} differs from first extraction",
+                i
+            );
+        }
     }
 }

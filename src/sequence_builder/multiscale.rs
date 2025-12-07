@@ -382,7 +382,54 @@ impl MultiScaleWindow {
     ///     window.push(i * 1000, features);
     /// }
     /// ```
+    ///
+    /// # Performance Note
+    ///
+    /// This method clones the `Vec<f64>` for each scale that samples this event.
+    /// For maximum performance, use [`push_arc`] with `Arc<Vec<f64>>` to enable
+    /// zero-copy sharing across scales.
     pub fn push(&mut self, timestamp: u64, features: Vec<f64>) {
+        self.push_arc(timestamp, std::sync::Arc::new(features));
+    }
+
+    /// Push features to all scales using shared Arc (zero-copy path).
+    ///
+    /// This is the **primary API for maximum performance**. The `FeatureVec`
+    /// (Arc<Vec<f64>>) is shared across all scales without deep copying.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - Timestamp for this snapshot
+    /// * `features` - Feature vector wrapped in Arc for zero-copy sharing
+    ///
+    /// # Decimation Behavior
+    ///
+    /// Each scale maintains its own counter:
+    /// - Fast scale samples every N events (default: 1)
+    /// - Medium scale samples every 2N events (default: 2)
+    /// - Slow scale samples every 4N events (default: 4)
+    ///
+    /// The same Arc is cloned (8 bytes) for each scale, not the underlying data.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use std::sync::Arc;
+    /// use feature_extractor::sequence_builder::MultiScaleWindow;
+    ///
+    /// // Extract features as Arc
+    /// let features: Arc<Vec<f64>> = extractor.extract_arc(&lob_state)?;
+    ///
+    /// // Push to all scales (zero-copy sharing)
+    /// window.push_arc(timestamp, features);
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// - **Zero data copying** - only Arc pointers are cloned (8 bytes each)
+    /// - Memory savings: ~66% reduction for typical multi-scale usage
+    /// - Ideal for high-throughput preprocessing pipelines
+    pub fn push_arc(&mut self, timestamp: u64, features: super::FeatureVec) {
         assert_eq!(
             features.len(),
             self.feature_count,
@@ -397,20 +444,22 @@ impl MultiScaleWindow {
         // Fast scale: increment and check decimation
         self.fast_counter += 1;
         if self.fast_counter % self.config.fast.decimation == 0 {
-            // Feature count is validated by assert above, so this shouldn't fail
-            let _ = self.fast_builder.push(timestamp, features.clone());
+            // Clone Arc (8 bytes) not Vec (672 bytes)
+            let _ = self.fast_builder.push_arc(timestamp, features.clone());
         }
 
         // Medium scale: increment and check decimation
         self.medium_counter += 1;
         if self.medium_counter % self.config.medium.decimation == 0 {
-            let _ = self.medium_builder.push(timestamp, features.clone());
+            // Clone Arc (8 bytes) not Vec (672 bytes)
+            let _ = self.medium_builder.push_arc(timestamp, features.clone());
         }
 
         // Slow scale: increment and check decimation
         self.slow_counter += 1;
         if self.slow_counter % self.config.slow.decimation == 0 {
-            let _ = self.slow_builder.push(timestamp, features);
+            // Move Arc (no clone needed for last consumer)
+            let _ = self.slow_builder.push_arc(timestamp, features);
         }
     }
 
@@ -840,5 +889,193 @@ mod tests {
         assert_eq!(f, 1);
         assert_eq!(m, 1);
         assert_eq!(s, 1);
+    }
+
+    // ========================================================================
+    // push_arc Tests (Zero-Copy API)
+    // ========================================================================
+
+    #[test]
+    fn test_push_arc_basic() {
+        use std::sync::Arc;
+
+        let config = MultiScaleConfig::new(
+            ScaleConfig::new(5, 1, 1),  // Fast: 5 window
+            ScaleConfig::new(5, 2, 1),  // Medium: 2× decimation
+            ScaleConfig::new(5, 4, 1),  // Slow: 4× decimation
+        );
+
+        let mut window = MultiScaleWindow::new(config, 4);
+
+        // Push using Arc
+        for i in 0..20 {
+            let features = Arc::new(vec![i as f64; 4]);
+            window.push_arc(i * 1000, features);
+        }
+
+        let (fast, medium, slow) = window.buffer_counts();
+        assert_eq!(fast, 20);   // All 20 events
+        assert_eq!(medium, 10); // Every 2nd
+        assert_eq!(slow, 5);    // Every 4th
+    }
+
+    #[test]
+    fn test_push_arc_matches_push() {
+        use std::sync::Arc;
+
+        let config = MultiScaleConfig::new(
+            ScaleConfig::new(10, 1, 1),
+            ScaleConfig::new(10, 2, 1),
+            ScaleConfig::new(10, 4, 1),
+        );
+
+        let mut window_vec = MultiScaleWindow::new(config.clone(), 4);
+        let mut window_arc = MultiScaleWindow::new(config, 4);
+
+        // Generate test data
+        let test_data: Vec<Vec<f64>> = (0..100)
+            .map(|i| vec![i as f64, (i * 2) as f64, (i * 3) as f64, (i * 4) as f64])
+            .collect();
+
+        // Push using push() (Vec)
+        for (i, data) in test_data.iter().enumerate() {
+            window_vec.push(i as u64 * 1000, data.clone());
+        }
+
+        // Push using push_arc() (Arc)
+        for (i, data) in test_data.iter().enumerate() {
+            window_arc.push_arc(i as u64 * 1000, Arc::new(data.clone()));
+        }
+
+        // Buffer counts should match
+        assert_eq!(window_vec.buffer_counts(), window_arc.buffer_counts());
+        assert_eq!(window_vec.total_events(), window_arc.total_events());
+    }
+
+    #[test]
+    fn test_push_arc_zero_copy_sharing() {
+        use std::sync::Arc;
+
+        // Create config where all scales sample the same event
+        let config = MultiScaleConfig::new(
+            ScaleConfig::new(3, 1, 1),   // Fast: every event
+            ScaleConfig::new(3, 1, 1),   // Medium: every event
+            ScaleConfig::new(3, 1, 1),   // Slow: every event
+        );
+
+        let mut window = MultiScaleWindow::new(config, 4);
+
+        // Create features and keep a reference
+        let features = Arc::new(vec![100.0, 200.0, 300.0, 400.0]);
+        let features_ref = features.clone();
+
+        // Initial count = 2 (features + features_ref)
+        assert_eq!(Arc::strong_count(&features), 2);
+
+        // Push - should clone Arc to all 3 scales
+        window.push_arc(1000, features);
+
+        // Our reference is still valid
+        assert_eq!(features_ref[0], 100.0);
+
+        // Push more to build sequences
+        window.push_arc(2000, Arc::new(vec![101.0, 201.0, 301.0, 401.0]));
+        window.push_arc(3000, Arc::new(vec![102.0, 202.0, 302.0, 402.0]));
+
+        // Build sequences
+        let ms = window.try_build_all().unwrap();
+
+        // All scales should have our original data
+        assert_eq!(ms.fast()[0].features[0][0], 100.0);
+        assert_eq!(ms.medium()[0].features[0][0], 100.0);
+        assert_eq!(ms.slow()[0].features[0][0], 100.0);
+    }
+
+    #[test]
+    fn test_push_arc_numerical_precision() {
+        use std::sync::Arc;
+
+        let config = MultiScaleConfig::new(
+            ScaleConfig::new(2, 1, 1),
+            ScaleConfig::new(2, 1, 1),
+            ScaleConfig::new(2, 1, 1),
+        );
+
+        let mut window = MultiScaleWindow::new(config, 4);
+
+        // Test edge values
+        let edge_values = Arc::new(vec![
+            std::f64::consts::PI,
+            std::f64::consts::E,
+            1e-15,
+            1e15,
+        ]);
+
+        window.push_arc(1000, edge_values.clone());
+        window.push_arc(2000, Arc::new(vec![1.0; 4]));
+
+        let ms = window.try_build_all().unwrap();
+
+        // Verify bit-level equality
+        for i in 0..4 {
+            assert_eq!(
+                ms.fast()[0].features[0][i].to_bits(),
+                edge_values[i].to_bits(),
+                "Bit-level mismatch at index {i}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Feature count mismatch")]
+    fn test_push_arc_wrong_feature_count() {
+        use std::sync::Arc;
+
+        let config = MultiScaleConfig::default();
+        let mut window = MultiScaleWindow::new(config, 4);
+
+        // Wrong feature count
+        let wrong_features = Arc::new(vec![1.0, 2.0]); // Only 2, expected 4
+        window.push_arc(1000, wrong_features);
+    }
+
+    #[test]
+    fn test_push_arc_with_decimation() {
+        use std::sync::Arc;
+
+        // Different decimation rates
+        let config = MultiScaleConfig::new(
+            ScaleConfig::new(3, 1, 1),   // Fast: every event
+            ScaleConfig::new(3, 2, 1),   // Medium: every 2nd
+            ScaleConfig::new(3, 4, 1),   // Slow: every 4th
+        );
+
+        let mut window = MultiScaleWindow::new(config, 3);
+
+        // Push 12 events
+        for i in 0..12 {
+            window.push_arc(i as u64 * 1000, Arc::new(vec![i as f64; 3]));
+        }
+
+        let (fast, medium, slow) = window.buffer_counts();
+        assert_eq!(fast, 12);  // All 12
+        assert_eq!(medium, 6); // 12/2 = 6
+        assert_eq!(slow, 3);   // 12/4 = 3
+
+        // Build and verify
+        let ms = window.try_build_all().unwrap();
+
+        // Fast should have values 9, 10, 11 (last 3)
+        assert_eq!(ms.fast()[0].features[0][0], 9.0);
+        assert_eq!(ms.fast()[0].features[2][0], 11.0);
+
+        // Medium should have values 6, 8, 10 (every 2nd, last 3)
+        // Actually, medium samples events 1,3,5,7,9,11 (2nd, 4th, 6th...)
+        // So last 3 are 7, 9, 11
+        assert_eq!(ms.medium()[0].features[2][0], 11.0);
+
+        // Slow samples events 3,7,11 (4th, 8th, 12th)
+        // So we have 3, 7, 11
+        assert_eq!(ms.slow()[0].features[2][0], 11.0);
     }
 }
