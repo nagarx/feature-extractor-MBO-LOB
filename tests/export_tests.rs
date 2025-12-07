@@ -1,9 +1,10 @@
 //! Tests for aligned export module
 
-use feature_extractor::{AlignedBatchExporter, LabelConfig, PipelineOutput, Sequence};
+use feature_extractor::{AlignedBatchExporter, FeatureVec, LabelConfig, PipelineOutput, Sequence};
 use ndarray::{Array1, Array3};
 use ndarray_npy::ReadNpyExt;
 use std::fs::File;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Create mock pipeline output for testing with realistic LOB data
@@ -24,7 +25,7 @@ fn create_mock_output(n_sequences: usize, window: usize, features: usize) -> Pip
 
     // Generate synthetic sequences and mid-prices
     for seq_idx in 0..n_sequences {
-        let mut seq_features = Vec::new();
+        let mut seq_features: Vec<FeatureVec> = Vec::new();
 
         for t in 0..window {
             // Create realistic LOB feature vector
@@ -69,7 +70,8 @@ fn create_mock_output(n_sequences: usize, window: usize, features: usize) -> Pip
                 }
             }
 
-            seq_features.push(timestep);
+            // Wrap in Arc for zero-copy sharing
+            seq_features.push(Arc::new(timestep));
 
             // Also create a mid-price for each timestep
             mid_prices.push(mid_price);

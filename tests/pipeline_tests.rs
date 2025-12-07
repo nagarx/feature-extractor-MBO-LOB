@@ -3,9 +3,10 @@
 //! These tests verify the pipeline works correctly with realistic data and edge cases.
 
 use feature_extractor::{
-    config::ExperimentMetadata, FeatureConfig, Pipeline, PipelineConfig, PipelineOutput,
+    config::ExperimentMetadata, FeatureConfig, FeatureVec, Pipeline, PipelineConfig, PipelineOutput,
     SamplingConfig, SamplingStrategy, Sequence, SequenceConfig,
 };
+use std::sync::Arc;
 
 #[test]
 fn test_pipeline_creation_with_config() {
@@ -88,17 +89,20 @@ fn test_pipeline_reset() {
 
 #[test]
 fn test_pipeline_output_to_flat_features() {
-    // Create mock sequences
+    // Create mock sequences (using Arc for zero-copy)
     let sequences = vec![
         Sequence {
-            features: vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]],
+            features: vec![
+                Arc::new(vec![1.0, 2.0, 3.0]),
+                Arc::new(vec![4.0, 5.0, 6.0]),
+            ],
             start_timestamp: 100,
             end_timestamp: 200,
             duration_ns: 100,
             length: 2,
         },
         Sequence {
-            features: vec![vec![7.0, 8.0, 9.0]],
+            features: vec![Arc::new(vec![7.0, 8.0, 9.0])],
             start_timestamp: 300,
             end_timestamp: 300,
             duration_ns: 0,
@@ -345,11 +349,15 @@ fn test_pipeline_numerical_accuracy() {
 
 #[test]
 fn test_large_sequence_handling() {
-    // Test with many sequences
+    // Test with many sequences (using Arc for zero-copy)
     let mut sequences = Vec::new();
     for i in 0..1000 {
+        // Create feature vectors wrapped in Arc
+        let features: Vec<FeatureVec> = (0..100)
+            .map(|_| Arc::new(vec![i as f64; 48]))
+            .collect();
         sequences.push(Sequence {
-            features: vec![vec![i as f64; 48]; 100],
+            features,
             start_timestamp: i * 100,
             end_timestamp: i * 100 + 99,
             duration_ns: 99,

@@ -27,6 +27,10 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
+// FeatureVec is used in test helper function
+#[cfg(test)]
+use crate::sequence_builder::FeatureVec;
+
 /// Apply z-score normalization to features for neural network training.
 ///
 /// Normalizes each feature column to have mean ≈ 0 and std ≈ 1.
@@ -525,6 +529,7 @@ mod tests {
     use super::*;
     use crate::labeling::LabelConfig;
     use crate::Sequence;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     /// Helper to create test pipeline output with realistic LOB data
@@ -545,7 +550,7 @@ mod tests {
 
         // Create test sequences
         for i in 0..n_sequences {
-            let mut features = Vec::new();
+            let mut features: Vec<FeatureVec> = Vec::new();
             for t in 0..100 {
                 // Create realistic LOB feature vector
                 let mid_price = base_mid_price + (i + t) as f64 * 0.001;
@@ -576,7 +581,8 @@ mod tests {
                     feature_vec[30 + level] = (1000 - level * 50) as f64;
                 }
 
-                features.push(feature_vec);
+                // Wrap in Arc for zero-copy sharing
+                features.push(Arc::new(feature_vec));
 
                 // Add corresponding mid-price
                 mid_prices.push(mid_price);

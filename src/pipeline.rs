@@ -131,12 +131,16 @@ pub struct AdaptiveSamplingStats {
 impl PipelineOutput {
     /// Get features as flat 2D array for export
     /// Returns [N_samples, N_features] where N_samples = sum of all sequence lengths
+    ///
+    /// Note: This creates deep copies of the feature vectors. For performance-critical
+    /// code, consider working with the Arc<Vec<f64>> references in seq.features directly.
     pub fn to_flat_features(&self) -> Vec<Vec<f64>> {
         let mut flat = Vec::new();
         for seq in &self.sequences {
-            // Each sequence has multiple feature vectors
+            // Each sequence has multiple feature vectors (Arc<Vec<f64>>)
+            // We need to deep-copy here since the return type is Vec<Vec<f64>>
             for feature_vec in &seq.features {
-                flat.push(feature_vec.clone());
+                flat.push(feature_vec.to_vec());
             }
         }
         flat

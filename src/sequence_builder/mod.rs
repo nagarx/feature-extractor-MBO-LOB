@@ -36,6 +36,6 @@ pub mod horizon_aware;
 pub mod multiscale;
 
 // Re-export all public types
-pub use builder::{Sequence, SequenceBuilder, SequenceConfig, SequenceError};
+pub use builder::{FeatureVec, Sequence, SequenceBuilder, SequenceConfig, SequenceError};
 pub use horizon_aware::HorizonAwareConfig;
 pub use multiscale::{MultiScaleConfig, MultiScaleSequence, MultiScaleWindow, ScaleConfig};

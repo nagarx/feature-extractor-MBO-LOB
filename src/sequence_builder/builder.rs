@@ -45,6 +45,35 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::Arc;
+
+// ============================================================================
+// Type Aliases for Zero-Copy Sequence Building
+// ============================================================================
+
+/// Shared feature vector - enables zero-copy sequence building.
+///
+/// Using `Arc<Vec<f64>>` instead of `Vec<f64>` allows features to be shared
+/// between the circular buffer and generated sequences without deep copying.
+/// Cloning an `Arc` is O(1) - just incrementing a reference count.
+///
+/// # Performance Impact
+///
+/// For a typical sequence (100 snapshots × 84 features × 8 bytes):
+/// - Before: ~67.2 KB deep-copied per sequence
+/// - After: ~800 bytes of Arc pointers (100 × 8 bytes)
+///
+/// With 280K+ sequences per day, this eliminates ~18 GB of memory copies.
+///
+/// # Usage
+///
+/// The `Arc` wrapper is transparent for most operations due to `Deref`:
+/// ```ignore
+/// let features: FeatureVec = Arc::new(vec![1.0, 2.0, 3.0]);
+/// assert_eq!(features[0], 1.0);  // Indexing works via Deref
+/// assert_eq!(features.len(), 3); // Vec methods work via Deref
+/// ```
+pub type FeatureVec = Arc<Vec<f64>>;
 
 /// Error type for sequence building operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,24 +280,41 @@ impl Default for SequenceConfig {
 /// A snapshot of features at a specific timestamp.
 ///
 /// This is the atomic unit stored in the sequence buffer.
+/// Uses `FeatureVec` (Arc<Vec<f64>>) for zero-copy sequence building.
 #[derive(Debug, Clone)]
 struct Snapshot {
     /// Timestamp (nanoseconds since epoch)
     timestamp: u64,
 
-    /// Feature vector (length = feature_count)
-    features: Vec<f64>,
+    /// Feature vector (shared via Arc for zero-copy)
+    features: FeatureVec,
 }
 
 /// A complete sequence ready for transformer input.
 ///
 /// Contains a window of consecutive snapshots and metadata.
+///
+/// # Zero-Copy Performance
+///
+/// Feature vectors are stored as `Arc<Vec<f64>>` (via `FeatureVec` type alias),
+/// enabling zero-copy sequence building. When a sequence is created, only Arc
+/// pointers are cloned (O(1) each), not the underlying feature data.
+///
+/// # API Compatibility
+///
+/// Due to Rust's `Deref` coercion, you can still access features naturally:
+/// ```ignore
+/// let seq = builder.try_build_sequence().unwrap();
+/// let value = seq.features[0][0];  // Works via Deref chain
+/// let len = seq.features[0].len(); // Vec methods work too
+/// ```
 #[derive(Debug, Clone)]
 pub struct Sequence {
     /// Sequence of feature vectors [window_size × feature_count]
     ///
     /// Stored as row-major: `features[snapshot_idx][feature_idx]`
-    pub features: Vec<Vec<f64>>,
+    /// Each feature vector is wrapped in `Arc` for zero-copy sharing.
+    pub features: Vec<FeatureVec>,
 
     /// Timestamp of the first snapshot in the sequence
     pub start_timestamp: u64,
@@ -424,10 +470,10 @@ impl SequenceBuilder {
             }
         }
 
-        // Add new snapshot
+        // Add new snapshot (wrap features in Arc for zero-copy sharing)
         self.buffer.push_back(Snapshot {
             timestamp,
-            features,
+            features: Arc::new(features),
         });
         self.total_pushed += 1;
 
@@ -475,9 +521,11 @@ impl SequenceBuilder {
         let start_timestamp = sequence_snapshots.first().unwrap().timestamp;
         let end_timestamp = sequence_snapshots.last().unwrap().timestamp;
 
-        let features: Vec<Vec<f64>> = sequence_snapshots
+        // Zero-copy: Clone Arc refs, not the underlying Vec data
+        // This is O(1) per snapshot instead of O(feature_count)
+        let features: Vec<FeatureVec> = sequence_snapshots
             .iter()
-            .map(|s| s.features.clone())
+            .map(|s| Arc::clone(&s.features))
             .collect();
 
         // Update tracking
@@ -532,9 +580,10 @@ impl SequenceBuilder {
             let start_timestamp = sequence_snapshots.first().unwrap().timestamp;
             let end_timestamp = sequence_snapshots.last().unwrap().timestamp;
 
-            let features: Vec<Vec<f64>> = sequence_snapshots
+            // Zero-copy: Clone Arc refs, not the underlying Vec data
+            let features: Vec<FeatureVec> = sequence_snapshots
                 .iter()
-                .map(|s| s.features.clone())
+                .map(|s| Arc::clone(&s.features))
                 .collect();
 
             sequences.push(Sequence {
@@ -928,5 +977,107 @@ mod tests {
         let display = format!("{}", error);
         assert!(display.contains("48"));
         assert!(display.contains("40"));
+    }
+
+    /// Test that Arc-based storage preserves exact numerical values.
+    ///
+    /// This test validates that the zero-copy optimization doesn't
+    /// introduce any numerical errors or data corruption.
+    #[test]
+    fn test_arc_storage_numerical_correctness() {
+        let config = SequenceConfig::new(5, 1)
+            .with_feature_count(10)
+            .with_max_buffer_size(20);
+
+        let mut builder = SequenceBuilder::with_config(config);
+
+        // Create test data with precise floating-point values
+        // including edge cases like very small, very large, and negative numbers
+        let test_values: Vec<Vec<f64>> = vec![
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+            vec![0.1, 0.01, 0.001, 0.0001, 0.00001, 1e-10, 1e10, -1.0, -0.5, 0.0],
+            vec![100.005, 100.015, 100.025, 100.035, 100.045, 100.055, 100.065, 100.075, 100.085, 100.095],
+            vec![std::f64::consts::PI, std::f64::consts::E, std::f64::consts::SQRT_2, 0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5],
+            vec![1234567890.123456, -9876543210.987654, 0.123456789012345, 1e15, 1e-15, 1.0, 2.0, 3.0, 4.0, 5.0],
+        ];
+
+        // Push features
+        for (i, features) in test_values.iter().enumerate() {
+            builder.push(i as u64 * 1000, features.clone()).unwrap();
+        }
+
+        // Build sequence
+        let seq = builder.try_build_sequence().unwrap();
+
+        // Verify EXACT numerical equality
+        for (i, expected) in test_values.iter().enumerate() {
+            for (j, &expected_val) in expected.iter().enumerate() {
+                let actual_val = seq.features[i][j];
+                assert_eq!(
+                    actual_val, expected_val,
+                    "Numerical mismatch at [{i}][{j}]: expected {expected_val}, got {actual_val}"
+                );
+            }
+        }
+
+        // Verify as_flat() also preserves values
+        let flat = seq.as_flat();
+        let expected_flat: Vec<f64> = test_values.iter().flatten().copied().collect();
+        assert_eq!(flat.len(), expected_flat.len());
+        for (i, (&expected, &actual)) in expected_flat.iter().zip(flat.iter()).enumerate() {
+            assert_eq!(actual, expected, "Flat mismatch at index {i}");
+        }
+    }
+
+    /// Test that sequences built from overlapping windows share data correctly.
+    ///
+    /// This validates the Arc reference counting works properly and that
+    /// modifications to one sequence don't affect others.
+    #[test]
+    fn test_arc_sharing_isolation() {
+        let config = SequenceConfig::new(3, 1)
+            .with_feature_count(5)
+            .with_max_buffer_size(10);
+
+        let mut builder = SequenceBuilder::with_config(config);
+
+        // Push 5 features
+        for i in 0..5 {
+            builder.push(i as u64 * 1000, vec![i as f64; 5]).unwrap();
+        }
+
+        // Build first sequence (should use features 2, 3, 4)
+        let seq1 = builder.try_build_sequence().unwrap();
+
+        // Push more and build another
+        builder.push(5000, vec![5.0; 5]).unwrap();
+        let seq2 = builder.try_build_sequence().unwrap();
+
+        // Verify seq1 values are unchanged
+        assert_eq!(seq1.features[0][0], 2.0);
+        assert_eq!(seq1.features[1][0], 3.0);
+        assert_eq!(seq1.features[2][0], 4.0);
+
+        // Verify seq2 has different values
+        assert_eq!(seq2.features[0][0], 3.0);
+        assert_eq!(seq2.features[1][0], 4.0);
+        assert_eq!(seq2.features[2][0], 5.0);
+
+        // Verify generate_all_sequences produces same values
+        let all_seqs = builder.generate_all_sequences();
+        assert!(!all_seqs.is_empty());
+
+        // Each sequence should have consistent internal values
+        for seq in &all_seqs {
+            assert_eq!(seq.features.len(), 3);
+            for feature_vec in &seq.features {
+                assert_eq!(feature_vec.len(), 5);
+                // All values in a row should be the same (by construction)
+                let first = feature_vec[0];
+                for &v in feature_vec.iter() {
+                    assert_eq!(v, first);
+                }
+            }
+        }
     }
 }

@@ -93,7 +93,7 @@ pub use preprocessing::{
 };
 
 // Re-exports - Sequence Building
-pub use sequence_builder::{Sequence, SequenceBuilder, SequenceConfig};
+pub use sequence_builder::{FeatureVec, Sequence, SequenceBuilder, SequenceConfig};
 
 // Re-exports - Export
 pub use export::{

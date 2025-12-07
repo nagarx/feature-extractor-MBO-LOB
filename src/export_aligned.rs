@@ -342,7 +342,13 @@ impl AlignedBatchExporter {
             // Check if we have a label for this ending index
             if let Some(&label) = label_map.get(&ending_idx) {
                 // We have a valid label for this sequence!
-                aligned_sequences.push(sequence.features.clone());
+                // Deep-copy from Arc<Vec<f64>> to Vec<f64> for export format
+                let features_owned: Vec<Vec<f64>> = sequence
+                    .features
+                    .iter()
+                    .map(|arc_vec| arc_vec.to_vec())
+                    .collect();
+                aligned_sequences.push(features_owned);
                 aligned_labels.push(label);
             }
             // If no label, skip this sequence (happens at end of day)
