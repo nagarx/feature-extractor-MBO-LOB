@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zero-Copy Sequence Building**
+  - `FeatureVec` type alias (`Arc<Vec<f64>>`) for shared feature storage
+  - `Sequence.features` now `Vec<Arc<Vec<f64>>>` instead of `Vec<Vec<f64>>`
+  - Eliminates 67KB deep-copy per sequence (100 snapshots × 84 features × 8 bytes)
+  - **3.2 million sequences/sec** throughput in release mode
+
+- **Arc-Based Numerical Correctness Tests**
+  - `test_arc_storage_numerical_correctness` - Verify exact values preserved
+  - `test_arc_sharing_isolation` - Verify sequences don't affect each other
+  - `test_sequence_building_performance` - Throughput benchmark
+
+### Changed
+
+- `Pipeline.process()` now uses `process_message_into()` from mbo-lob-reconstructor
+- Reuses single `LobState` buffer across all messages (zero allocation in hot loop)
+- Export functions updated to handle `Arc<Vec<f64>>` → `Vec<f64>` conversion
+
+### Performance
+
+- **Pipeline throughput**: Uses O(1) PriceLevel caching from reconstructor
+- **Sequence building**: 67.2 KB saved per sequence via Arc sharing
+- Validated against 37M+ real NVIDIA messages with 0 mismatches
+
 ## [0.1.1] - 2025-12-04
 
 ### Added
