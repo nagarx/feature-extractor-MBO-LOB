@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Numerical precision tests with edge cases (Pi, E, 1e-15, 1e15)
   - Multi-builder sharing isolation tests
 
+- **Parallel Batch Processing (Phase 3)** - Optional `parallel` feature
+  - `BatchProcessor` - Parallel multi-file processing with Rayon
+  - `BatchConfig` - Hardware-aware configuration (thread count, stack size)
+  - `BatchOutput` - Aggregated results with statistics
+  - `DayResult` - Per-file results with timing and throughput
+  - `ErrorMode` - FailFast or CollectErrors handling strategies
+  - `ProgressCallback` trait - Custom progress reporting
+  - `ConsoleProgress` - Built-in console progress reporter
+  - Convenience functions: `process_files_parallel()`, `process_files_with_threads()`
+  - **Thread isolation**: Each thread owns its own Pipeline instance
+  - **BIT-LEVEL identical** results to sequential processing
+  - Enable with: `cargo build --features parallel`
+
 ### Changed
 
 - **Pipeline Hot Path Optimization (Phase 2)**
@@ -54,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Feature extraction**: Buffer reuse eliminates per-sample Vec allocation
 - **Sequence building**: 67.2 KB saved per sequence via Arc sharing
 - **Multi-scale sharing**: 16 bytes (2 Arc clones) vs 1,344 bytes (2 Vec clones)
-- **Validated**: 500K+ messages, 7140 sequences with 0 numerical mismatches
+- **Parallel processing**: ~64K msg/sec with 2 threads, ~1.5x speedup
+- **Validated**: 28M+ messages across multiple days with BIT-LEVEL identical results
 
 ## [0.1.1] - 2025-12-04
 

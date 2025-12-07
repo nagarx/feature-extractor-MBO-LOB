@@ -18,6 +18,9 @@ path = "src/lib.rs"
 [features]
 default = []
 databento = ["mbo-lob-reconstructor/databento", "dep:dbn"]
+# Parallel processing support - enables multi-threaded batch processing
+# Use: cargo build --features parallel
+parallel = ["dep:rayon"]
 
 [dependencies]
 # MBO-LOB Reconstructor - using local path for optimization work
@@ -41,6 +44,9 @@ chrono = "0.4"
 # Logging
 log = "0.4"
 env_logger = "0.11"
+
+# Parallel processing (optional)
+rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 tempfile = "3.8"

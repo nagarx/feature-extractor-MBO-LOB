@@ -70,6 +70,10 @@ pub mod schema;
 pub mod sequence_builder;
 pub mod validation;
 
+// Parallel processing (optional feature)
+#[cfg(feature = "parallel")]
+pub mod batch;
+
 // Re-exports - Schema
 pub use schema::{FeatureCategory, FeatureDef, FeatureSchema, Preset, PresetConfig};
 
@@ -119,3 +123,10 @@ pub use pipeline::{Pipeline, PipelineOutput};
 
 // Re-exports - Builder
 pub use builder::PipelineBuilder;
+
+// Re-exports - Batch Processing (parallel feature)
+#[cfg(feature = "parallel")]
+pub use batch::{
+    process_files_parallel, process_files_with_threads, BatchConfig, BatchOutput, BatchProcessor,
+    ConsoleProgress, DayResult, ErrorMode, FileError, ProgressCallback, ProgressInfo,
+};
