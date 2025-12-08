@@ -436,7 +436,7 @@ impl SequenceBuilder {
     /// Push a new snapshot into the buffer (convenience method).
     ///
     /// This is a convenience wrapper that wraps the `Vec<f64>` in an `Arc`
-    /// and delegates to [`push_arc`]. If the buffer is at capacity, the oldest
+    /// and delegates to [`Self::push_arc`]. If the buffer is at capacity, the oldest
     /// snapshot is evicted.
     ///
     /// # Arguments
@@ -456,8 +456,8 @@ impl SequenceBuilder {
     ///
     /// # Note
     ///
-    /// If you already have an `Arc<Vec<f64>>` (e.g., from [`FeatureExtractor::extract_arc`]),
-    /// use [`push_arc`] instead to avoid the wrapping overhead and enable zero-copy
+    /// If you already have an `Arc<Vec<f64>>` (e.g., from `FeatureExtractor::extract_arc()`),
+    /// use [`Self::push_arc`] instead to avoid the wrapping overhead and enable zero-copy
     /// sharing across multiple sequence builders (e.g., in multi-scale mode).
     #[inline]
     pub fn push(&mut self, timestamp: u64, features: Vec<f64>) -> Result<(), SequenceError> {

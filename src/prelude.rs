@@ -29,6 +29,7 @@
 //! - [`SequenceBuilder`] - Sequence generation for transformers
 //! - [`SequenceConfig`] - Sequence building configuration
 //! - [`Sequence`] - Output sequence container
+//! - [`FeatureVec`] - Arc-wrapped feature vector for zero-copy sharing
 //!
 //! ## Labeling
 //! - [`LabelConfig`] - Label generation configuration
@@ -57,9 +58,9 @@
 //! - [`ValidationResult`] - Validation result container
 //!
 //! ## From MBO-LOB-Reconstructor
-//! - [`LobState`] - LOB state snapshot
-//! - [`DbnLoader`] - Databento DBN file loader
-//! - [`LobReconstructor`] - MBO to LOB reconstruction
+//! - `LobState` - LOB state snapshot
+//! - `DbnLoader` - Databento DBN file loader (requires `databento` feature)
+//! - `LobReconstructor` - MBO to LOB reconstruction
 
 // ============================================================================
 // Core Pipeline
@@ -86,8 +87,9 @@ pub use crate::features::{FeatureConfig, FeatureExtractor};
 // ============================================================================
 
 pub use crate::sequence_builder::{
-    HorizonAwareConfig, MultiScaleConfig as MultiScaleSequenceConfig, MultiScaleSequence,
-    MultiScaleWindow, Sequence, SequenceBuilder, SequenceConfig, SequenceError,
+    FeatureVec, HorizonAwareConfig, MultiScaleConfig as MultiScaleSequenceConfig,
+    MultiScaleSequence, MultiScaleWindow, Sequence, SequenceBuilder, SequenceConfig,
+    SequenceError,
 };
 
 // ============================================================================
@@ -184,7 +186,7 @@ pub use mbo_lob_reconstructor::{DbnBridge, DbnLoader, LoaderStats};
 // Type Aliases for Convenience
 // ============================================================================
 
-/// Feature vector type (single snapshot)
+/// Feature vector type (single snapshot) - owned version
 pub type FeatureVector = Vec<f64>;
 
 /// Feature matrix type (multiple snapshots)
@@ -192,6 +194,9 @@ pub type FeatureMatrix = Vec<Vec<f64>>;
 
 /// Label with index and price change
 pub type LabeledSample = (usize, TrendLabel, f64);
+
+// Note: `FeatureVec` (Arc<Vec<f64>>) is re-exported from sequence_builder
+// and is the preferred type for zero-copy sequence building.
 
 // ============================================================================
 // Batch Processing (parallel feature)

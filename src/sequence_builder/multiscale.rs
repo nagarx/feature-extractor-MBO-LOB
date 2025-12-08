@@ -386,7 +386,7 @@ impl MultiScaleWindow {
     /// # Performance Note
     ///
     /// This method clones the `Vec<f64>` for each scale that samples this event.
-    /// For maximum performance, use [`push_arc`] with `Arc<Vec<f64>>` to enable
+    /// For maximum performance, use [`Self::push_arc`] with `Arc<Vec<f64>>` to enable
     /// zero-copy sharing across scales.
     pub fn push(&mut self, timestamp: u64, features: Vec<f64>) {
         self.push_arc(timestamp, std::sync::Arc::new(features));
@@ -395,7 +395,7 @@ impl MultiScaleWindow {
     /// Push features to all scales using shared Arc (zero-copy path).
     ///
     /// This is the **primary API for maximum performance**. The `FeatureVec`
-    /// (Arc<Vec<f64>>) is shared across all scales without deep copying.
+    /// (`Arc<Vec<f64>>`) is shared across all scales without deep copying.
     ///
     /// # Arguments
     ///

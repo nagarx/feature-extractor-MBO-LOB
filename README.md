@@ -362,6 +362,11 @@ The library is optimized for HFT environments:
 | Memory per sequence | 8 bytes (Arc) vs 67.2 KB (Vec clone) |
 | Feature extraction | 0 allocations (buffer reuse) |
 
+> **Note**: The primary bottleneck is **zstd decompression** (single-threaded per file stream).
+> Parallel processing helps by processing multiple files simultaneously, but throughput
+> scales sub-linearly beyond 2-4 threads due to I/O saturation. For maximum throughput,
+> consider pre-decompressing `.dbn.zst` files to uncompressed `.dbn` format.
+
 Run benchmarks:
 
 ```bash

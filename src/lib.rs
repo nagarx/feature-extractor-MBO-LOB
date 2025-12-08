@@ -12,6 +12,13 @@
 //! - **FI-2010**: 144 features (40 raw + 104 handcrafted)
 //! - **TransLOB**: Multi-horizon feature support
 //!
+//! # Performance Features
+//!
+//! - **Zero-Allocation Hot Path**: `extract_into()` + reusable buffers
+//! - **Arc-Based Sequence Building**: `FeatureVec` (`Arc<Vec<f64>>`) eliminates deep copies
+//! - **Parallel Batch Processing**: Multi-threaded via Rayon (optional `parallel` feature)
+//! - **Graceful Cancellation**: `CancellationToken` for long-running jobs
+//!
 //! # Quick Start
 //!
 //! For the simplest usage, import the prelude:
@@ -35,13 +42,21 @@
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                     Feature Extractor                          │
 //! ├─────────────────────────────────────────────────────────────────┤
-//! │  prelude/       - Convenient imports for common usage          │
-//! │  schema/        - Feature definitions and paper presets        │
-//! │  features/      - Raw feature extraction (no normalization)    │
-//! │  preprocessing/ - Normalization and sampling                   │
-//! │  sequence/      - Sequence building for transformers           │
-//! │  export/        - NumPy export for Python/PyTorch              │
+//! │  prelude/          - Convenient imports for common usage       │
+//! │  schema/           - Feature definitions and paper presets     │
+//! │  features/         - Raw feature extraction (zero-alloc APIs)  │
+//! │  preprocessing/    - Normalization and sampling                │
+//! │  sequence_builder/ - Sequence building (Arc-based sharing)     │
+//! │  labeling/         - TLOB/DeepLOB label generation             │
+//! │  export/           - NumPy export for Python/PyTorch           │
+//! │  batch/            - Parallel processing (optional)            │
 //! └─────────────────────────────────────────────────────────────────┘
+//!
+//! Hot Path (Zero-Allocation):
+//!   MBO Messages → LobReconstructor (reused LobState)
+//!                → FeatureExtractor.extract_into() (reused buffer)
+//!                → Arc::new() → SequenceBuilder.push_arc()
+//!                → try_build_sequence() → Accumulated Sequences
 //! ```
 //!
 //! # Detailed Example

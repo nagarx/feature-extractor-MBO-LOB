@@ -144,7 +144,7 @@ impl PipelineOutput {
     /// Returns [N_samples, N_features] where N_samples = sum of all sequence lengths
     ///
     /// Note: This creates deep copies of the feature vectors. For performance-critical
-    /// code, consider working with the Arc<Vec<f64>> references in seq.features directly.
+    /// code, consider working with the `Arc<Vec<f64>>` references in seq.features directly.
     pub fn to_flat_features(&self) -> Vec<Vec<f64>> {
         let mut flat = Vec::new();
         for seq in &self.sequences {

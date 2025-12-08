@@ -316,7 +316,7 @@ impl FeatureExtractor {
     /// # Performance Note
     ///
     /// This method allocates a new Vec on every call. For maximum performance
-    /// in hot loops, use [`extract_into`] with a pre-allocated buffer.
+    /// in hot loops, use [`Self::extract_into`] with a pre-allocated buffer.
     pub fn extract_all_features(&mut self, lob_state: &LobState) -> Result<Vec<f64>> {
         let mut features = Vec::with_capacity(self.feature_count());
         self.extract_into(lob_state, &mut features)?;
@@ -407,7 +407,7 @@ impl FeatureExtractor {
     ///
     /// This is a convenience method that:
     /// 1. Allocates a new Vec with appropriate capacity
-    /// 2. Extracts features using [`extract_into`]
+    /// 2. Extracts features using [`Self::extract_into`]
     /// 3. Wraps the result in `Arc` for sharing
     ///
     /// Use this when you need to share features across multiple consumers
