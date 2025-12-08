@@ -12,8 +12,10 @@ This guide explains how to use the `MBO-LOB-reconstructor` and `feature-extracto
 6. [Sampling Strategies](#sampling-strategies)
 7. [Label Generation](#label-generation)
 8. [Export to NumPy](#export-to-numpy)
-9. [Advanced Usage](#advanced-usage)
-10. [Performance Optimization](#performance-optimization)
+9. [Parallel Batch Processing](#parallel-batch-processing)
+10. [Advanced Usage](#advanced-usage)
+11. [Performance Optimization](#performance-optimization)
+12. [Troubleshooting](#troubleshooting)
 
 ## Installation
 
@@ -325,6 +327,149 @@ let result = exporter.export_day("2025-02-03", &output)?;
 
 println!("Exported {} sequences with {} labels", result.n_sequences, result.n_labels);
 ```
+
+## Parallel Batch Processing
+
+> **Feature Gate**: Requires `--features parallel` to enable.
+
+### Installation
+
+```toml
+[dependencies]
+feature-extractor = { git = "...", features = ["parallel"] }
+```
+
+### Basic Parallel Processing
+
+Process multiple files simultaneously with Rayon:
+
+```rust
+use feature_extractor::prelude::*;
+use feature_extractor::batch::{BatchProcessor, BatchConfig, ErrorMode};
+
+// Configure for your hardware
+let batch_config = BatchConfig::new()
+    .with_threads(8)                          // Use 8 threads
+    .with_error_mode(ErrorMode::CollectErrors); // Continue on errors
+
+let pipeline_config = PipelineBuilder::new()
+    .lob_levels(10)
+    .event_sampling(1000)
+    .window(100, 10)
+    .build_config()?;
+
+// Create processor
+let processor = BatchProcessor::new(pipeline_config, batch_config);
+
+// Process all files in parallel
+let files = vec![
+    "data/day1.dbn.zst",
+    "data/day2.dbn.zst",
+    "data/day3.dbn.zst",
+];
+
+let output = processor.process_files(&files)?;
+
+// Check results
+println!("Processed: {} files", output.successful_count());
+println!("Failed: {} files", output.failed_count());
+println!("Throughput: {:.2} msg/sec", output.throughput_msg_per_sec());
+```
+
+### Progress Reporting
+
+```rust
+use feature_extractor::batch::ConsoleProgress;
+
+let processor = BatchProcessor::new(pipeline_config, batch_config)
+    .with_progress_callback(Box::new(ConsoleProgress::new().verbose()));
+
+let output = processor.process_files(&files)?;
+```
+
+### Graceful Cancellation
+
+Cancel long-running jobs from another thread:
+
+```rust
+use feature_extractor::batch::CancellationToken;
+use std::thread;
+use std::time::Duration;
+
+// Create shared cancellation token
+let token = CancellationToken::new();
+let processor = BatchProcessor::new(pipeline_config, batch_config)
+    .with_cancellation_token(token.clone());
+
+// Cancel after timeout from another thread
+let cancel_token = token.clone();
+thread::spawn(move || {
+    thread::sleep(Duration::from_secs(60));
+    println!("Cancelling...");
+    cancel_token.cancel();
+});
+
+// Process files
+let output = processor.process_files(&files)?;
+
+// Check if cancelled
+if output.was_cancelled {
+    println!("Processing was cancelled");
+    println!("Completed: {} files", output.successful_count());
+    println!("Skipped: {} files", output.skipped_count);
+} else {
+    println!("All {} files processed", output.successful_count());
+}
+```
+
+### Error Handling Modes
+
+```rust
+// FailFast: Stop on first error (default)
+let batch_config = BatchConfig::new()
+    .with_error_mode(ErrorMode::FailFast);
+
+// CollectErrors: Continue processing, collect all errors
+let batch_config = BatchConfig::new()
+    .with_error_mode(ErrorMode::CollectErrors);
+
+let output = processor.process_files(&files)?;
+
+// Iterate over errors
+for error in output.iter_errors() {
+    println!("Failed: {} - {}", error.file_path, error.error);
+}
+```
+
+### Hardware Configuration
+
+| Hardware | Recommended Threads | Memory |
+|----------|---------------------|--------|
+| 4-core laptop | 4 | ~40 MB |
+| 8-core desktop | 8 | ~80 MB |
+| 16-core workstation | 12-14 | ~140 MB |
+| 32-core server | 24-28 | ~280 MB |
+
+Leave some cores free for OS and other processes.
+
+### Convenience Functions
+
+```rust
+// Quick parallel processing with defaults
+let output = process_files_parallel(&config, &files)?;
+
+// Specify thread count
+let output = process_files_with_threads(&config, &files, 8)?;
+```
+
+### Thread Isolation
+
+Each thread creates its own Pipeline instance:
+- No shared mutable state
+- No mutex contention
+- BIT-LEVEL identical results to sequential processing
+
+This ensures numerical correctness and deterministic output.
 
 ## Advanced Usage
 

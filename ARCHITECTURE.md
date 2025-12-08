@@ -23,6 +23,7 @@ feature_extractor/
 │   ├── builder.rs                # PipelineBuilder fluent API
 │   ├── config.rs                 # Pipeline configuration
 │   ├── pipeline.rs               # High-level pipeline orchestrator
+│   ├── batch.rs                  # Parallel batch processing (feature: parallel)
 │   │
 │   ├── schema/                   # Feature schema definitions
 │   │   ├── mod.rs               # Schema registry and version
@@ -30,7 +31,7 @@ feature_extractor/
 │   │   └── presets.rs           # Paper-aligned presets (DeepLOB, TLOB, FI-2010, etc.)
 │   │
 │   ├── features/                 # Feature extraction (raw computation only)
-│   │   ├── mod.rs               # FeatureExtractor, FeatureConfig
+│   │   ├── mod.rs               # FeatureExtractor, extract_into(), extract_arc()
 │   │   ├── lob_features.rs      # Raw LOB features (prices, volumes)
 │   │   ├── derived_features.rs  # Derived analytics (spread, microprice, etc.)
 │   │   ├── order_flow.rs        # OFI, queue imbalance, trade flow
@@ -51,10 +52,10 @@ feature_extractor/
 │   │   └── volatility.rs        # Realized volatility estimation (Welford)
 │   │
 │   ├── sequence_builder/         # Sequence building for transformers
-│   │   ├── mod.rs               # Module exports
-│   │   ├── builder.rs           # Core sequence builder
+│   │   ├── mod.rs               # Module exports, FeatureVec type alias
+│   │   ├── builder.rs           # SequenceBuilder, Sequence (Arc-based), push_arc()
 │   │   ├── horizon_aware.rs     # Horizon-aware windowing
-│   │   └── multiscale.rs        # Multi-scale sequences (fast/medium/slow)
+│   │   └── multiscale.rs        # MultiScaleWindow, push_arc()
 │   │
 │   ├── validation.rs             # Feature validation (crossed quotes, NaN checks)
 │   ├── export.rs                 # NumPy export
@@ -71,6 +72,7 @@ feature_extractor/
 ├── tests/                         # Integration tests
 │   ├── comprehensive_validation.rs
 │   ├── pipeline_tests.rs
+│   ├── parallel_processing_tests.rs  # Batch processing tests
 │   └── ...
 │
 └── docs/
@@ -173,9 +175,21 @@ pub enum Preset {
 
 - **Single-pass computation**: Features extracted in one LOB traversal
 - **Streaming sequences**: No buffer eviction, 100% sequence efficiency
-- **Pre-allocated buffers**: No allocations in hot paths
+- **Pre-allocated buffers**: No allocations in hot paths (extract_into, push_arc)
 - **Welford's algorithm**: Numerically stable running statistics
 - **O(1) updates**: Constant time for rolling statistics
+- **Arc-based sharing**: Zero-copy feature vectors across sequences
+- **Parallel processing**: Multi-threaded batch processing with Rayon
+- **Graceful cancellation**: CancellationToken for long-running jobs
+
+### Memory Optimizations
+
+| Optimization | Impact |
+|-------------|--------|
+| `extract_into()` buffer reuse | 0 allocations per sample |
+| `FeatureVec = Arc<Vec<f64>>` | 8-byte clone vs 672-byte clone |
+| Multi-scale Arc sharing | 98.8% memory reduction |
+| `PriceLevel` O(1) cache | Eliminates O(n) sum per level |
 
 ## Test Coverage
 
@@ -212,6 +226,11 @@ pub enum Preset {
 - [x] Feature count auto-computation
 - [x] Streaming sequence generation fix
 - [x] Comprehensive real-data validation (151M+ messages, 21 days)
+- [x] **Zero-allocation APIs** (extract_into, push_arc)
+- [x] **Arc-based sequence storage** (FeatureVec = Arc<Vec<f64>>)
+- [x] **Parallel batch processing** (BatchProcessor, Rayon)
+- [x] **Graceful cancellation** (CancellationToken)
+- [x] **PriceLevel O(1) caching** (in mbo-lob-reconstructor)
 
 ### Pending
 - [ ] crates.io publication

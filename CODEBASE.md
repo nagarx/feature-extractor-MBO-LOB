@@ -15,13 +15,15 @@
 7. [Normalization System](#7-normalization-system)
 8. [Label Generation](#8-label-generation)
 9. [Export Pipeline](#9-export-pipeline)
-10. [Configuration System](#10-configuration-system)
-11. [Validation](#11-validation)
-12. [Testing Patterns](#12-testing-patterns)
-13. [Performance Considerations](#13-performance-considerations)
-14. [Integration with MBO-LOB-Reconstructor](#14-integration-with-mbo-lob-reconstructor)
-15. [Common Patterns and Idioms](#15-common-patterns-and-idioms)
-16. [Known Limitations](#16-known-limitations)
+10. [Parallel Batch Processing](#10-parallel-batch-processing) *(feature-gated)*
+11. [Configuration System](#11-configuration-system)
+12. [Validation](#12-validation)
+13. [Zero-Allocation APIs](#13-zero-allocation-apis)
+14. [Testing Patterns](#14-testing-patterns)
+15. [Performance Considerations](#15-performance-considerations)
+16. [Integration with MBO-LOB-Reconstructor](#16-integration-with-mbo-lob-reconstructor)
+17. [Common Patterns and Idioms](#17-common-patterns-and-idioms)
+18. [Known Limitations](#18-known-limitations)
 
 ---
 
@@ -64,9 +66,10 @@ src/
 ├── pipeline.rs               # Main Pipeline orchestrator
 ├── config.rs                 # PipelineConfig, SamplingConfig
 ├── validation.rs             # Data quality validation
+├── batch.rs                  # Parallel batch processing (feature-gated: parallel)
 │
 ├── features/
-│   ├── mod.rs                # FeatureConfig, FeatureExtractor
+│   ├── mod.rs                # FeatureConfig, FeatureExtractor, extract_into(), extract_arc()
 │   ├── lob_features.rs       # Raw LOB features (40 features)
 │   ├── derived_features.rs   # Derived metrics (8 features)
 │   ├── mbo_features.rs       # MBO aggregated (36 features)
@@ -75,10 +78,10 @@ src/
 │   └── market_impact.rs      # Market impact estimation
 │
 ├── sequence_builder/
-│   ├── mod.rs                # Module exports
-│   ├── builder.rs            # SequenceBuilder, SequenceConfig
+│   ├── mod.rs                # Module exports, FeatureVec type alias
+│   ├── builder.rs            # SequenceBuilder, Sequence (Arc-based), push_arc()
 │   ├── horizon_aware.rs      # Label-aware sequence building
-│   └── multiscale.rs         # Multi-timescale windows
+│   └── multiscale.rs         # MultiScaleWindow, push_arc()
 │
 ├── preprocessing/
 │   ├── mod.rs                # Module exports
@@ -321,14 +324,24 @@ let sequences = builder.generate_all_sequences();
 ### Sequence Output
 
 ```rust
+/// Type alias for zero-copy feature sharing
+pub type FeatureVec = Arc<Vec<f64>>;
+
 pub struct Sequence {
-    pub features: Vec<Vec<f64>>,  // [window_size × feature_count]
+    /// Feature vectors wrapped in Arc for zero-copy sharing
+    /// [window_size × feature_count]
+    pub features: Vec<FeatureVec>,  // Arc<Vec<f64>> - NOT Vec<Vec<f64>>
     pub start_timestamp: u64,
     pub end_timestamp: u64,
     pub duration_ns: u64,
     pub length: usize,
 }
 ```
+
+**IMPORTANT**: Features are stored as `Arc<Vec<f64>>` to enable zero-copy sharing between:
+- Multiple sequences with overlapping windows
+- Multi-scale builders (fast/medium/slow)
+- Parallel processing threads
 
 ---
 
@@ -522,7 +535,199 @@ impl BatchExporter {
 
 ---
 
-## 10. Configuration System
+## 10. Parallel Batch Processing
+
+> **Feature Gate**: Requires `--features parallel` to enable.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    BatchProcessor                                │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                   Rayon Thread Pool                          ││
+│  │                                                              ││
+│  │  Thread 1        Thread 2        Thread N                   ││
+│  │  ┌─────────┐    ┌─────────┐    ┌─────────┐                  ││
+│  │  │Pipeline │    │Pipeline │    │Pipeline │   (each owns)    ││
+│  │  │   #1    │    │   #2    │    │   #N    │                  ││
+│  │  └────┬────┘    └────┬────┘    └────┬────┘                  ││
+│  │       │              │              │                        ││
+│  │  Day1.dbn       Day2.dbn       DayN.dbn                     ││
+│  │       │              │              │                        ││
+│  │       ▼              ▼              ▼                        ││
+│  │  DayResult      DayResult      DayResult                    ││
+│  └──────────────────────┬───────────────────────────────────────┘│
+│                         ▼                                        │
+│                   BatchOutput                                    │
+│                   (was_cancelled, skipped_count)                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Types
+
+```rust
+/// Thread-safe cancellation token
+#[derive(Clone, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self;
+    pub fn cancel(&self);           // Signal cancellation
+    pub fn is_cancelled(&self) -> bool;
+    pub fn reset(&self);            // For reuse
+}
+
+/// Batch processing configuration
+pub struct BatchConfig {
+    pub num_threads: Option<usize>,  // None = Rayon default
+    pub error_mode: ErrorMode,       // FailFast or CollectErrors
+    pub report_progress: bool,
+    pub stack_size: Option<usize>,   // Advanced: per-thread stack
+}
+
+/// Error handling strategy
+pub enum ErrorMode {
+    FailFast,      // Stop on first error
+    CollectErrors, // Continue, collect all errors
+}
+
+/// Result from processing a single file
+#[derive(Clone)]
+pub struct DayResult {
+    pub day: String,
+    pub file_path: String,
+    pub output: PipelineOutput,  // Clone via Arc internally
+    pub elapsed: Duration,
+    pub thread_id: usize,
+}
+
+/// Aggregated results from batch processing
+pub struct BatchOutput {
+    pub results: Vec<DayResult>,
+    pub errors: Vec<FileError>,
+    pub elapsed: Duration,
+    pub threads_used: usize,
+    pub was_cancelled: bool,    // True if cancelled before completion
+    pub skipped_count: usize,   // Files skipped due to cancellation
+}
+```
+
+### BatchProcessor
+
+```rust
+pub struct BatchProcessor {
+    pipeline_config: Arc<PipelineConfig>,
+    batch_config: BatchConfig,
+    progress_callback: Option<Arc<dyn ProgressCallback>>,
+    cancellation_token: CancellationToken,
+}
+
+impl BatchProcessor {
+    pub fn new(pipeline_config: PipelineConfig, batch_config: BatchConfig) -> Self;
+    
+    // Builder methods
+    pub fn with_progress_callback(self, callback: Box<dyn ProgressCallback>) -> Self;
+    pub fn with_cancellation_token(self, token: CancellationToken) -> Self;
+    
+    // Cancellation
+    pub fn cancel(&self);
+    pub fn is_cancelled(&self) -> bool;
+    pub fn cancellation_token(&self) -> CancellationToken;
+    
+    // Processing
+    pub fn process_files<P: AsRef<Path> + Sync>(&self, files: &[P]) -> Result<BatchOutput>;
+}
+```
+
+### Usage Pattern
+
+```rust
+use feature_extractor::prelude::*;
+use feature_extractor::batch::{BatchProcessor, BatchConfig, CancellationToken, ErrorMode};
+
+// Configure
+let pipeline_config = PipelineBuilder::new()
+    .lob_levels(10)
+    .event_sampling(1000)
+    .window(100, 10)
+    .build_config()?;
+
+let batch_config = BatchConfig::new()
+    .with_threads(8)                          // Use 8 threads
+    .with_error_mode(ErrorMode::CollectErrors); // Continue on errors
+
+// Create processor with cancellation support
+let token = CancellationToken::new();
+let processor = BatchProcessor::new(pipeline_config, batch_config)
+    .with_cancellation_token(token.clone());
+
+// Process files in parallel
+let files = vec!["day1.dbn.zst", "day2.dbn.zst", "day3.dbn.zst"];
+let output = processor.process_files(&files)?;
+
+// Check results
+println!("Processed: {}", output.successful_count());
+println!("Failed: {}", output.failed_count());
+println!("Cancelled: {}", output.was_cancelled);
+println!("Throughput: {:.2} msg/sec", output.throughput_msg_per_sec());
+```
+
+### Cancellation Pattern
+
+```rust
+use std::thread;
+use std::time::Duration;
+
+let token = CancellationToken::new();
+let processor = BatchProcessor::new(config, batch_config)
+    .with_cancellation_token(token.clone());
+
+// Cancel from another thread
+let cancel_token = token.clone();
+thread::spawn(move || {
+    thread::sleep(Duration::from_secs(30));
+    cancel_token.cancel();
+});
+
+let output = processor.process_files(&files)?;
+
+if output.was_cancelled {
+    println!("Cancelled after {} files", output.successful_count());
+    println!("Skipped {} files", output.skipped_count);
+}
+```
+
+### Thread Isolation
+
+**CRITICAL**: Each thread creates its OWN Pipeline instance from the shared config:
+
+```rust
+// Inside process_files() - each thread does:
+let mut pipeline = Pipeline::from_config((*self.pipeline_config).clone())?;
+let output = pipeline.process(&file_path)?;
+```
+
+This ensures:
+- No shared mutable state between threads
+- No mutex contention
+- BIT-LEVEL identical results to sequential processing
+
+### Convenience Functions
+
+```rust
+// Process with default settings
+let output = process_files_parallel(&config, &files)?;
+
+// Process with specific thread count
+let output = process_files_with_threads(&config, &files, 8)?;
+```
+
+---
+
+## 11. Configuration System
 
 ### PipelineConfig
 
@@ -585,7 +790,7 @@ let pipeline = PipelineBuilder::new()
 
 ---
 
-## 11. Validation
+## 12. Validation
 
 ### FeatureValidator
 
@@ -614,7 +819,104 @@ impl FeatureValidator {
 
 ---
 
-## 12. Testing Patterns
+## 13. Zero-Allocation APIs
+
+The library provides zero-allocation APIs for high-performance hot paths.
+
+### FeatureExtractor Zero-Allocation Methods
+
+```rust
+impl FeatureExtractor {
+    /// Extract features into a pre-allocated buffer (zero allocation)
+    /// 
+    /// The output buffer is cleared and reused, avoiding per-sample allocation.
+    pub fn extract_into(&mut self, lob_state: &LobState, output: &mut Vec<f64>) -> Result<()>;
+    
+    /// Extract and wrap in Arc for zero-copy sharing
+    /// 
+    /// Convenience method that calls extract_into() then wraps in Arc.
+    pub fn extract_arc(&mut self, lob_state: &LobState) -> Result<Arc<Vec<f64>>>;
+    
+    /// Legacy method (still works, uses extract_into internally)
+    #[deprecated(note = "Use extract_into() for better performance")]
+    pub fn extract_all_features(&mut self, lob_state: &LobState) -> Result<Vec<f64>>;
+}
+```
+
+### SequenceBuilder Arc-Native Methods
+
+```rust
+/// Type alias for zero-copy feature vectors
+pub type FeatureVec = Arc<Vec<f64>>;
+
+impl SequenceBuilder {
+    /// Push features wrapped in Arc (zero-copy)
+    /// 
+    /// The Arc is cloned (8 bytes) instead of the Vec (672 bytes for 84 features).
+    pub fn push_arc(&mut self, timestamp: u64, features: FeatureVec) -> Result<(), SequenceError>;
+    
+    /// Legacy method (wraps in Arc internally, then calls push_arc)
+    pub fn push(&mut self, timestamp: u64, features: Vec<f64>) -> Result<(), SequenceError>;
+}
+```
+
+### MultiScaleWindow Arc-Native Methods
+
+```rust
+impl MultiScaleWindow {
+    /// Push to all scales with Arc (zero-copy sharing)
+    /// 
+    /// The same Arc is shared across fast/medium/slow builders.
+    /// Memory savings: 16 bytes (2 Arc clones) vs 1,344 bytes (2 Vec clones).
+    pub fn push_arc(&mut self, timestamp: u64, features: FeatureVec);
+    
+    /// Legacy method (wraps in Arc, then calls push_arc)
+    pub fn push(&mut self, timestamp: u64, features: Vec<f64>);
+}
+```
+
+### Pipeline Hot Path (Optimized)
+
+```rust
+// Current implementation in Pipeline::process()
+pub fn process<P: AsRef<Path>>(&mut self, path: P) -> Result<PipelineOutput> {
+    let mut lob_state = LobState::new(self.levels);        // Reused buffer
+    let mut feature_buffer: Vec<f64> = Vec::with_capacity(feature_count);
+    
+    for msg in loader.iter_messages()? {
+        // Zero-allocation LOB update
+        self.reconstructor.process_message_into(&msg, &mut lob_state)?;
+        
+        if self.should_sample(&msg) {
+            // Zero-allocation feature extraction
+            self.feature_extractor.extract_into(&lob_state, &mut feature_buffer)?;
+            
+            // Wrap once in Arc, share everywhere
+            let features = Arc::new(std::mem::take(&mut feature_buffer));
+            feature_buffer = Vec::with_capacity(feature_count);
+            
+            // Zero-copy sharing to sequence builders
+            self.sequence_builder.push_arc(timestamp, features.clone())?;
+            
+            if let Some(ref mut ms) = self.multiscale_window {
+                ms.push_arc(timestamp, features);  // Shares same Arc
+            }
+        }
+    }
+}
+```
+
+### Memory Savings Summary
+
+| Operation | Before | After | Savings |
+|-----------|--------|-------|---------|
+| Per-sample feature extraction | 1 Vec alloc | 0 alloc (buffer reuse) | 100% |
+| Per-sequence feature storage | 67.2 KB clone | 8 byte Arc clone | 99.99% |
+| Multi-scale sharing | 2 × 672 byte clones | 2 × 8 byte clones | 98.8% |
+
+---
+
+## 14. Testing Patterns
 
 ### Unit Test Structure
 
@@ -670,7 +972,7 @@ fn test_full_pipeline() {
 
 ---
 
-## 13. Performance Considerations
+## 15. Performance Considerations
 
 ### Hot Paths
 
@@ -699,7 +1001,7 @@ fn test_full_pipeline() {
 
 ---
 
-## 14. Integration with MBO-LOB-Reconstructor
+## 16. Integration with MBO-LOB-Reconstructor
 
 ### Dependency Setup
 
@@ -774,7 +1076,7 @@ fn process_multiple_days(paths: &[&str]) -> Result<()> {
 
 ---
 
-## 15. Common Patterns and Idioms
+## 17. Common Patterns and Idioms
 
 ### Feature Count Synchronization
 
@@ -832,7 +1134,7 @@ builder.reset();             // Clears buffer and counters
 
 ---
 
-## 16. Known Limitations
+## 18. Known Limitations
 
 ### 1. MBO Features Initial NaN
 

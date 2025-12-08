@@ -11,14 +11,16 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 
 ### Key Features
 
-- Fluent Builder API: Simple, readable pipeline configuration
-- Paper-Aligned Presets: DeepLOB, TLOB, FI-2010, TransLOB, LiT configurations
-- Auto-Computed Feature Count: No manual calculation required
-- Comprehensive Feature Set: 200+ features across multiple categories
-- Label Generation: TLOB and DeepLOB labeling methods for supervised learning
-- Multiple Normalization Strategies: Z-score, Rolling Z-score, Global Z-score, Bilinear
-- Multi-Scale Sequences: Fast/Medium/Slow temporal resolution
-- High Performance: Single-pass computation, pre-allocated buffers
+- **Fluent Builder API**: Simple, readable pipeline configuration
+- **Paper-Aligned Presets**: DeepLOB, TLOB, FI-2010, TransLOB, LiT configurations
+- **Auto-Computed Feature Count**: No manual calculation required
+- **Comprehensive Feature Set**: 200+ features across multiple categories
+- **Label Generation**: TLOB and DeepLOB labeling methods for supervised learning
+- **Multiple Normalization Strategies**: Z-score, Rolling Z-score, Global Z-score, Bilinear
+- **Multi-Scale Sequences**: Fast/Medium/Slow temporal resolution
+- **High Performance**: Single-pass computation, zero-allocation hot paths
+- **Parallel Processing**: Multi-threaded batch processing with Rayon (optional)
+- **Graceful Cancellation**: Cancel long-running jobs from any thread
 
 ## Quick Start
 
@@ -271,14 +273,94 @@ for day in trading_days {
 }
 ```
 
+## Parallel Batch Processing
+
+Enable the `parallel` feature for multi-threaded processing:
+
+```bash
+cargo build --features parallel
+```
+
+### Basic Usage
+
+```rust
+use feature_extractor::prelude::*;
+use feature_extractor::batch::{BatchProcessor, BatchConfig, ErrorMode};
+
+// Configure for 8-core machine
+let batch_config = BatchConfig::new()
+    .with_threads(8)
+    .with_error_mode(ErrorMode::CollectErrors);
+
+let pipeline_config = PipelineBuilder::new()
+    .lob_levels(10)
+    .event_sampling(1000)
+    .build_config()?;
+
+// Process multiple files in parallel
+let processor = BatchProcessor::new(pipeline_config, batch_config);
+let files = vec!["day1.dbn.zst", "day2.dbn.zst", "day3.dbn.zst"];
+
+let output = processor.process_files(&files)?;
+
+println!("Processed {} days in {:?}", output.successful_count(), output.elapsed);
+println!("Throughput: {:.2} msg/sec", output.throughput_msg_per_sec());
+```
+
+### With Cancellation Support
+
+```rust
+use feature_extractor::batch::CancellationToken;
+use std::thread;
+
+let token = CancellationToken::new();
+let processor = BatchProcessor::new(config, batch_config)
+    .with_cancellation_token(token.clone());
+
+// Cancel from another thread
+let cancel_token = token.clone();
+thread::spawn(move || {
+    thread::sleep(std::time::Duration::from_secs(30));
+    cancel_token.cancel();
+});
+
+let output = processor.process_files(&files)?;
+
+if output.was_cancelled {
+    println!("Cancelled after {} files", output.successful_count());
+    println!("Skipped {} files", output.skipped_count);
+}
+```
+
+### Convenience Functions
+
+```rust
+// Quick parallel processing with defaults
+let output = process_files_parallel(&config, &files)?;
+
+// Specify thread count
+let output = process_files_with_threads(&config, &files, 8)?;
+```
+
 ## Performance
 
 The library is optimized for HFT environments:
 
-- Single-pass computation: Features extracted in one LOB traversal
-- Pre-allocated buffers: No allocations in hot paths
-- Welford's algorithm: Numerically stable running statistics
-- Zero-copy normalization: In-place operations where possible
+- **Single-pass computation**: Features extracted in one LOB traversal
+- **Zero-allocation hot paths**: `extract_into()` and `push_arc()` APIs
+- **Arc-based sequences**: Zero-copy feature sharing (8-byte clone vs 672-byte)
+- **Welford's algorithm**: Numerically stable running statistics
+- **PriceLevel O(1) caching**: Constant-time size queries in reconstructor
+- **Parallel processing**: ~64K msg/sec with multi-threading
+
+### Benchmark Results
+
+| Metric | Value |
+|--------|-------|
+| Sequential throughput | ~42K msg/sec |
+| Parallel throughput (2 threads) | ~64K msg/sec |
+| Memory per sequence | 8 bytes (Arc) vs 67.2 KB (Vec clone) |
+| Feature extraction | 0 allocations (buffer reuse) |
 
 Run benchmarks:
 
@@ -297,6 +379,9 @@ cargo test --lib
 
 # Run with verbose output
 cargo test -- --nocapture
+
+# Run parallel processing tests (requires --features parallel)
+cargo test --features parallel --test parallel_processing_tests
 ```
 
 ## Documentation

@@ -104,6 +104,11 @@ path = "examples/validate_nvda_labeling.rs"
 name = "builder_validation"
 path = "examples/builder_validation.rs"
 
+[[example]]
+name = "parallel_batch"
+path = "examples/parallel_batch.rs"
+required-features = ["parallel"]
+
 # ============================================================================
 # Tools - Data processing scripts
 # ============================================================================
