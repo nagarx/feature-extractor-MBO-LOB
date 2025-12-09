@@ -4,15 +4,41 @@
 //!
 //! Usage: cargo run --release --features parallel --example benchmark_parallel
 
-#![cfg(feature = "parallel")]
+fn main() {
+    #[cfg(not(feature = "parallel"))]
+    {
+        eprintln!("══════════════════════════════════════════════════════════════════");
+        eprintln!("  This example requires the 'parallel' feature to be enabled.");
+        eprintln!("══════════════════════════════════════════════════════════════════");
+        eprintln!();
+        eprintln!("  Run with:");
+        eprintln!("    cargo run --release --features parallel --example benchmark_parallel");
+        eprintln!();
+        std::process::exit(1);
+    }
 
+    #[cfg(feature = "parallel")]
+    {
+        if let Err(e) = run_benchmark() {
+            eprintln!("Benchmark failed: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(feature = "parallel")]
 use feature_extractor::batch::{BatchConfig, BatchProcessor, ErrorMode};
+#[cfg(feature = "parallel")]
 use feature_extractor::PipelineBuilder;
+#[cfg(feature = "parallel")]
 use mbo_lob_reconstructor::Result;
+#[cfg(feature = "parallel")]
 use std::path::Path;
+#[cfg(feature = "parallel")]
 use std::time::Instant;
 
-fn main() -> Result<()> {
+#[cfg(feature = "parallel")]
+fn run_benchmark() -> Result<()> {
     println!("═══════════════════════════════════════════════════════════════════");
     println!("     PARALLEL PROCESSING BENCHMARK - Mac M1 Optimization");
     println!("═══════════════════════════════════════════════════════════════════\n");
@@ -221,6 +247,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "parallel")]
 fn format_number(n: usize) -> String {
     let s = n.to_string();
     let mut result = String::new();
