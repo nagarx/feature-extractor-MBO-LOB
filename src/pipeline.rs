@@ -82,7 +82,9 @@ use crate::{
     sequence_builder::{FeatureVec, MultiScaleSequence, MultiScaleWindow},
     FeatureExtractor, Sequence, SequenceBuilder,
 };
-use mbo_lob_reconstructor::{DbnLoader, LobReconstructor, LobState, Result};
+use mbo_lob_reconstructor::{
+    DbnLoader, LobReconstructor, LobState, MarketDataSource, MboMessage, Result,
+};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -403,6 +405,198 @@ impl Pipeline {
                 .unwrap_or(0);
 
         // Phase 1: Collect adaptive sampling stats
+        let adaptive_stats =
+            self.adaptive_threshold
+                .as_ref()
+                .map(|adaptive| AdaptiveSamplingStats {
+                    current_volatility: adaptive.current_volatility(),
+                    baseline_volatility: adaptive.baseline_volatility(),
+                    current_multiplier: adaptive.current_multiplier(),
+                    current_threshold: Some(adaptive.current_threshold()),
+                    is_calibrated: adaptive.is_calibrated(),
+                });
+
+        Ok(PipelineOutput {
+            sequences,
+            mid_prices,
+            messages_processed,
+            features_extracted,
+            sequences_generated,
+            stride: self.config.sequence.stride,
+            window_size: self.config.sequence.window_size,
+            multiscale_sequences,
+            adaptive_stats,
+        })
+    }
+
+    /// Process a market data source through the complete pipeline.
+    ///
+    /// This is a generic version of `process()` that accepts any `MarketDataSource`
+    /// implementation, enabling flexible data ingestion from different providers.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `S` - Any type implementing `MarketDataSource`
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::prelude::*;
+    /// use mbo_lob_reconstructor::{DbnSource, VecSource, MarketDataSource};
+    ///
+    /// let mut pipeline = PipelineBuilder::new().build()?;
+    ///
+    /// // With Databento DBN files
+    /// let source = DbnSource::new("data/NVDA.mbo.dbn.zst")?;
+    /// let output = pipeline.process_source(source)?;
+    ///
+    /// // With hot store (faster)
+    /// let hot_store = HotStoreManager::for_dbn("data/hot/");
+    /// let source = DbnSource::with_hot_store("data/raw/NVDA.mbo.dbn.zst", &hot_store)?;
+    /// let output = pipeline.process_source(source)?;
+    ///
+    /// // With mock data (for testing)
+    /// let source = VecSource::new(mock_messages);
+    /// let output = pipeline.process_source(source)?;
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// Same zero-allocation optimizations as `process()`:
+    /// - `process_message_into()` - Reuses single LobState
+    /// - `extract_into()` - Reuses feature buffer
+    /// - `push_arc()` - Zero-copy feature sharing
+    pub fn process_source<S: MarketDataSource>(&mut self, source: S) -> Result<PipelineOutput> {
+        let messages = source.messages()?;
+        self.process_messages(messages)
+    }
+
+    /// Process an iterator of MBO messages through the pipeline.
+    ///
+    /// This is the core processing method used by both `process()` and `process_source()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `messages` - Iterator yielding `MboMessage`s
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(PipelineOutput)` - Processing results
+    /// * `Err(...)` - Processing failed
+    pub fn process_messages<I>(&mut self, messages: I) -> Result<PipelineOutput>
+    where
+        I: Iterator<Item = MboMessage>,
+    {
+        let mut lob = LobReconstructor::new(self.config.features.lob_levels);
+        let mut sampler = self.create_sampler()?;
+
+        // ========================================================================
+        // PERF: Pre-allocate reusable buffers (zero-allocation hot path)
+        // ========================================================================
+
+        let mut lob_state = LobState::new(self.config.features.lob_levels);
+        let feature_count = self.feature_extractor.feature_count();
+        let mut feature_buffer: Vec<f64> = Vec::with_capacity(feature_count);
+
+        // Statistics
+        let mut messages_processed = 0;
+        let mut features_extracted = 0;
+        let mut mid_prices = Vec::new();
+        let mut accumulated_sequences: Vec<Sequence> = Vec::new();
+
+        // Process messages
+        for msg in messages {
+            messages_processed += 1;
+
+            // Skip invalid messages (system messages, metadata, etc.)
+            if msg.order_id == 0 || msg.size == 0 || msg.price <= 0 {
+                continue;
+            }
+
+            // ✅ PERF: Update LOB and fill pre-allocated state (zero-allocation)
+            lob.process_message_into(&msg, &mut lob_state)?;
+
+            // Process MBO event for MBO feature aggregation
+            if self.feature_extractor.has_mbo() {
+                let mbo_event = MboEvent::from_mbo_message(&msg);
+                self.feature_extractor.process_mbo_event(mbo_event);
+            }
+
+            let ts = msg.timestamp.unwrap_or(0) as u64;
+
+            // Determine threshold (adaptive or fixed)
+            let current_threshold = if let (Some(ref mut adaptive), Some(mid_price)) =
+                (&mut self.adaptive_threshold, lob_state.mid_price())
+            {
+                adaptive.update(mid_price)
+            } else {
+                self.config
+                    .sampling
+                    .as_ref()
+                    .and_then(|s| s.volume_threshold)
+                    .unwrap_or(1000)
+            };
+
+            // Check if we should sample
+            let should_sample = match &mut sampler {
+                SamplerType::Volume(s) => {
+                    s.set_threshold(current_threshold);
+                    s.should_sample(msg.size, ts)
+                }
+                SamplerType::Event(s) => s.should_sample(),
+            };
+
+            if should_sample {
+                // Skip if LOB not ready (no bid/ask yet)
+                if lob_state.mid_price().is_none() {
+                    continue;
+                }
+
+                // ========================================================================
+                // PERF: Zero-allocation feature extraction with Arc sharing
+                // ========================================================================
+
+                self.feature_extractor
+                    .extract_into(&lob_state, &mut feature_buffer)?;
+                features_extracted += 1;
+
+                let features: FeatureVec = Arc::new(std::mem::take(&mut feature_buffer));
+                feature_buffer = Vec::with_capacity(feature_count);
+
+                if let Some(ref mut ms_window) = self.multiscale_window {
+                    ms_window.push_arc(ts, features);
+                } else if let Err(e) = self.sequence_builder.push_arc(ts, features) {
+                    log::error!("Sequence builder push failed: {}", e);
+                } else {
+                    if let Some(seq) = self.sequence_builder.try_build_sequence() {
+                        accumulated_sequences.push(seq);
+                    }
+                }
+
+                if let Some(mid) = lob_state.mid_price() {
+                    mid_prices.push(mid);
+                }
+            }
+        }
+
+        // Finalize sequences
+        let (sequences, multiscale_sequences) =
+            if let Some(ref mut ms_window) = self.multiscale_window {
+                let ms_seq = ms_window.try_build_all();
+                (Vec::new(), ms_seq)
+            } else {
+                (accumulated_sequences, None)
+            };
+
+        let sequences_generated = sequences.len()
+            + multiscale_sequences
+                .as_ref()
+                .map(|ms| {
+                    let (f, m, s) = ms.sequence_counts();
+                    f + m + s
+                })
+                .unwrap_or(0);
+
         let adaptive_stats =
             self.adaptive_threshold
                 .as_ref()
