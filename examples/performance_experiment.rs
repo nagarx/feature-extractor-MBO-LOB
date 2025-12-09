@@ -1,6 +1,7 @@
-//! Performance Experiment: Compressed vs Decompressed Data
+//! Performance Experiment: Compressed vs Decompressed Data + Parallel Scaling
 //!
-//! This experiment measures the performance impact of the hot store optimization.
+//! This experiment measures the performance impact of hot store optimization
+//! and true multi-file parallel processing.
 //!
 //! Usage:
 //!   # Phase 1: Baseline with compressed data
@@ -16,6 +17,9 @@
 //!
 //!   # Phase 4: Full comparison (requires both compressed and decompressed data)
 //!   cargo run --release --features parallel --example performance_experiment -- --mode compare
+//!
+//!   # Phase 5: Test true parallel scaling (16 files with 1-8 threads)
+//!   cargo run --release --features parallel --example performance_experiment -- --mode parallel
 
 fn main() {
     #[cfg(not(feature = "parallel"))]
@@ -45,6 +49,7 @@ mod experiment {
     const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-01_to_2025-09-30";
     const HOT_STORE_DIR: &str = "../data/hot_store";
     const NUM_TEST_FILES: usize = 4;
+    const NUM_PARALLEL_FILES: usize = 16;  // For true parallel scaling tests
     const THREAD_COUNTS: &[usize] = &[1, 2, 4, 6, 8];
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,6 +57,7 @@ mod experiment {
         Compressed,
         Decompressed,
         Compare,
+        Parallel,  // True parallel scaling with 16 files
     }
 
     impl Mode {
@@ -60,6 +66,7 @@ mod experiment {
                 "compressed" | "c" => Some(Mode::Compressed),
                 "decompressed" | "d" | "hot" => Some(Mode::Decompressed),
                 "compare" | "both" => Some(Mode::Compare),
+                "parallel" | "p" | "scaling" => Some(Mode::Parallel),
                 _ => None,
             }
         }
@@ -88,12 +95,13 @@ mod experiment {
         }
         
         // Default: show help
-        println!("Usage: performance_experiment --mode <compressed|decompressed|compare>");
+        println!("Usage: performance_experiment --mode <compressed|decompressed|compare|parallel>");
         println!();
         println!("Modes:");
-        println!("  compressed   - Benchmark with .dbn.zst files (baseline)");
-        println!("  decompressed - Benchmark with .dbn files from hot store");
+        println!("  compressed   - Benchmark with .dbn.zst files (baseline, 4 files)");
+        println!("  decompressed - Benchmark with .dbn files from hot store (4 files)");
         println!("  compare      - Run both and show comparison");
+        println!("  parallel     - True parallel scaling test (16 files, shows real speedup)");
         std::process::exit(0);
     }
 
@@ -116,6 +124,10 @@ mod experiment {
     }
 
     pub fn find_decompressed_files() -> Result<Vec<PathBuf>> {
+        find_decompressed_files_n(NUM_TEST_FILES)
+    }
+
+    pub fn find_decompressed_files_n(count: usize) -> Result<Vec<PathBuf>> {
         let dir = Path::new(HOT_STORE_DIR);
         if !dir.exists() {
             return Err(mbo_lob_reconstructor::TlobError::generic(
@@ -140,7 +152,7 @@ mod experiment {
             ));
         }
         
-        Ok(files.into_iter().take(NUM_TEST_FILES).collect())
+        Ok(files.into_iter().take(count).collect())
     }
 
     pub fn run_benchmark(files: &[PathBuf], label: &str) -> Result<Vec<BenchResult>> {
@@ -283,6 +295,147 @@ mod experiment {
         }
         result.chars().rev().collect()
     }
+
+    /// Run parallel scaling benchmark with 16 files
+    pub fn run_parallel_scaling_benchmark() -> Result<()> {
+        use feature_extractor::batch::{BatchConfig, BatchProcessor, ErrorMode};
+
+        let files = find_decompressed_files_n(NUM_PARALLEL_FILES)?;
+        
+        if files.len() < NUM_PARALLEL_FILES {
+            println!("⚠️  Only {} files available in hot store, need {} for full scaling test", 
+                files.len(), NUM_PARALLEL_FILES);
+            println!("   Run: decompress_to_hot_store -i ../data/NVDA... -o ../data/hot_store");
+            println!("   to decompress more files.\n");
+        }
+
+        println!("\n═══════════════════════════════════════════════════════════════════");
+        println!("  TRUE PARALLEL SCALING BENCHMARK ({} files)", files.len());
+        println!("═══════════════════════════════════════════════════════════════════\n");
+
+        let total_size_mb: f64 = files.iter()
+            .filter_map(|f| std::fs::metadata(f).ok())
+            .map(|m| m.len() as f64 / 1024.0 / 1024.0)
+            .sum();
+
+        println!("📂 Test Configuration:");
+        println!("   Files: {} decompressed .dbn files", files.len());
+        println!("   Total size: {:.1} MB", total_size_mb);
+        println!("   Thread counts: {:?}\n", THREAD_COUNTS);
+
+        let pipeline_config = PipelineBuilder::new()
+            .lob_levels(10)
+            .event_sampling(1000)
+            .window(100, 10)
+            .build_config()?;
+
+        let file_strs: Vec<String> = files.iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let file_refs: Vec<&str> = file_strs.iter().map(|s| s.as_str()).collect();
+
+        let mut results: Vec<BenchResult> = Vec::new();
+        let mut baseline_time: Option<f64> = None;
+
+        for &threads in THREAD_COUNTS {
+            print!("   Testing {} thread(s) on {} files... ", threads, files.len());
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+
+            let batch_config = BatchConfig::new()
+                .with_threads(threads)
+                .with_error_mode(ErrorMode::FailFast);
+
+            let processor = BatchProcessor::new(pipeline_config.clone(), batch_config);
+
+            let start = Instant::now();
+            let output = processor.process_files(&file_refs)?;
+            let elapsed = start.elapsed();
+
+            let elapsed_secs = elapsed.as_secs_f64();
+            let total_messages = output.total_messages();
+            let throughput = total_messages as f64 / elapsed_secs;
+
+            let speedup = if let Some(base) = baseline_time {
+                base / elapsed_secs
+            } else {
+                baseline_time = Some(elapsed_secs);
+                1.0
+            };
+
+            results.push(BenchResult {
+                threads,
+                elapsed_secs,
+                total_messages,
+                throughput_msg_per_sec: throughput,
+                speedup_vs_single: speedup,
+            });
+
+            println!("✓ {:.2}s ({:.0} msg/s, {:.2}x speedup)", 
+                elapsed_secs, throughput, speedup);
+        }
+
+        // Results table
+        println!("\n┌─────────────────────────────────────────────────────────────────────────┐");
+        println!("│  Parallel Scaling Results ({} files)", files.len());
+        println!("├─────────┬──────────┬────────────────┬───────────────┬─────────┬─────────┤");
+        println!("│ Threads │  Time(s) │    Messages    │  Throughput   │ Speedup │ Effic.  │");
+        println!("├─────────┼──────────┼────────────────┼───────────────┼─────────┼─────────┤");
+
+        for r in &results {
+            let efficiency = (r.speedup_vs_single / r.threads as f64) * 100.0;
+            println!(
+                "│    {:2}   │ {:7.2}s │ {:>14} │ {:>10.0}/s │  {:5.2}x │ {:5.1}%  │",
+                r.threads,
+                r.elapsed_secs,
+                format_number(r.total_messages),
+                r.throughput_msg_per_sec,
+                r.speedup_vs_single,
+                efficiency
+            );
+        }
+
+        println!("└─────────┴──────────┴────────────────┴───────────────┴─────────┴─────────┘");
+
+        // Analysis
+        let best = results.iter()
+            .max_by(|a, b| a.throughput_msg_per_sec.partial_cmp(&b.throughput_msg_per_sec).unwrap())
+            .unwrap();
+        
+        let single_thread = &results[0];
+        let best_efficiency_result = results.iter()
+            .filter(|r| r.threads > 1)
+            .max_by(|a, b| {
+                let eff_a = a.speedup_vs_single / a.threads as f64;
+                let eff_b = b.speedup_vs_single / b.threads as f64;
+                eff_a.partial_cmp(&eff_b).unwrap()
+            });
+
+        println!("\n📊 Analysis:");
+        println!("   Single-thread baseline: {:>10.0} msg/s", single_thread.throughput_msg_per_sec);
+        println!("   Best throughput:        {:>10.0} msg/s @ {} threads ({:.2}x speedup)", 
+            best.throughput_msg_per_sec, best.threads, best.speedup_vs_single);
+        
+        if let Some(eff) = best_efficiency_result {
+            let efficiency = (eff.speedup_vs_single / eff.threads as f64) * 100.0;
+            println!("   Best efficiency:        {:>10.1}% @ {} threads", efficiency, eff.threads);
+        }
+
+        // Scaling assessment
+        println!("\n📈 Scaling Assessment:");
+        if best.speedup_vs_single >= 3.0 {
+            println!("   ✅ Excellent parallel scaling (>3x speedup)");
+        } else if best.speedup_vs_single >= 2.0 {
+            println!("   ✅ Good parallel scaling (>2x speedup)");
+        } else if best.speedup_vs_single >= 1.5 {
+            println!("   ⚠️  Moderate parallel scaling (~1.5x speedup)");
+            println!("      Bottleneck may be I/O or memory bandwidth");
+        } else {
+            println!("   ❌ Limited parallel scaling (<1.5x speedup)");
+            println!("      Check if files are on SSD and hot store is populated");
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(feature = "parallel")]
@@ -331,6 +484,11 @@ fn run_experiment() -> mbo_lob_reconstructor::Result<()> {
             print_results_table(&compressed_results, "Compressed");
             print_results_table(&decompressed_results, "Decompressed");
             print_comparison(&compressed_results, &decompressed_results);
+        }
+
+        Mode::Parallel => {
+            println!("Running true parallel scaling benchmark...\n");
+            run_parallel_scaling_benchmark()?;
         }
     }
 

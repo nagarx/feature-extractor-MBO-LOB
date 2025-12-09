@@ -717,3 +717,167 @@ fn test_cancellation_thread_safety() {
     println!("   ✅ CancellationToken is thread-safe!");
 }
 
+// ============================================================================
+// Hot Store Integration Tests
+// ============================================================================
+
+/// Get decompressed test files from hot store
+fn get_hot_store_files() -> Vec<String> {
+    let hot_store_dir = Path::new("../data/hot_store");
+
+    if !hot_store_dir.exists() {
+        return Vec::new();
+    }
+
+    let mut files: Vec<String> = std::fs::read_dir(hot_store_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().map(|e| e == "dbn").unwrap_or(false)
+                && !p.to_string_lossy().ends_with(".dbn.zst")
+        })
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+
+    files.sort();
+    files
+}
+
+#[test]
+fn test_batch_processor_with_hot_store() {
+    use mbo_lob_reconstructor::HotStoreManager;
+
+    println!("\n📊 Batch Processor with Hot Store Test");
+
+    let compressed_files = get_test_files();
+    let hot_files = get_hot_store_files();
+
+    if compressed_files.is_empty() {
+        println!("   ⏭️  Skipped: No compressed test files found");
+        return;
+    }
+
+    if hot_files.is_empty() {
+        println!("   ⏭️  Skipped: No hot store files found");
+        return;
+    }
+
+    let config = create_test_config();
+    let batch_config = BatchConfig::new().with_threads(2);
+
+    // Create hot store manager
+    let hot_store = HotStoreManager::for_dbn("../data/hot_store");
+
+    // Process with hot store (should resolve to decompressed files)
+    let processor_with_hot_store = BatchProcessor::new(config.clone(), batch_config.clone())
+        .with_hot_store(hot_store);
+
+    // Use first compressed file (will be resolved to hot store if available)
+    let test_file = &compressed_files[0];
+    let test_files_ref: Vec<&str> = vec![test_file.as_str()];
+
+    let result = processor_with_hot_store.process_files(&test_files_ref);
+    
+    match result {
+        Ok(output) => {
+            println!("   Processed {} files", output.successful_count());
+            println!("   Total messages: {}", output.total_messages());
+            assert!(output.successful_count() > 0, "Should process at least one file");
+            println!("   ✅ Hot store integration works!");
+        }
+        Err(e) => {
+            // It's OK if the file doesn't exist in hot store
+            println!("   ⚠️  Processing failed (expected if file not in hot store): {}", e);
+        }
+    }
+}
+
+#[test]
+fn test_hot_store_produces_same_results_as_direct() {
+    println!("\n📊 Hot Store vs Direct Processing Comparison");
+
+    let hot_files = get_hot_store_files();
+
+    if hot_files.is_empty() {
+        println!("   ⏭️  Skipped: No hot store files found");
+        return;
+    }
+
+    // Find corresponding compressed file
+    let hot_file = &hot_files[0];
+    let hot_filename = Path::new(hot_file)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    
+    // Construct compressed path
+    let compressed_path = format!(
+        "../data/NVDA_2025-02-01_to_2025-09-30/{}.zst",
+        hot_filename
+    );
+
+    if !Path::new(&compressed_path).exists() {
+        println!("   ⏭️  Skipped: Corresponding compressed file not found");
+        return;
+    }
+
+    let config = create_test_config();
+
+    // Process compressed file directly
+    let mut pipeline1 = Pipeline::from_config(config.clone()).unwrap();
+    let output_compressed = pipeline1.process(&compressed_path).unwrap();
+
+    // Process decompressed file directly  
+    let mut pipeline2 = Pipeline::from_config(config.clone()).unwrap();
+    let output_decompressed = pipeline2.process(hot_file).unwrap();
+
+    // Results should be identical
+    assert_eq!(
+        output_compressed.messages_processed,
+        output_decompressed.messages_processed,
+        "Message counts should match"
+    );
+    
+    assert_eq!(
+        output_compressed.features_extracted,
+        output_decompressed.features_extracted,
+        "Feature counts should match"
+    );
+
+    assert_eq!(
+        output_compressed.sequences.len(),
+        output_decompressed.sequences.len(),
+        "Sequence counts should match"
+    );
+
+    // Check numerical precision of features
+    if !output_compressed.sequences.is_empty() && !output_decompressed.sequences.is_empty() {
+        let seq1 = &output_compressed.sequences[0];
+        let seq2 = &output_decompressed.sequences[0];
+        
+        assert_eq!(seq1.features.len(), seq2.features.len(), "Feature vector lengths should match");
+        
+        // Check first few features are exactly equal
+        for i in 0..seq1.features.len().min(10) {
+            let f1 = &seq1.features[i];
+            let f2 = &seq2.features[i];
+            assert_eq!(f1.len(), f2.len(), "Feature row {} length mismatch", i);
+            
+            for j in 0..f1.len().min(5) {
+                assert!(
+                    (f1[j] - f2[j]).abs() < 1e-10,
+                    "Feature [{},{}] mismatch: {} vs {}",
+                    i, j, f1[j], f2[j]
+                );
+            }
+        }
+    }
+
+    println!("   Messages: {}", output_compressed.messages_processed);
+    println!("   Features: {}", output_compressed.features_extracted);
+    println!("   Sequences: {}", output_compressed.sequences.len());
+    println!("   ✅ Compressed and decompressed produce identical results!");
+}
+

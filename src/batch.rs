@@ -100,9 +100,9 @@
 
 use crate::config::PipelineConfig;
 use crate::pipeline::{Pipeline, PipelineOutput};
-use mbo_lob_reconstructor::Result;
+use mbo_lob_reconstructor::{HotStoreManager, Result};
 use rayon::prelude::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -654,6 +654,11 @@ pub struct BatchProcessor {
 
     /// Cancellation token for graceful shutdown.
     cancellation_token: CancellationToken,
+
+    /// Optional hot store manager for decompressed file resolution.
+    /// When set, file paths are resolved through the hot store, preferring
+    /// decompressed files when available for improved performance.
+    hot_store_manager: Option<Arc<HotStoreManager>>,
 }
 
 impl BatchProcessor {
@@ -669,6 +674,7 @@ impl BatchProcessor {
             batch_config,
             progress_callback: None,
             cancellation_token: CancellationToken::new(),
+            hot_store_manager: None,
         }
     }
 
@@ -720,6 +726,30 @@ impl BatchProcessor {
     /// ```
     pub fn with_cancellation_token(mut self, token: CancellationToken) -> Self {
         self.cancellation_token = token;
+        self
+    }
+
+    /// Set a hot store manager for preferring decompressed files.
+    ///
+    /// When set, file paths are resolved through the hot store before processing.
+    /// If a decompressed version exists in the hot store, it will be used instead
+    /// of the compressed original, providing ~30% faster processing.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::batch::BatchProcessor;
+    /// use mbo_lob_reconstructor::HotStoreManager;
+    ///
+    /// let hot_store = HotStoreManager::for_dbn("data/hot_store/");
+    /// let processor = BatchProcessor::new(config, batch_config)
+    ///     .with_hot_store(hot_store);
+    ///
+    /// // Files will be resolved through hot store
+    /// let results = processor.process_files(&compressed_files)?;
+    /// ```
+    pub fn with_hot_store(mut self, hot_store: HotStoreManager) -> Self {
+        self.hot_store_manager = Some(Arc::new(hot_store));
         self
     }
 
@@ -790,9 +820,6 @@ impl BatchProcessor {
         let start = Instant::now();
         let total_files = files.len();
 
-        // Configure thread pool if custom settings
-        self.configure_thread_pool()?;
-
         let threads_used = self.batch_config.effective_threads();
 
         // Counters for progress tracking
@@ -807,11 +834,28 @@ impl BatchProcessor {
             Skipped,
         }
 
-        // Process files in parallel
-        let results: Vec<ProcessResult> = files
-            .par_iter()
-            .enumerate()
-            .map(|(index, file)| {
+        // Build a LOCAL thread pool with the requested number of threads.
+        // Note: build_global() only works once per process, so we use a local pool
+        // to allow different BatchProcessor instances to use different thread counts.
+        let mut pool_builder = rayon::ThreadPoolBuilder::new().num_threads(threads_used);
+        
+        if let Some(stack_size) = self.batch_config.stack_size {
+            pool_builder = pool_builder.stack_size(stack_size);
+        }
+        
+        let pool = pool_builder.build().map_err(|e| {
+            mbo_lob_reconstructor::TlobError::generic(format!(
+                "Failed to create thread pool: {}",
+                e
+            ))
+        })?;
+
+        // Process files in parallel using the local thread pool
+        let results: Vec<ProcessResult> = pool.install(|| {
+            files
+                .par_iter()
+                .enumerate()
+                .map(|(index, file)| {
                 let file_path = file.as_ref().to_string_lossy().to_string();
                 let day = extract_day_from_path(&file_path);
 
@@ -849,7 +893,8 @@ impl BatchProcessor {
                     }
                 }
             })
-            .collect();
+            .collect()
+        }); // End of pool.install()
 
         // Partition results
         let mut successful = Vec::new();
@@ -902,6 +947,12 @@ impl BatchProcessor {
     ) -> std::result::Result<DayResult, FileError> {
         let start = Instant::now();
 
+        // Resolve path through hot store if available
+        let resolved_path: PathBuf = match &self.hot_store_manager {
+            Some(hot_store) => hot_store.resolve(file.as_ref()),
+            None => file.as_ref().to_path_buf(),
+        };
+
         // Create a NEW Pipeline for this thread
         let mut pipeline = Pipeline::from_config((*self.pipeline_config).clone()).map_err(|e| {
             FileError {
@@ -911,8 +962,8 @@ impl BatchProcessor {
             }
         })?;
 
-        // Process the file
-        let output = pipeline.process(file).map_err(|e| FileError {
+        // Process the resolved file path
+        let output = pipeline.process(&resolved_path).map_err(|e| FileError {
             day: day.to_string(),
             file_path: file_path.to_string(),
             error: e.to_string(),
@@ -927,25 +978,6 @@ impl BatchProcessor {
         })
     }
 
-    /// Configure the Rayon thread pool based on batch config.
-    fn configure_thread_pool(&self) -> Result<()> {
-        // Only configure if custom settings are specified
-        if self.batch_config.num_threads.is_some() || self.batch_config.stack_size.is_some() {
-            let mut builder = rayon::ThreadPoolBuilder::new();
-
-            if let Some(threads) = self.batch_config.num_threads {
-                builder = builder.num_threads(threads);
-            }
-
-            if let Some(stack_size) = self.batch_config.stack_size {
-                builder = builder.stack_size(stack_size);
-            }
-
-            // This may fail if pool is already initialized - that's OK
-            let _ = builder.build_global();
-        }
-        Ok(())
-    }
 }
 
 // ============================================================================
