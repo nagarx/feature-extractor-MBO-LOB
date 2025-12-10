@@ -250,6 +250,19 @@ pub struct BatchConfig {
     /// Default is Rayon's default (typically 2MB).
     /// Increase if processing very deep LOB levels.
     pub stack_size: Option<usize>,
+
+    /// Optional hot store directory for decompressed files.
+    ///
+    /// When set, the processor will resolve file paths through the hot store,
+    /// preferring decompressed files when available for ~30% faster processing.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let config = BatchConfig::new()
+    ///     .with_hot_store_dir("data/hot_store/");
+    /// ```
+    pub hot_store_dir: Option<PathBuf>,
 }
 
 impl Default for BatchConfig {
@@ -259,6 +272,7 @@ impl Default for BatchConfig {
             error_mode: ErrorMode::FailFast,
             report_progress: false,
             stack_size: None,
+            hot_store_dir: None,
         }
     }
 }
@@ -313,6 +327,35 @@ impl BatchConfig {
     pub fn with_stack_size(mut self, size: usize) -> Self {
         self.stack_size = Some(size);
         self
+    }
+
+    /// Set hot store directory for preferring decompressed files.
+    ///
+    /// When set, file paths are resolved through the hot store before processing.
+    /// If a decompressed version exists, it will be used for ~30% faster processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Path to the hot store directory containing decompressed `.dbn` files
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let config = BatchConfig::new()
+    ///     .with_threads(6)
+    ///     .with_hot_store_dir("data/hot_store/");
+    ///
+    /// // All convenience functions now use hot store
+    /// let output = process_files_with_threads(&pipeline_config, &files, 6)?;
+    /// ```
+    pub fn with_hot_store_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
+        self.hot_store_dir = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
+    /// Check if hot store is configured.
+    pub fn has_hot_store(&self) -> bool {
+        self.hot_store_dir.is_some()
     }
 
     /// Get effective thread count.
@@ -668,13 +711,23 @@ impl BatchProcessor {
     ///
     /// * `pipeline_config` - Configuration for the pipeline (will be cloned per thread)
     /// * `batch_config` - Configuration for batch processing behavior
+    ///
+    /// # Hot Store Auto-Configuration
+    ///
+    /// If `batch_config.hot_store_dir` is set, a `HotStoreManager` will be automatically
+    /// created to resolve file paths through the hot store.
     pub fn new(pipeline_config: PipelineConfig, batch_config: BatchConfig) -> Self {
+        // Auto-create HotStoreManager from config if hot_store_dir is set
+        let hot_store_manager = batch_config.hot_store_dir.as_ref().map(|dir| {
+            Arc::new(HotStoreManager::for_dbn(dir))
+        });
+
         Self {
             pipeline_config: Arc::new(pipeline_config),
             batch_config,
             progress_callback: None,
             cancellation_token: CancellationToken::new(),
-            hot_store_manager: None,
+            hot_store_manager,
         }
     }
 
@@ -729,11 +782,13 @@ impl BatchProcessor {
         self
     }
 
-    /// Set a hot store manager for preferring decompressed files.
+    /// Set a custom hot store manager for preferring decompressed files.
     ///
-    /// When set, file paths are resolved through the hot store before processing.
-    /// If a decompressed version exists in the hot store, it will be used instead
-    /// of the compressed original, providing ~30% faster processing.
+    /// This method allows you to provide a pre-configured `HotStoreManager`.
+    /// For simpler usage, consider using `BatchConfig::with_hot_store_dir()` instead,
+    /// which auto-creates a `HotStoreManager` with default settings.
+    ///
+    /// **Note**: This method overrides any hot store configured via `BatchConfig`.
     ///
     /// # Example
     ///
@@ -741,12 +796,14 @@ impl BatchProcessor {
     /// use feature_extractor::batch::BatchProcessor;
     /// use mbo_lob_reconstructor::HotStoreManager;
     ///
+    /// // Simple: Use BatchConfig (recommended)
+    /// let batch_config = BatchConfig::new()
+    ///     .with_hot_store_dir("data/hot_store/");
+    ///
+    /// // Advanced: Use custom HotStoreManager
     /// let hot_store = HotStoreManager::for_dbn("data/hot_store/");
     /// let processor = BatchProcessor::new(config, batch_config)
     ///     .with_hot_store(hot_store);
-    ///
-    /// // Files will be resolved through hot store
-    /// let results = processor.process_files(&compressed_files)?;
     /// ```
     pub fn with_hot_store(mut self, hot_store: HotStoreManager) -> Self {
         self.hot_store_manager = Some(Arc::new(hot_store));

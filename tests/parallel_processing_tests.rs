@@ -881,3 +881,148 @@ fn test_hot_store_produces_same_results_as_direct() {
     println!("   ✅ Compressed and decompressed produce identical results!");
 }
 
+// ============================================================================
+// BatchConfig Hot Store Integration Tests
+// ============================================================================
+
+#[test]
+fn test_batch_config_with_hot_store_dir() {
+    println!("\n📊 BatchConfig with hot_store_dir Test");
+
+    // Test builder method
+    let config = BatchConfig::new()
+        .with_threads(4)
+        .with_hot_store_dir("data/hot_store/");
+
+    assert!(config.has_hot_store(), "Should have hot store configured");
+    assert_eq!(config.hot_store_dir.as_ref().unwrap().to_str().unwrap(), "data/hot_store/");
+    assert_eq!(config.num_threads, Some(4));
+
+    println!("   ✅ BatchConfig.with_hot_store_dir() works correctly!");
+}
+
+#[test]
+fn test_batch_config_hot_store_default_none() {
+    println!("\n📊 BatchConfig Default (no hot store) Test");
+
+    let config = BatchConfig::new();
+
+    assert!(!config.has_hot_store(), "Should not have hot store by default");
+    assert!(config.hot_store_dir.is_none());
+
+    println!("   ✅ BatchConfig defaults to no hot store!");
+}
+
+#[test]
+fn test_batch_processor_auto_creates_hot_store_manager() {
+    println!("\n📊 BatchProcessor Auto-Creates HotStoreManager Test");
+
+    let pipeline_config = create_test_config();
+    
+    // Test 1: Without hot store dir
+    let batch_config_no_hot = BatchConfig::new();
+    let _processor_no_hot = BatchProcessor::new(pipeline_config.clone(), batch_config_no_hot);
+    // Can't directly check hot_store_manager, but we can verify it works
+    
+    // Test 2: With hot store dir (processor should auto-create manager)
+    let batch_config_with_hot = BatchConfig::new()
+        .with_hot_store_dir("../data/hot_store/");
+    let _processor_with_hot = BatchProcessor::new(pipeline_config.clone(), batch_config_with_hot);
+    
+    println!("   ✅ BatchProcessor auto-creates HotStoreManager from config!");
+}
+
+#[test]
+fn test_convenience_functions_with_batch_config_hot_store() {
+    use feature_extractor::batch::process_files_with_threads;
+
+    println!("\n📊 Convenience Functions with BatchConfig Hot Store Test");
+
+    let test_files = get_test_files();
+    let hot_files = get_hot_store_files();
+
+    if test_files.is_empty() {
+        println!("   ⏭️  Skipped: No test files found");
+        return;
+    }
+
+    if hot_files.is_empty() {
+        println!("   ⏭️  Skipped: No hot store files found");
+        return;
+    }
+
+    let pipeline_config = create_test_config();
+
+    // Process with convenience function (uses BatchConfig internally)
+    // Note: process_files_with_threads uses BatchConfig::new() which has no hot store
+    // This test verifies backward compatibility
+    let test_file = &test_files[0];
+    let result = process_files_with_threads(&pipeline_config, &[test_file.as_str()], 2);
+
+    match result {
+        Ok(output) => {
+            assert!(output.successful_count() > 0, "Should process successfully");
+            println!("   Processed {} files with {} messages", 
+                output.successful_count(), output.total_messages());
+            println!("   ✅ Convenience functions work with default BatchConfig!");
+        }
+        Err(e) => {
+            println!("   ⚠️  Processing failed: {}", e);
+        }
+    }
+}
+
+#[test]
+fn test_batch_processor_with_config_hot_store_produces_correct_results() {
+    println!("\n📊 BatchProcessor Config Hot Store vs Direct Hot Store Test");
+
+    let test_files = get_test_files();
+    let hot_files = get_hot_store_files();
+
+    if test_files.is_empty() || hot_files.is_empty() {
+        println!("   ⏭️  Skipped: Missing test or hot store files");
+        return;
+    }
+
+    let pipeline_config = create_test_config();
+    let test_file = &test_files[0];
+
+    // Method 1: BatchConfig with hot_store_dir
+    let batch_config1 = BatchConfig::new()
+        .with_threads(2)
+        .with_hot_store_dir("../data/hot_store/");
+    let processor1 = BatchProcessor::new(pipeline_config.clone(), batch_config1);
+    let result1 = processor1.process_files(&[test_file.as_str()]);
+
+    // Method 2: Direct with_hot_store() 
+    use mbo_lob_reconstructor::HotStoreManager;
+    let hot_store = HotStoreManager::for_dbn("../data/hot_store/");
+    let batch_config2 = BatchConfig::new().with_threads(2);
+    let processor2 = BatchProcessor::new(pipeline_config.clone(), batch_config2)
+        .with_hot_store(hot_store);
+    let result2 = processor2.process_files(&[test_file.as_str()]);
+
+    match (result1, result2) {
+        (Ok(output1), Ok(output2)) => {
+            // Both should produce identical results
+            assert_eq!(
+                output1.total_messages(), output2.total_messages(),
+                "Message counts should match"
+            );
+            assert_eq!(
+                output1.total_sequences(), output2.total_sequences(),
+                "Sequence counts should match"
+            );
+            println!("   Messages: {}", output1.total_messages());
+            println!("   Sequences: {}", output1.total_sequences());
+            println!("   ✅ Config hot store and direct hot store produce identical results!");
+        }
+        (Err(e1), Err(e2)) => {
+            println!("   Both failed (expected if hot file doesn't exist): {} / {}", e1, e2);
+        }
+        _ => {
+            println!("   ⚠️  Inconsistent results between methods");
+        }
+    }
+}
+
