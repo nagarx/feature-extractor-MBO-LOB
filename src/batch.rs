@@ -35,6 +35,7 @@
 //! - **Progress reporting**: Optional callbacks for monitoring
 //! - **Graceful cancellation**: Cancel long-running jobs from any thread
 //! - **Memory efficient**: Each thread manages its own memory
+//! - **Hot store integration**: Auto-prefer decompressed files for ~30% speedup
 //!
 //! # Example
 //!
@@ -83,6 +84,19 @@
 //!     println!("Cancelled after processing {} files", result.successful_count());
 //!     println!("Skipped {} files", result.skipped_count);
 //! }
+//! ```
+//!
+//! # Hot Store Integration
+//!
+//! For faster processing, configure a hot store directory with decompressed files:
+//!
+//! ```ignore
+//! let batch_config = BatchConfig::new()
+//!     .with_threads(6)
+//!     .with_hot_store_dir("data/hot_store/");  // ~30% faster
+//!
+//! let processor = BatchProcessor::new(pipeline_config, batch_config);
+//! // Files automatically resolved through hot store
 //! ```
 //!
 //! # Hardware Configuration

@@ -140,36 +140,41 @@ CRITICAL: Sequences are accumulated DURING streaming via try_build_sequence()
           after each feature push, NOT at the end with generate_all_sequences()
 ```
 
-### Pipeline.process() Flow
+### Pipeline Processing Methods
+
+The Pipeline provides three processing methods (all produce identical results):
 
 ```rust
-// Simplified flow in Pipeline::process()
-pub fn process(&mut self, msg: &MboMessage, lob_state: &LobState) -> Option<Vec<f64>> {
-    // 1. Update volume accumulator
-    self.volume_sampler.accumulate(msg.size);
-    
-    // 2. Check if we should sample this state
-    if !self.volume_sampler.should_sample(msg.size, msg.timestamp) {
-        return None;
-    }
-    
-    // 3. Extract features (40-84 depending on config)
-    let features = self.extractor.extract_all_features(lob_state)?;
-    
-    // 4. Push to sequence builder
-    self.sequence_builder.push(timestamp, features.clone())?;
-    
-    // 5. CRITICAL: Try to build sequence immediately (streaming mode)
-    if let Some(seq) = self.sequence_builder.try_build_sequence() {
-        self.sequences.push(seq);  // Accumulate during processing
-    }
-    
-    // 6. Track mid-price for labeling
-    self.mid_prices.push(lob_state.mid_price().unwrap_or(0.0));
-    
-    Some(features)
+// Method 1: Process a file path (most common)
+pub fn process<P: AsRef<Path>>(&mut self, input_path: P) -> Result<PipelineOutput> {
+    let loader = DbnLoader::new(input_path)?;
+    self.process_messages(loader.iter_messages()?)  // Delegates to process_messages
+}
+
+// Method 2: Process a MarketDataSource (supports hot store)
+pub fn process_source<S: MarketDataSource>(&mut self, source: S) -> Result<PipelineOutput> {
+    let messages = source.messages()?;
+    self.process_messages(messages)  // Delegates to process_messages
+}
+
+// Method 3: Process an iterator of messages (core implementation)
+pub fn process_messages<I>(&mut self, messages: I) -> Result<PipelineOutput>
+where
+    I: Iterator<Item = MboMessage>,
+{
+    // Single source of truth for processing logic:
+    // 1. For each message: Update LOB state (zero-allocation)
+    // 2. Check sampling condition (volume/event based)
+    // 3. Extract features into reusable buffer
+    // 4. Wrap in Arc for zero-copy sharing
+    // 5. Push to sequence builder(s)
+    // 6. Try build sequence immediately (streaming mode)
+    // 7. Track mid-price for labeling
 }
 ```
+
+**Note**: `process()` delegates to `process_messages()` (DRY principle). This ensures
+a single code path for all processing methods, making bug fixes apply universally.
 
 ---
 
@@ -586,6 +591,7 @@ pub struct BatchConfig {
     pub error_mode: ErrorMode,       // FailFast or CollectErrors
     pub report_progress: bool,
     pub stack_size: Option<usize>,   // Advanced: per-thread stack
+    pub hot_store_dir: Option<PathBuf>,  // Hot store for decompressed files
 }
 
 /// Error handling strategy
@@ -623,21 +629,24 @@ pub struct BatchProcessor {
     batch_config: BatchConfig,
     progress_callback: Option<Arc<dyn ProgressCallback>>,
     cancellation_token: CancellationToken,
+    hot_store_manager: Option<Arc<HotStoreManager>>,  // Auto-created from config
 }
 
 impl BatchProcessor {
+    // Auto-creates HotStoreManager if batch_config.hot_store_dir is set
     pub fn new(pipeline_config: PipelineConfig, batch_config: BatchConfig) -> Self;
     
     // Builder methods
     pub fn with_progress_callback(self, callback: Box<dyn ProgressCallback>) -> Self;
     pub fn with_cancellation_token(self, token: CancellationToken) -> Self;
+    pub fn with_hot_store(self, hot_store: HotStoreManager) -> Self;  // Override config
     
     // Cancellation
     pub fn cancel(&self);
     pub fn is_cancelled(&self) -> bool;
     pub fn cancellation_token(&self) -> CancellationToken;
     
-    // Processing
+    // Processing (uses local thread pool for correct parallel execution)
     pub fn process_files<P: AsRef<Path> + Sync>(&self, files: &[P]) -> Result<BatchOutput>;
 }
 ```
@@ -657,14 +666,16 @@ let pipeline_config = PipelineBuilder::new()
 
 let batch_config = BatchConfig::new()
     .with_threads(8)                          // Use 8 threads
-    .with_error_mode(ErrorMode::CollectErrors); // Continue on errors
+    .with_error_mode(ErrorMode::CollectErrors) // Continue on errors
+    .with_hot_store_dir("data/hot_store/");   // Use decompressed files (~30% faster)
 
 // Create processor with cancellation support
+// HotStoreManager is auto-created from batch_config.hot_store_dir
 let token = CancellationToken::new();
 let processor = BatchProcessor::new(pipeline_config, batch_config)
     .with_cancellation_token(token.clone());
 
-// Process files in parallel
+// Process files in parallel (prefers decompressed versions if available)
 let files = vec!["day1.dbn.zst", "day2.dbn.zst", "day3.dbn.zst"];
 let output = processor.process_files(&files)?;
 

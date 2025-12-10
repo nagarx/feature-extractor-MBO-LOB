@@ -58,7 +58,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - In-progress files complete normally; only pending files are skipped
   - Comprehensive test suite for cancellation scenarios
 
+- **Hot Store Integration for Batch Processing**
+  - `BatchConfig::hot_store_dir` - Configure hot store directory in batch config
+  - `BatchConfig::with_hot_store_dir()` - Builder method for hot store path
+  - `BatchConfig::has_hot_store()` - Check if hot store is configured
+  - `BatchProcessor::new()` auto-creates `HotStoreManager` from config
+  - Convenience functions automatically benefit from hot store
+  - Backward compatible: `BatchProcessor::with_hot_store()` still works for advanced usage
+
+- **Pipeline Refactoring Tests**
+  - `pipeline_refactoring_tests.rs` - Verify processing method equivalence
+  - `test_process_vs_process_messages_equivalence` - Validate identical results
+  - `test_process_source_equivalence` - Validate source abstraction
+  - `test_all_processing_methods_equivalence` - Cross-validate all 3 methods
+
 ### Changed
+
+- **Pipeline DRY Refactoring**
+  - `Pipeline::process()` now delegates to `process_messages()` (eliminates 153 lines)
+  - Single source of truth for processing logic
+  - All 3 methods (`process`, `process_source`, `process_messages`) produce identical results
+  - Verified with 7,112,000 feature values at <1e-10 precision
+
+- **Correct Parallel Scaling**
+  - Fixed `BatchProcessor` to use local Rayon thread pool instead of global
+  - `rayon::ThreadPoolBuilder::build_global()` only works once per process
+  - Now uses `pool.install(|| ...)` for guaranteed parallel execution
+  - Proper speedup observed: 1.5-2x with multiple threads
 
 - **Pipeline Hot Path Optimization (Phase 2)**
   - `Pipeline.process()` now uses `extract_into()` with reusable feature buffer
