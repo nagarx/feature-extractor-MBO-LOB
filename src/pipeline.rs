@@ -252,7 +252,11 @@ impl Pipeline {
         })
     }
 
-    /// Process a single DBN file through the complete pipeline
+    /// Process a single DBN file through the complete pipeline.
+    ///
+    /// This is a convenience method that loads a DBN file and processes it
+    /// through the pipeline. For more flexibility, use [`process_source()`] or
+    /// [`process_messages()`].
     ///
     /// # Feature Extraction
     ///
@@ -274,159 +278,15 @@ impl Pipeline {
     /// - Per message: 0 allocations (LobState reused)
     /// - Per sample: 1 allocation (Vec for features) + Arc wrap
     /// - Multi-scale: 2 Arc clones (16 bytes) instead of 2 Vec clones (1,344 bytes)
+    ///
+    /// # Implementation Note
+    ///
+    /// This method delegates to [`process_messages()`], ensuring a single code
+    /// path for all processing methods. For hot store support, use
+    /// [`process_source()`] with [`DbnSource::with_hot_store()`].
     pub fn process<P: AsRef<Path>>(&mut self, input_path: P) -> Result<PipelineOutput> {
-        let path = input_path.as_ref();
-
-        // Initialize components
-        let loader = DbnLoader::new(path)?;
-        let mut lob = LobReconstructor::new(self.config.features.lob_levels);
-        let mut sampler = self.create_sampler()?;
-
-        // ========================================================================
-        // PERF: Pre-allocate reusable buffers (zero-allocation hot path)
-        // ========================================================================
-
-        // LobState: Stack-allocated, reused for every message
-        let mut lob_state = LobState::new(self.config.features.lob_levels);
-
-        // Feature buffer: Heap-allocated once, reused for every sampled snapshot
-        // After extraction, we take ownership and wrap in Arc, then re-allocate
-        let feature_count = self.feature_extractor.feature_count();
-        let mut feature_buffer: Vec<f64> = Vec::with_capacity(feature_count);
-
-        // Statistics
-        let mut messages_processed = 0;
-        let mut features_extracted = 0;
-        let mut mid_prices = Vec::new();
-        let mut accumulated_sequences: Vec<Sequence> = Vec::new();
-
-        // Process messages
-        for msg in loader.iter_messages()? {
-            messages_processed += 1;
-
-            // Skip invalid messages (system messages, metadata, etc.)
-            if msg.order_id == 0 || msg.size == 0 || msg.price <= 0 {
-                continue;
-            }
-
-            // ✅ PERF: Update LOB and fill pre-allocated state (zero-allocation)
-            lob.process_message_into(&msg, &mut lob_state)?;
-
-            // Process MBO event for MBO feature aggregation
-            if self.feature_extractor.has_mbo() {
-                let mbo_event = MboEvent::from_mbo_message(&msg);
-                self.feature_extractor.process_mbo_event(mbo_event);
-            }
-
-            let ts = msg.timestamp.unwrap_or(0) as u64;
-
-            // Determine threshold (adaptive or fixed)
-            let current_threshold = if let (Some(ref mut adaptive), Some(mid_price)) =
-                (&mut self.adaptive_threshold, lob_state.mid_price())
-            {
-                adaptive.update(mid_price)
-            } else {
-                self.config
-                    .sampling
-                    .as_ref()
-                    .and_then(|s| s.volume_threshold)
-                    .unwrap_or(1000)
-            };
-
-            // Check if we should sample
-            let should_sample = match &mut sampler {
-                SamplerType::Volume(s) => {
-                    s.set_threshold(current_threshold);
-                    s.should_sample(msg.size, ts)
-                }
-                SamplerType::Event(s) => s.should_sample(),
-            };
-
-            if should_sample {
-                // Skip if LOB not ready (no bid/ask yet)
-                if lob_state.mid_price().is_none() {
-                    continue;
-                }
-
-                // ========================================================================
-                // PERF: Zero-allocation feature extraction with Arc sharing
-                // ========================================================================
-
-                // Step 1: Extract features into reusable buffer
-                self.feature_extractor
-                    .extract_into(&lob_state, &mut feature_buffer)?;
-                features_extracted += 1;
-
-                // Step 2: Wrap in Arc ONCE for zero-copy sharing
-                // Take ownership of buffer and allocate new one for next iteration
-                let features: FeatureVec = Arc::new(std::mem::take(&mut feature_buffer));
-                feature_buffer = Vec::with_capacity(feature_count);
-
-                // Step 3: Push using Arc-native API (zero-copy for multi-scale)
-                if let Some(ref mut ms_window) = self.multiscale_window {
-                    // Multi-scale: Arc is cloned (16 bytes) not Vec (1,344 bytes)
-                    ms_window.push_arc(ts, features);
-                } else if let Err(e) = self.sequence_builder.push_arc(ts, features) {
-                    log::error!("Sequence builder push failed: {}", e);
-                } else {
-                    // Streaming mode: build sequences immediately after push
-                    if let Some(seq) = self.sequence_builder.try_build_sequence() {
-                        accumulated_sequences.push(seq);
-                    }
-                }
-
-                // Store mid-price (for labeling)
-                if let Some(mid) = lob_state.mid_price() {
-                    mid_prices.push(mid);
-                }
-            }
-        }
-
-        // Phase 1: Finalize sequences (multi-scale or regular)
-        let (sequences, multiscale_sequences) =
-            if let Some(ref mut ms_window) = self.multiscale_window {
-                // Multi-scale: try to build all scales
-                let ms_seq = ms_window.try_build_all();
-                (Vec::new(), ms_seq)
-            } else {
-                // Regular: use accumulated sequences from streaming phase
-                // Note: We already built sequences during streaming via try_build_sequence()
-                // This ensures we capture all sequences without buffer eviction losses
-                (accumulated_sequences, None)
-            };
-
-        let sequences_generated = sequences.len()
-            + multiscale_sequences
-                .as_ref()
-                .map(|ms| {
-                    let (f, m, s) = ms.sequence_counts();
-                    f + m + s
-                })
-                .unwrap_or(0);
-
-        // Phase 1: Collect adaptive sampling stats
-        let adaptive_stats =
-            self.adaptive_threshold
-                .as_ref()
-                .map(|adaptive| AdaptiveSamplingStats {
-                    current_volatility: adaptive.current_volatility(),
-                    baseline_volatility: adaptive.baseline_volatility(),
-                    current_multiplier: adaptive.current_multiplier(),
-                    current_threshold: Some(adaptive.current_threshold()),
-                    is_calibrated: adaptive.is_calibrated(),
-                });
-
-        Ok(PipelineOutput {
-            sequences,
-            mid_prices,
-            messages_processed,
-            features_extracted,
-            sequences_generated,
-            stride: self.config.sequence.stride,
-            window_size: self.config.sequence.window_size,
-            multiscale_sequences,
-            adaptive_stats,
-        })
+        let loader = DbnLoader::new(input_path)?;
+        self.process_messages(loader.iter_messages()?)
     }
 
     /// Process a market data source through the complete pipeline.
