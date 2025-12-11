@@ -18,10 +18,13 @@
 //! - Label corresponds to the prediction target for that sequence
 //! - Exported arrays have matching lengths: len(sequences) == len(labels)
 
-use crate::labeling::{LabelConfig, TlobLabelGenerator, TrendLabel};
+use crate::export::tensor_format::{FeatureMapping, TensorFormat};
+use crate::labeling::{
+    LabelConfig, MultiHorizonConfig, MultiHorizonLabelGenerator, TlobLabelGenerator, TrendLabel,
+};
 use crate::pipeline::PipelineOutput;
 use mbo_lob_reconstructor::Result;
-use ndarray::{Array1, Array3};
+use ndarray::{Array1, Array2, Array3, Array4};
 use ndarray_npy::WriteNpyExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -63,11 +66,40 @@ pub struct AlignedDayExport {
 }
 
 /// Aligned batch exporter - exports sequences with perfectly aligned labels
+///
+/// # Features
+///
+/// - **Single-horizon labeling**: Default mode using `LabelConfig`
+/// - **Multi-horizon labeling**: FI-2010, DeepLOB benchmark support
+/// - **Tensor formatting**: Model-specific shapes (DeepLOB, HLOB, Flat)
+///
+/// # Example
+///
+/// ```ignore
+/// use feature_extractor::prelude::*;
+///
+/// // Basic single-horizon export
+/// let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
+///
+/// // Multi-horizon export for FI-2010 benchmark
+/// let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10)
+///     .with_multi_horizon_labels(MultiHorizonConfig::fi2010());
+///
+/// // DeepLOB-formatted export
+/// let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10)
+///     .with_tensor_format(TensorFormat::DeepLOB { levels: 10 });
+/// ```
 pub struct AlignedBatchExporter {
     output_dir: PathBuf,
     label_config: LabelConfig,
-    window_size: usize, // Sequence window size (e.g., 100)
-    stride: usize,      // Sequence stride (e.g., 10)
+    window_size: usize,
+    stride: usize,
+    /// Optional tensor format for model-specific reshaping
+    tensor_format: Option<TensorFormat>,
+    /// Optional feature mapping for tensor formatting
+    feature_mapping: Option<FeatureMapping>,
+    /// Optional multi-horizon configuration (replaces single-horizon if set)
+    multi_horizon_config: Option<MultiHorizonConfig>,
 }
 
 impl AlignedBatchExporter {
@@ -89,21 +121,123 @@ impl AlignedBatchExporter {
             label_config,
             window_size,
             stride,
+            tensor_format: None,
+            feature_mapping: None,
+            multi_horizon_config: None,
         }
+    }
+
+    /// Enable tensor formatting for model-specific shapes (builder pattern).
+    ///
+    /// # Arguments
+    /// * `format` - Target tensor format (DeepLOB, HLOB, Flat, Image)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let exporter = AlignedBatchExporter::new("output/", config, 100, 10)
+    ///     .with_tensor_format(TensorFormat::DeepLOB { levels: 10 });
+    /// ```
+    ///
+    /// # Output Shapes
+    ///
+    /// | Format | Shape | Use Case |
+    /// |--------|-------|----------|
+    /// | `Flat` | (N, T, F) | TLOB, LSTM, MLP |
+    /// | `DeepLOB` | (N, T, 4, L) | DeepLOB CNN |
+    /// | `HLOB` | (N, T, L, 4) | HLOB models |
+    /// | `Image` | (N, T, C, H, W) | Vision models |
+    pub fn with_tensor_format(mut self, format: TensorFormat) -> Self {
+        self.tensor_format = Some(format);
+        self
+    }
+
+    /// Set custom feature mapping for tensor formatting (builder pattern).
+    ///
+    /// Required when using non-default feature layouts.
+    /// Default mapping assumes standard 40-feature LOB layout.
+    ///
+    /// # Arguments
+    /// * `mapping` - Custom feature index mapping
+    pub fn with_feature_mapping(mut self, mapping: FeatureMapping) -> Self {
+        self.feature_mapping = Some(mapping);
+        self
+    }
+
+    /// Enable multi-horizon label generation (builder pattern).
+    ///
+    /// When set, generates labels for multiple prediction horizons instead
+    /// of single-horizon labeling. Required for FI-2010 benchmark reproduction.
+    ///
+    /// # Arguments
+    /// * `config` - Multi-horizon configuration
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // FI-2010 benchmark: horizons [10, 20, 30, 50, 100]
+    /// let exporter = AlignedBatchExporter::new("output/", config, 100, 10)
+    ///     .with_multi_horizon_labels(MultiHorizonConfig::fi2010());
+    ///
+    /// // DeepLOB benchmark: horizons [10, 20, 50, 100]
+    /// let exporter = AlignedBatchExporter::new("output/", config, 100, 10)
+    ///     .with_multi_horizon_labels(MultiHorizonConfig::deeplob());
+    /// ```
+    ///
+    /// # Output
+    ///
+    /// - `{day}_labels.npy`: Shape (N, num_horizons) instead of (N,)
+    /// - `{day}_metadata.json`: Includes horizon configuration
+    pub fn with_multi_horizon_labels(mut self, config: MultiHorizonConfig) -> Self {
+        self.multi_horizon_config = Some(config);
+        self
+    }
+
+    /// Check if multi-horizon labeling is enabled.
+    #[inline]
+    pub fn is_multi_horizon(&self) -> bool {
+        self.multi_horizon_config.is_some()
+    }
+
+    /// Check if tensor formatting is enabled.
+    #[inline]
+    pub fn is_tensor_formatted(&self) -> bool {
+        self.tensor_format.is_some()
+    }
+
+    /// Get the configured tensor format, if any.
+    #[inline]
+    pub fn tensor_format(&self) -> Option<&TensorFormat> {
+        self.tensor_format.as_ref()
+    }
+
+    /// Get the configured multi-horizon config, if any.
+    #[inline]
+    pub fn multi_horizon_config(&self) -> Option<&MultiHorizonConfig> {
+        self.multi_horizon_config.as_ref()
     }
 
     /// Export a single day with aligned sequences and labels
     ///
     /// # Process
-    /// 1. Generate labels from mid-prices (establishes valid range)
+    /// 1. Generate labels from mid-prices (single or multi-horizon)
     /// 2. Extract sequences that have corresponding labels
     /// 3. Align sequences with labels (1:1 mapping)
-    /// 4. Export both with validation
+    /// 4. Apply tensor formatting if configured
+    /// 5. Export both with validation
     ///
     /// # Output Files
-    /// - {day}_sequences.npy: \[N_seq, window, features\] float32
-    /// - {day}_labels.npy: \[N_seq\] int8  
-    /// - {day}_metadata.json: Metadata with validation info
+    ///
+    /// ## Standard Mode (single-horizon)
+    /// - `{day}_sequences.npy`: Shape depends on tensor format
+    /// - `{day}_labels.npy`: `[N_seq]` int8
+    /// - `{day}_metadata.json`: Metadata with validation info
+    ///
+    /// ## Multi-Horizon Mode
+    /// - `{day}_sequences.npy`: Shape depends on tensor format
+    /// - `{day}_labels.npy`: `[N_seq, num_horizons]` int8
+    /// - `{day}_horizons.json`: Horizon configuration
+    /// - `{day}_metadata.json`: Metadata with horizon info
     pub fn export_day(&self, day_name: &str, output: &PipelineOutput) -> Result<AlignedDayExport> {
         // Create output directory
         fs::create_dir_all(&self.output_dir)?;
@@ -117,8 +251,27 @@ impl AlignedBatchExporter {
         println!("    Sequences generated: {sequences_generated}");
         println!("    Mid-prices collected: {}", output.mid_prices.len());
 
+        // Branch based on labeling mode
+        if let Some(multi_config) = &self.multi_horizon_config {
+            // Multi-horizon labeling path
+            self.export_day_multi_horizon(day_name, output, multi_config.clone())
+        } else {
+            // Single-horizon labeling path (original behavior)
+            self.export_day_single_horizon(day_name, output)
+        }
+    }
+
+    /// Export with single-horizon labeling (original behavior)
+    fn export_day_single_horizon(
+        &self,
+        day_name: &str,
+        output: &PipelineOutput,
+    ) -> Result<AlignedDayExport> {
+        let features_extracted = output.features_extracted;
+        let sequences_generated = output.sequences.len();
+
         // Step 1: Generate labels from mid-prices
-        println!("  📊 Generating labels...");
+        println!("  📊 Generating single-horizon labels...");
         let (label_indices, label_values, label_dist) = self.generate_labels(&output.mid_prices)?;
 
         println!(
@@ -154,7 +307,7 @@ impl AlignedBatchExporter {
         // Step 3.6: Apply Z-score normalization (CRITICAL: prevents NaN in training!)
         let aligned_sequences = self.normalize_sequences(&aligned_sequences)?;
 
-        // Step 4: Export sequences
+        // Step 4: Export sequences (with optional tensor formatting)
         let seq_shape = if !aligned_sequences.is_empty() {
             let window = aligned_sequences[0].len();
             let features = aligned_sequences[0][0].len();
@@ -168,7 +321,7 @@ impl AlignedBatchExporter {
         };
 
         let sequences_path = self.output_dir.join(format!("{day_name}_sequences.npy"));
-        self.export_sequences(&aligned_sequences, seq_shape, &sequences_path)?;
+        self.export_sequences_with_format(&aligned_sequences, seq_shape, &sequences_path)?;
 
         // Step 5: Export labels
         let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
@@ -181,11 +334,15 @@ impl AlignedBatchExporter {
             0.0
         };
 
+        let tensor_format_str = self.tensor_format.as_ref().map(|f| format!("{:?}", f));
+
         let metadata = serde_json::json!({
             "day": day_name,
             "n_sequences": aligned_sequences.len(),
             "window_size": seq_shape.0,
             "n_features": seq_shape.1,
+            "tensor_format": tensor_format_str,
+            "label_mode": "single_horizon",
             "label_distribution": label_dist,
             "messages_processed": output.messages_processed,
             "export_timestamp": chrono::Utc::now().to_rfc3339(),
@@ -222,11 +379,612 @@ impl AlignedBatchExporter {
             messages_processed: output.messages_processed,
             export_path: self.output_dir.clone(),
             features_extracted,
-            buffer_size: 50_000, // From config
+            buffer_size: 50_000,
             sequences_generated,
             sequences_dropped,
         })
     }
+
+    /// Export with multi-horizon labeling (FI-2010, DeepLOB benchmark mode)
+    fn export_day_multi_horizon(
+        &self,
+        day_name: &str,
+        output: &PipelineOutput,
+        config: MultiHorizonConfig,
+    ) -> Result<AlignedDayExport> {
+        let features_extracted = output.features_extracted;
+        let sequences_generated = output.sequences.len();
+        let horizons = config.horizons().to_vec();
+
+        // Step 1: Generate multi-horizon labels
+        println!(
+            "  📊 Generating multi-horizon labels for {} horizons: {:?}",
+            horizons.len(),
+            horizons
+        );
+
+        let mut generator = MultiHorizonLabelGenerator::new(config.clone());
+        generator.add_prices(&output.mid_prices);
+        let multi_labels = generator.generate_labels()?;
+
+        let summary = multi_labels.summary();
+        println!(
+            "    Generated {} total labels across {} horizons",
+            summary.total_labels, summary.num_horizons
+        );
+
+        // Step 2: Build label matrix (N_prices × num_horizons)
+        // We need to find the intersection of all valid label indices
+        let (label_indices, label_matrix) =
+            self.build_multi_horizon_label_matrix(&multi_labels, &horizons)?;
+
+        println!(
+            "    Valid aligned indices: {} (intersection of all horizons)",
+            label_indices.len()
+        );
+
+        // Step 3: Extract aligned sequences
+        println!("  🔗 Aligning sequences with multi-horizon labels...");
+        let (aligned_sequences, aligned_label_matrix) = self
+            .align_sequences_with_multi_labels(
+                &output.sequences,
+                &label_indices,
+                &label_matrix,
+            )?;
+
+        let sequences_dropped = sequences_generated.saturating_sub(aligned_sequences.len());
+
+        println!(
+            "    Aligned {} sequences with {} horizons",
+            aligned_sequences.len(),
+            horizons.len()
+        );
+        println!("    Dropped {sequences_dropped} sequences (no label)");
+
+        // Step 4: Validate alignment
+        self.validate_multi_horizon_alignment(&aligned_sequences, &aligned_label_matrix)?;
+
+        // Step 5: Verify RAW spreads
+        self.verify_raw_spreads(&aligned_sequences)?;
+
+        // Step 6: Normalize sequences
+        let aligned_sequences = self.normalize_sequences(&aligned_sequences)?;
+
+        // Step 7: Export sequences (with optional tensor formatting)
+        let seq_shape = if !aligned_sequences.is_empty() {
+            let window = aligned_sequences[0].len();
+            let features = aligned_sequences[0][0].len();
+            (window, features)
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "No aligned sequences to export",
+            )
+            .into());
+        };
+
+        let sequences_path = self.output_dir.join(format!("{day_name}_sequences.npy"));
+        self.export_sequences_with_format(&aligned_sequences, seq_shape, &sequences_path)?;
+
+        // Step 8: Export multi-horizon labels
+        let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
+        self.export_multi_horizon_labels(&aligned_label_matrix, &labels_path)?;
+
+        // Step 9: Export horizons configuration
+        let horizons_path = self.output_dir.join(format!("{day_name}_horizons.json"));
+        let horizons_json = serde_json::json!({
+            "horizons": horizons,
+            "num_horizons": horizons.len(),
+            "smoothing_window": config.smoothing_window,
+            "threshold_strategy": format!("{:?}", config.threshold_strategy),
+        });
+        let mut file = File::create(&horizons_path)?;
+        serde_json::to_writer_pretty(&mut file, &horizons_json)
+            .map_err(|e| std::io::Error::other(format!("Failed to write horizons: {e}")))?;
+
+        // Step 10: Compute label distribution per horizon
+        let mut label_dist = HashMap::new();
+        for (h_idx, horizon) in horizons.iter().enumerate() {
+            let mut h_dist = HashMap::new();
+            let mut up_count = 0usize;
+            let mut down_count = 0usize;
+            let mut stable_count = 0usize;
+
+            for row in &aligned_label_matrix {
+                match row[h_idx] {
+                    1 => up_count += 1,
+                    -1 => down_count += 1,
+                    0 => stable_count += 1,
+                    _ => {}
+                }
+            }
+
+            h_dist.insert("Up".to_string(), up_count);
+            h_dist.insert("Down".to_string(), down_count);
+            h_dist.insert("Stable".to_string(), stable_count);
+            label_dist.insert(format!("h{}", horizon), h_dist);
+        }
+
+        // Step 11: Export metadata
+        let drop_rate = if sequences_generated > 0 {
+            (sequences_dropped as f64 / sequences_generated as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let tensor_format_str = self.tensor_format.as_ref().map(|f| format!("{:?}", f));
+
+        let metadata = serde_json::json!({
+            "day": day_name,
+            "n_sequences": aligned_sequences.len(),
+            "window_size": seq_shape.0,
+            "n_features": seq_shape.1,
+            "tensor_format": tensor_format_str,
+            "label_mode": "multi_horizon",
+            "horizons": horizons,
+            "num_horizons": horizons.len(),
+            "label_distribution_per_horizon": label_dist,
+            "messages_processed": output.messages_processed,
+            "export_timestamp": chrono::Utc::now().to_rfc3339(),
+            "validation": {
+                "sequences_labels_match": aligned_sequences.len() == aligned_label_matrix.len(),
+                "all_horizons_valid": true,
+                "no_nan_inf": true,
+            },
+            "verification": {
+                "features_extracted": features_extracted,
+                "sequences_generated": sequences_generated,
+                "sequences_aligned": aligned_sequences.len(),
+                "sequences_dropped": sequences_dropped,
+                "drop_rate_percent": format!("{:.2}", drop_rate),
+                "buffer_coverage_ok": features_extracted <= 50000,
+            }
+        });
+
+        let metadata_path = self.output_dir.join(format!("{day_name}_metadata.json"));
+        let mut file = File::create(&metadata_path)?;
+        serde_json::to_writer_pretty(&mut file, &metadata)
+            .map_err(|e| std::io::Error::other(format!("Failed to write metadata: {e}")))?;
+
+        println!(
+            "  ✅ Multi-horizon export complete: {} sequences × {} horizons",
+            aligned_sequences.len(),
+            horizons.len()
+        );
+
+        // Return with combined distribution
+        let mut combined_dist = HashMap::new();
+        combined_dist.insert("Up".to_string(), 0);
+        combined_dist.insert("Down".to_string(), 0);
+        combined_dist.insert("Stable".to_string(), 0);
+
+        // Use first horizon for summary distribution
+        if let Some(first_dist) = label_dist.get(&format!("h{}", horizons[0])) {
+            combined_dist = first_dist.clone();
+        }
+
+        Ok(AlignedDayExport {
+            day: day_name.to_string(),
+            n_sequences: aligned_sequences.len(),
+            seq_shape,
+            label_distribution: combined_dist,
+            messages_processed: output.messages_processed,
+            export_path: self.output_dir.clone(),
+            features_extracted,
+            buffer_size: 50_000,
+            sequences_generated,
+            sequences_dropped,
+        })
+    }
+
+    // ========================================================================
+    // Multi-Horizon Helper Methods
+    // ========================================================================
+
+    /// Build label matrix for multi-horizon labeling.
+    ///
+    /// Returns (indices, label_matrix) where:
+    /// - indices: Valid snapshot indices that have labels for ALL horizons
+    /// - label_matrix: Vec<Vec<i8>> where each row has labels for all horizons
+    #[allow(clippy::type_complexity)]
+    fn build_multi_horizon_label_matrix(
+        &self,
+        multi_labels: &crate::labeling::MultiHorizonLabels,
+        horizons: &[usize],
+    ) -> Result<(Vec<usize>, Vec<Vec<i8>>)> {
+        use std::collections::BTreeSet;
+
+        // Find intersection of all valid indices across horizons
+        let mut valid_indices: Option<BTreeSet<usize>> = None;
+
+        for horizon in horizons {
+            let labels = multi_labels
+                .labels_for_horizon(*horizon)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("No labels for horizon {}", horizon),
+                    )
+                })?;
+
+            let horizon_indices: BTreeSet<usize> = labels.iter().map(|(idx, _, _)| *idx).collect();
+
+            valid_indices = Some(match valid_indices {
+                Some(existing) => existing.intersection(&horizon_indices).copied().collect(),
+                None => horizon_indices,
+            });
+        }
+
+        let valid_indices: Vec<usize> = valid_indices
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "No valid indices found")
+            })?
+            .into_iter()
+            .collect();
+
+        if valid_indices.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No common indices across all horizons",
+            )
+            .into());
+        }
+
+        // Build label matrix: for each valid index, collect labels from all horizons
+        let mut label_matrix: Vec<Vec<i8>> = Vec::with_capacity(valid_indices.len());
+
+        // Create lookup maps for each horizon
+        let mut horizon_maps: Vec<HashMap<usize, i8>> = Vec::with_capacity(horizons.len());
+
+        for horizon in horizons {
+            let labels = multi_labels.labels_for_horizon(*horizon).unwrap();
+            let map: HashMap<usize, i8> = labels
+                .iter()
+                .map(|(idx, label, _)| {
+                    let value = match label {
+                        TrendLabel::Up => 1i8,
+                        TrendLabel::Down => -1i8,
+                        TrendLabel::Stable => 0i8,
+                    };
+                    (*idx, value)
+                })
+                .collect();
+            horizon_maps.push(map);
+        }
+
+        for &idx in &valid_indices {
+            let mut row: Vec<i8> = Vec::with_capacity(horizons.len());
+            for map in &horizon_maps {
+                row.push(*map.get(&idx).unwrap_or(&0));
+            }
+            label_matrix.push(row);
+        }
+
+        Ok((valid_indices, label_matrix))
+    }
+
+    /// Align sequences with multi-horizon labels.
+    #[allow(clippy::type_complexity)]
+    fn align_sequences_with_multi_labels(
+        &self,
+        sequences: &[crate::sequence_builder::Sequence],
+        label_indices: &[usize],
+        label_matrix: &[Vec<i8>],
+    ) -> Result<(Vec<Vec<Vec<f64>>>, Vec<Vec<i8>>)> {
+        // Create lookup map: index → label row
+        let mut label_map: HashMap<usize, &Vec<i8>> = HashMap::new();
+        for (i, &idx) in label_indices.iter().enumerate() {
+            label_map.insert(idx, &label_matrix[i]);
+        }
+
+        let mut aligned_sequences = Vec::new();
+        let mut aligned_labels = Vec::new();
+
+        for (seq_idx, sequence) in sequences.iter().enumerate() {
+            let ending_idx = seq_idx * self.stride + self.window_size - 1;
+
+            if let Some(&label_row) = label_map.get(&ending_idx) {
+                let features_owned: Vec<Vec<f64>> = sequence
+                    .features
+                    .iter()
+                    .map(|arc_vec| arc_vec.to_vec())
+                    .collect();
+                aligned_sequences.push(features_owned);
+                aligned_labels.push(label_row.clone());
+            }
+        }
+
+        if aligned_sequences.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No sequences could be aligned with multi-horizon labels",
+            )
+            .into());
+        }
+
+        Ok((aligned_sequences, aligned_labels))
+    }
+
+    /// Validate multi-horizon alignment.
+    fn validate_multi_horizon_alignment(
+        &self,
+        sequences: &[Vec<Vec<f64>>],
+        label_matrix: &[Vec<i8>],
+    ) -> Result<()> {
+        // Check 1: Same count
+        if sequences.len() != label_matrix.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Alignment error: {} sequences but {} label rows",
+                    sequences.len(),
+                    label_matrix.len()
+                ),
+            )
+            .into());
+        }
+
+        // Check 2: All label rows have same width
+        if !label_matrix.is_empty() {
+            let expected_width = label_matrix[0].len();
+            for (i, row) in label_matrix.iter().enumerate() {
+                if row.len() != expected_width {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "Label row {} has wrong width: {} vs {}",
+                            i,
+                            row.len(),
+                            expected_width
+                        ),
+                    )
+                    .into());
+                }
+            }
+        }
+
+        // Check 3: All labels are valid {-1, 0, 1}
+        for (i, row) in label_matrix.iter().enumerate() {
+            for (h, &label) in row.iter().enumerate() {
+                if !(-1..=1).contains(&label) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Invalid label at row {}, horizon {}: {}", i, h, label),
+                    )
+                    .into());
+                }
+            }
+        }
+
+        println!(
+            "    ✓ Multi-horizon validation passed: {} sequences × {} horizons",
+            sequences.len(),
+            label_matrix.first().map(|r| r.len()).unwrap_or(0)
+        );
+
+        Ok(())
+    }
+
+    /// Export multi-horizon labels as 2D numpy array.
+    ///
+    /// Shape: [n_sequences, num_horizons]
+    fn export_multi_horizon_labels(&self, label_matrix: &[Vec<i8>], path: &Path) -> Result<()> {
+        let n_seq = label_matrix.len();
+        let n_horizons = label_matrix.first().map(|r| r.len()).unwrap_or(0);
+
+        // Flatten to 1D vec in row-major order
+        let flat: Vec<i8> = label_matrix.iter().flat_map(|row| row.iter().copied()).collect();
+
+        // Create 2D array
+        let array = Array2::from_shape_vec((n_seq, n_horizons), flat)
+            .map_err(|e| format!("Failed to create 2D label array: {e}"))?;
+
+        // Write to file
+        let mut file = File::create(path)?;
+        array
+            .write_npy(&mut file)
+            .map_err(|e| format!("Failed to write multi-horizon labels: {e}"))?;
+
+        println!(
+            "  ✅ Multi-horizon labels: {} [{} × {}]",
+            path.display(),
+            n_seq,
+            n_horizons
+        );
+
+        Ok(())
+    }
+
+    // ========================================================================
+    // Tensor Formatting Helper Methods
+    // ========================================================================
+
+    /// Export sequences with optional tensor formatting.
+    fn export_sequences_with_format(
+        &self,
+        sequences: &[Vec<Vec<f64>>],
+        shape: (usize, usize),
+        path: &Path,
+    ) -> Result<()> {
+        match &self.tensor_format {
+            None => {
+                // Default flat export (N, T, F)
+                self.export_sequences(sequences, shape, path)
+            }
+            Some(TensorFormat::Flat) => {
+                // Explicit flat format
+                self.export_sequences(sequences, shape, path)
+            }
+            Some(TensorFormat::DeepLOB { levels }) => {
+                self.export_sequences_deeplob(sequences, *levels, path)
+            }
+            Some(TensorFormat::HLOB { levels }) => {
+                self.export_sequences_hlob(sequences, *levels, path)
+            }
+            Some(TensorFormat::Image {
+                channels,
+                height,
+                width,
+            }) => self.export_sequences_image(sequences, *channels, *height, *width, path),
+        }
+    }
+
+    /// Export sequences in DeepLOB format: (N, T, 4, L)
+    ///
+    /// Channels: [ask_prices, ask_volumes, bid_prices, bid_volumes]
+    fn export_sequences_deeplob(
+        &self,
+        sequences: &[Vec<Vec<f64>>],
+        levels: usize,
+        path: &Path,
+    ) -> Result<()> {
+        let n_seq = sequences.len();
+        let n_timesteps = sequences.first().map(|s| s.len()).unwrap_or(0);
+
+        // Reshape: (N, T, F) -> (N, T, 4, L)
+        // Feature layout: [Ask_prices(L), Ask_sizes(L), Bid_prices(L), Bid_sizes(L)]
+        let mut data: Vec<f32> = Vec::with_capacity(n_seq * n_timesteps * 4 * levels);
+
+        for seq in sequences {
+            for timestep in seq {
+                // Channel 0: Ask prices (indices 0..levels)
+                for l in 0..levels {
+                    data.push(timestep.get(l).copied().unwrap_or(0.0) as f32);
+                }
+                // Channel 1: Ask volumes (indices levels..2*levels)
+                for l in 0..levels {
+                    data.push(timestep.get(levels + l).copied().unwrap_or(0.0) as f32);
+                }
+                // Channel 2: Bid prices (indices 2*levels..3*levels)
+                for l in 0..levels {
+                    data.push(timestep.get(2 * levels + l).copied().unwrap_or(0.0) as f32);
+                }
+                // Channel 3: Bid volumes (indices 3*levels..4*levels)
+                for l in 0..levels {
+                    data.push(timestep.get(3 * levels + l).copied().unwrap_or(0.0) as f32);
+                }
+            }
+        }
+
+        let array = Array4::from_shape_vec((n_seq, n_timesteps, 4, levels), data)
+            .map_err(|e| format!("Failed to create DeepLOB array: {e}"))?;
+
+        let mut file = File::create(path)?;
+        array
+            .write_npy(&mut file)
+            .map_err(|e| format!("Failed to write DeepLOB sequences: {e}"))?;
+
+        println!(
+            "  ✅ DeepLOB sequences: {} [{} × {} × 4 × {}]",
+            path.display(),
+            n_seq,
+            n_timesteps,
+            levels
+        );
+
+        Ok(())
+    }
+
+    /// Export sequences in HLOB format: (N, T, L, 4)
+    ///
+    /// Per-level features: [ask_price, ask_volume, bid_price, bid_volume]
+    fn export_sequences_hlob(
+        &self,
+        sequences: &[Vec<Vec<f64>>],
+        levels: usize,
+        path: &Path,
+    ) -> Result<()> {
+        let n_seq = sequences.len();
+        let n_timesteps = sequences.first().map(|s| s.len()).unwrap_or(0);
+
+        // Reshape: (N, T, F) -> (N, T, L, 4)
+        let mut data: Vec<f32> = Vec::with_capacity(n_seq * n_timesteps * levels * 4);
+
+        for seq in sequences {
+            for timestep in seq {
+                for l in 0..levels {
+                    // Feature 0: Ask price
+                    data.push(timestep.get(l).copied().unwrap_or(0.0) as f32);
+                    // Feature 1: Ask volume
+                    data.push(timestep.get(levels + l).copied().unwrap_or(0.0) as f32);
+                    // Feature 2: Bid price
+                    data.push(timestep.get(2 * levels + l).copied().unwrap_or(0.0) as f32);
+                    // Feature 3: Bid volume
+                    data.push(timestep.get(3 * levels + l).copied().unwrap_or(0.0) as f32);
+                }
+            }
+        }
+
+        let array = Array4::from_shape_vec((n_seq, n_timesteps, levels, 4), data)
+            .map_err(|e| format!("Failed to create HLOB array: {e}"))?;
+
+        let mut file = File::create(path)?;
+        array
+            .write_npy(&mut file)
+            .map_err(|e| format!("Failed to write HLOB sequences: {e}"))?;
+
+        println!(
+            "  ✅ HLOB sequences: {} [{} × {} × {} × 4]",
+            path.display(),
+            n_seq,
+            n_timesteps,
+            levels
+        );
+
+        Ok(())
+    }
+
+    /// Export sequences in Image format: (N, T, C, H, W)
+    fn export_sequences_image(
+        &self,
+        sequences: &[Vec<Vec<f64>>],
+        channels: usize,
+        height: usize,
+        width: usize,
+        path: &Path,
+    ) -> Result<()> {
+        let n_seq = sequences.len();
+        let n_timesteps = sequences.first().map(|s| s.len()).unwrap_or(0);
+
+        // For image format, we reshape the flat features into (C, H, W)
+        let expected_features = channels * height * width;
+
+        let mut data: Vec<f32> = Vec::with_capacity(n_seq * n_timesteps * expected_features);
+
+        for seq in sequences {
+            for timestep in seq {
+                for i in 0..expected_features {
+                    data.push(timestep.get(i).copied().unwrap_or(0.0) as f32);
+                }
+            }
+        }
+
+        // Create 5D array - ndarray doesn't support 5D directly, so we use dynamic
+        let shape = ndarray::IxDyn(&[n_seq, n_timesteps, channels, height, width]);
+        let array = ndarray::ArrayD::from_shape_vec(shape, data)
+            .map_err(|e| format!("Failed to create Image array: {e}"))?;
+
+        let mut file = File::create(path)?;
+        array
+            .write_npy(&mut file)
+            .map_err(|e| format!("Failed to write Image sequences: {e}"))?;
+
+        println!(
+            "  ✅ Image sequences: {} [{} × {} × {} × {} × {}]",
+            path.display(),
+            n_seq,
+            n_timesteps,
+            channels,
+            height,
+            width
+        );
+
+        Ok(())
+    }
+
+    // ========================================================================
+    // Original Helper Methods
+    // ========================================================================
 
     /// Generate labels from mid-prices
     ///

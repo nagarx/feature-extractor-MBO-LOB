@@ -80,7 +80,7 @@ use crate::config::{
 use crate::features::FeatureConfig;
 use crate::pipeline::Pipeline;
 use crate::schema::Preset;
-use crate::sequence_builder::SequenceConfig;
+use crate::sequence_builder::{HorizonAwareConfig, SequenceConfig};
 use mbo_lob_reconstructor::Result;
 
 /// Fluent builder for creating pipeline configurations.
@@ -296,6 +296,78 @@ impl PipelineBuilder {
     /// Default: max(window_size, 1000).
     pub fn max_buffer(mut self, size: usize) -> Self {
         self.max_buffer_size = Some(size);
+        self
+    }
+
+    /// Configure window and stride automatically based on prediction horizon.
+    ///
+    /// This uses research-backed scaling formulas from TLOB/PatchTST papers
+    /// to set appropriate lookback windows based on prediction horizon.
+    ///
+    /// # Formula
+    ///
+    /// - `lookback_window = max(base_window, horizon × scaling_factor)`
+    /// - `stride = lookback_window / target_sequence_length`
+    ///
+    /// # Default Parameters
+    ///
+    /// - Base window: 100 (minimum context)
+    /// - Scaling factor: 10.0 (10× ratio from TLOB research)
+    /// - Target sequence length: 100 (controls output samples)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::PipelineBuilder;
+    ///
+    /// // Short-term prediction (10 events ahead)
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_horizon_aware(10)  // window=100, stride=1
+    ///     .build()?;
+    ///
+    /// // Medium-term prediction (50 events ahead)
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_horizon_aware(50)  // window=500, stride=5
+    ///     .build()?;
+    ///
+    /// // Long-term prediction (100 events ahead)
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_horizon_aware(100)  // window=1000, stride=10
+    ///     .build()?;
+    /// ```
+    ///
+    /// # Research Reference
+    ///
+    /// - TLOB paper: "10× lookback-to-horizon ratio captures sufficient context"
+    /// - PatchTST: "Longer patches for longer horizons improve forecasting"
+    pub fn with_horizon_aware(mut self, horizon: usize) -> Self {
+        let config = HorizonAwareConfig::new(horizon);
+        self.window_size = config.lookback_window();
+        self.stride = config.optimal_stride();
+        self
+    }
+
+    /// Configure window and stride with custom horizon-aware settings.
+    ///
+    /// Use this when you need fine-grained control over the scaling parameters.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::prelude::*;
+    ///
+    /// // Conservative scaling (5× ratio instead of 10×)
+    /// let config = HorizonAwareConfig::new(50)
+    ///     .with_scaling(5.0)
+    ///     .with_bounds(100, 2000);
+    ///
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_horizon_aware_config(config)
+    ///     .build()?;
+    /// ```
+    pub fn with_horizon_aware_config(mut self, config: HorizonAwareConfig) -> Self {
+        self.window_size = config.lookback_window();
+        self.stride = config.optimal_stride();
         self
     }
 
@@ -704,5 +776,71 @@ mod tests {
         let result = PipelineBuilder::new().lob_levels(0).build_config();
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_builder_with_horizon_aware_short() {
+        // Short horizon: should use base window
+        let builder = PipelineBuilder::new().with_horizon_aware(10);
+        assert_eq!(builder.window_size, 100); // Base window
+        assert_eq!(builder.stride, 1); // 100 / 100 = 1
+    }
+
+    #[test]
+    fn test_builder_with_horizon_aware_medium() {
+        // Medium horizon: should scale
+        let builder = PipelineBuilder::new().with_horizon_aware(50);
+        assert_eq!(builder.window_size, 500); // 50 × 10
+        assert_eq!(builder.stride, 5); // 500 / 100 = 5
+    }
+
+    #[test]
+    fn test_builder_with_horizon_aware_long() {
+        // Long horizon: should scale
+        let builder = PipelineBuilder::new().with_horizon_aware(100);
+        assert_eq!(builder.window_size, 1000); // 100 × 10
+        assert_eq!(builder.stride, 10); // 1000 / 100 = 10
+    }
+
+    #[test]
+    fn test_builder_with_horizon_aware_config() {
+        // Custom config with different scaling
+        let config = HorizonAwareConfig::new(50).with_scaling(5.0);
+        let builder = PipelineBuilder::new().with_horizon_aware_config(config);
+        assert_eq!(builder.window_size, 250); // 50 × 5
+        assert_eq!(builder.stride, 2); // 250 / 100 = 2
+    }
+
+    #[test]
+    fn test_builder_with_horizon_aware_fi2010() {
+        // FI-2010 uses horizon 100
+        let builder = PipelineBuilder::from_preset(Preset::FI2010).with_horizon_aware(100);
+
+        assert_eq!(builder.window_size, 1000);
+        assert_eq!(builder.stride, 10);
+        assert!(builder.features.include_derived);
+    }
+
+    #[test]
+    fn test_builder_with_horizon_aware_bounds() {
+        // Very long horizon should be bounded
+        let config = HorizonAwareConfig::new(1000).with_bounds(100, 2000);
+        let builder = PipelineBuilder::new().with_horizon_aware_config(config);
+        assert_eq!(builder.window_size, 2000); // Clamped to max
+    }
+
+    #[test]
+    fn test_builder_horizon_aware_chaining() {
+        // Should chain with other methods
+        let builder = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_derived_features()
+            .with_horizon_aware(50)
+            .volume_sampling(1000);
+
+        assert_eq!(builder.window_size, 500);
+        assert_eq!(builder.stride, 5);
+        assert!(builder.features.include_derived);
+        assert_eq!(builder.feature_count(), 48);
     }
 }

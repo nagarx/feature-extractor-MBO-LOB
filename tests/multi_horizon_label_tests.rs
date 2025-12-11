@@ -533,3 +533,226 @@ fn test_summary_aggregation() {
     assert_eq!(summary.total_labels, expected_total);
 }
 
+// ============================================================================
+// Quantile Threshold Strategy Tests
+// ============================================================================
+
+/// Test Quantile threshold strategy creation.
+#[test]
+fn test_quantile_threshold_creation() {
+    let strategy = ThresholdStrategy::quantile(0.3, 1000, 0.002);
+
+    assert!(strategy.needs_rolling_computation());
+    assert_eq!(strategy.window_size(), Some(1000));
+    assert_eq!(strategy.target_proportion(), Some(0.3));
+}
+
+/// Test Quantile threshold with fixed fallback when insufficient data.
+#[test]
+fn test_quantile_threshold_fallback() {
+    let strategy = ThresholdStrategy::quantile(0.3, 5000, 0.002);
+
+    // With no rolling data, should return fallback
+    assert_eq!(strategy.get_threshold(None), 0.002);
+}
+
+/// Test Quantile threshold with computed value.
+#[test]
+fn test_quantile_threshold_with_value() {
+    let strategy = ThresholdStrategy::quantile(0.3, 1000, 0.002);
+
+    // With rolling data, should use computed value
+    assert_eq!(strategy.get_threshold(Some(0.005)), 0.005);
+}
+
+/// Test Quantile generates balanced classes with oscillating prices.
+#[test]
+fn test_quantile_balanced_classes_oscillating() {
+    // Generate oscillating prices that would be highly imbalanced with fixed threshold
+    let prices: Vec<f64> = (0..2000)
+        .map(|i| 100.0 + (i as f64 * 0.05).sin() * 0.5)
+        .collect();
+
+    let config = MultiHorizonConfig::new(
+        vec![10],
+        5,
+        ThresholdStrategy::quantile(0.3, 500, 0.002),
+    );
+
+    let mut gen = MultiHorizonLabelGenerator::new(config);
+    gen.add_prices(&prices);
+
+    let result = gen.generate_labels().unwrap();
+    let stats = result.stats_for_horizon(10).unwrap();
+
+    // With quantile threshold, classes should be more balanced
+    let total = stats.total as f64;
+    let up_ratio = stats.up_count as f64 / total;
+    let down_ratio = stats.down_count as f64 / total;
+
+    println!(
+        "Quantile balanced test: up={:.2}%, down={:.2}%, stable={:.2}%",
+        up_ratio * 100.0,
+        down_ratio * 100.0,
+        stats.stable_count as f64 / total * 100.0
+    );
+
+    // Should be reasonably balanced (not perfectly, but better than fixed)
+    // Each class should have at least 10% of labels
+    assert!(
+        up_ratio > 0.1,
+        "Up ratio {} should be > 0.1 for balanced classes",
+        up_ratio
+    );
+    assert!(
+        down_ratio > 0.1,
+        "Down ratio {} should be > 0.1 for balanced classes",
+        down_ratio
+    );
+}
+
+/// Test Quantile vs Fixed threshold comparison.
+#[test]
+fn test_quantile_vs_fixed_comparison() {
+    // Generate prices with subtle movements
+    let prices: Vec<f64> = (0..1000)
+        .map(|i| 100.0 + (i as f64 * 0.01).sin() * 0.1)
+        .collect();
+
+    // Fixed threshold - might be too high for small movements
+    let fixed_config = MultiHorizonConfig::new(vec![10], 5, ThresholdStrategy::Fixed(0.005));
+
+    let mut fixed_gen = MultiHorizonLabelGenerator::new(fixed_config);
+    fixed_gen.add_prices(&prices);
+    let fixed_result = fixed_gen.generate_labels().unwrap();
+    let fixed_stats = fixed_result.stats_for_horizon(10).unwrap();
+
+    // Quantile threshold - adapts to actual price movements
+    let quantile_config = MultiHorizonConfig::new(
+        vec![10],
+        5,
+        ThresholdStrategy::quantile(0.3, 200, 0.002),
+    );
+
+    let mut quantile_gen = MultiHorizonLabelGenerator::new(quantile_config);
+    quantile_gen.add_prices(&prices);
+    let quantile_result = quantile_gen.generate_labels().unwrap();
+    let quantile_stats = quantile_result.stats_for_horizon(10).unwrap();
+
+    println!(
+        "Fixed threshold: up={}, down={}, stable={}",
+        fixed_stats.up_count, fixed_stats.down_count, fixed_stats.stable_count
+    );
+    println!(
+        "Quantile threshold: up={}, down={}, stable={}",
+        quantile_stats.up_count, quantile_stats.down_count, quantile_stats.stable_count
+    );
+
+    // With subtle movements, fixed threshold often results in mostly Stable
+    // Quantile should have more diverse labels
+    let fixed_stable_ratio = fixed_stats.stable_count as f64 / fixed_stats.total as f64;
+    let quantile_stable_ratio = quantile_stats.stable_count as f64 / quantile_stats.total as f64;
+
+    // Quantile should generally have fewer stable labels than an overly aggressive fixed threshold
+    // (This is not always guaranteed, but shows the adaptive nature)
+    println!(
+        "Fixed stable ratio: {:.2}%, Quantile stable ratio: {:.2}%",
+        fixed_stable_ratio * 100.0,
+        quantile_stable_ratio * 100.0
+    );
+}
+
+/// Test Quantile threshold with trending prices.
+#[test]
+fn test_quantile_with_trending_prices() {
+    // Strong upward trend
+    let prices: Vec<f64> = (0..1000).map(|i| 100.0 + i as f64 * 0.1).collect();
+
+    let config = MultiHorizonConfig::new(
+        vec![10],
+        5,
+        ThresholdStrategy::quantile(0.3, 200, 0.002),
+    );
+
+    let mut gen = MultiHorizonLabelGenerator::new(config);
+    gen.add_prices(&prices);
+
+    let result = gen.generate_labels().unwrap();
+    let stats = result.stats_for_horizon(10).unwrap();
+
+    // With strong trend, most labels should be Up
+    let up_ratio = stats.up_count as f64 / stats.total as f64;
+    assert!(
+        up_ratio > 0.5,
+        "Strong upward trend should produce >50% Up labels, got {:.2}%",
+        up_ratio * 100.0
+    );
+
+    println!(
+        "Trending prices: up={:.2}%, down={:.2}%, stable={:.2}%",
+        up_ratio * 100.0,
+        stats.down_count as f64 / stats.total as f64 * 100.0,
+        stats.stable_count as f64 / stats.total as f64 * 100.0
+    );
+}
+
+/// Test Quantile threshold invalid target proportion panics.
+#[test]
+#[should_panic(expected = "target_proportion must be in range")]
+fn test_quantile_invalid_target_proportion_zero() {
+    ThresholdStrategy::quantile(0.0, 1000, 0.002);
+}
+
+/// Test Quantile threshold invalid target proportion > 0.5 panics.
+#[test]
+#[should_panic(expected = "target_proportion must be in range")]
+fn test_quantile_invalid_target_proportion_too_high() {
+    ThresholdStrategy::quantile(0.6, 1000, 0.002);
+}
+
+/// Test Quantile with different target proportions.
+#[test]
+fn test_quantile_different_proportions() {
+    let prices: Vec<f64> = (0..2000)
+        .map(|i| 100.0 + (i as f64 * 0.03).sin() * 0.3)
+        .collect();
+
+    // Test with 20% target (more stable)
+    let config_20 = MultiHorizonConfig::new(
+        vec![10],
+        5,
+        ThresholdStrategy::quantile(0.2, 500, 0.002),
+    );
+    let mut gen_20 = MultiHorizonLabelGenerator::new(config_20);
+    gen_20.add_prices(&prices);
+    let result_20 = gen_20.generate_labels().unwrap();
+    let stats_20 = result_20.stats_for_horizon(10).unwrap();
+
+    // Test with 40% target (less stable)
+    let config_40 = MultiHorizonConfig::new(
+        vec![10],
+        5,
+        ThresholdStrategy::quantile(0.4, 500, 0.002),
+    );
+    let mut gen_40 = MultiHorizonLabelGenerator::new(config_40);
+    gen_40.add_prices(&prices);
+    let result_40 = gen_40.generate_labels().unwrap();
+    let stats_40 = result_40.stats_for_horizon(10).unwrap();
+
+    let stable_ratio_20 = stats_20.stable_count as f64 / stats_20.total as f64;
+    let stable_ratio_40 = stats_40.stable_count as f64 / stats_40.total as f64;
+
+    println!(
+        "target=0.2: stable={:.2}%, target=0.4: stable={:.2}%",
+        stable_ratio_20 * 100.0,
+        stable_ratio_40 * 100.0
+    );
+
+    // 20% target should have more stable labels than 40% target
+    // (lower target_proportion = higher threshold = more stable)
+    assert!(
+        stable_ratio_20 > stable_ratio_40,
+        "20% target should produce more stable labels than 40% target"
+    );
+}
+

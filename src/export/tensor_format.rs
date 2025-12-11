@@ -736,21 +736,19 @@ impl TensorFormatter {
             let timestep = &features[t];
 
             for l in 0..levels {
+                let base_idx = t * 4 * levels;
+                
                 // Channel 0: ask_price
-                let idx_ask_p = t * 4 * levels + 0 * levels + l;
-                data[idx_ask_p] = timestep[self.mapping.ask_price_index(l)];
+                data[base_idx + l] = timestep[self.mapping.ask_price_index(l)];
 
                 // Channel 1: ask_vol
-                let idx_ask_v = t * 4 * levels + 1 * levels + l;
-                data[idx_ask_v] = timestep[self.mapping.ask_size_index(l)];
+                data[base_idx + levels + l] = timestep[self.mapping.ask_size_index(l)];
 
                 // Channel 2: bid_price
-                let idx_bid_p = t * 4 * levels + 2 * levels + l;
-                data[idx_bid_p] = timestep[self.mapping.bid_price_index(l)];
+                data[base_idx + 2 * levels + l] = timestep[self.mapping.bid_price_index(l)];
 
                 // Channel 3: bid_vol
-                let idx_bid_v = t * 4 * levels + 3 * levels + l;
-                data[idx_bid_v] = timestep[self.mapping.bid_size_index(l)];
+                data[base_idx + 3 * levels + l] = timestep[self.mapping.bid_size_index(l)];
             }
         }
 

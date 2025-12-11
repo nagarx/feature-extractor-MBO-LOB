@@ -63,6 +63,7 @@ use std::collections::BTreeMap;
 ///
 /// - **Fixed**: Standard fixed percentage (DeepLOB default: 0.002)
 /// - **RollingSpread**: Adaptive based on spread (TLOB paper Section 4.1.3)
+/// - **Quantile**: Balanced class distribution via rolling quantiles
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ThresholdStrategy {
     /// Fixed percentage threshold.
@@ -94,6 +95,46 @@ pub enum ThresholdStrategy {
         multiplier: f64,
         fallback: f64,
     },
+
+    /// Quantile-based threshold for balanced class distribution.
+    ///
+    /// Computes the threshold from the quantile of absolute percentage changes
+    /// in a rolling window. This ensures roughly equal proportions of
+    /// Up/Down/Stable labels regardless of market volatility.
+    ///
+    /// # Parameters
+    ///
+    /// - `target_proportion`: Target proportion for up/down classes (e.g., 0.3 for 30%)
+    /// - `window_size`: Number of samples for quantile computation
+    /// - `fallback`: Fallback threshold when insufficient data
+    ///
+    /// # Research Reference
+    ///
+    /// Balanced class distribution is critical for training:
+    /// - Imbalanced datasets lead to biased models
+    /// - Quantile-based thresholds adapt to market conditions
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::labeling::ThresholdStrategy;
+    ///
+    /// // Target 30% up, 30% down, 40% stable
+    /// let strategy = ThresholdStrategy::Quantile {
+    ///     target_proportion: 0.3,
+    ///     window_size: 5000,
+    ///     fallback: 0.002,
+    /// };
+    /// ```
+    Quantile {
+        /// Target proportion for up/down classes (0.0 to 0.5)
+        /// Example: 0.3 means ~30% Up, ~30% Down, ~40% Stable
+        target_proportion: f64,
+        /// Number of samples for quantile computation
+        window_size: usize,
+        /// Fallback threshold when insufficient data
+        fallback: f64,
+    },
 }
 
 impl ThresholdStrategy {
@@ -101,17 +142,22 @@ impl ThresholdStrategy {
     ///
     /// # Arguments
     ///
-    /// * `rolling_spread_pct` - Current rolling spread as percentage (for RollingSpread)
-    pub fn get_threshold(&self, rolling_spread_pct: Option<f64>) -> f64 {
+    /// * `rolling_value` - Rolling value for adaptive strategies:
+    ///   - For `RollingSpread`: rolling spread as percentage
+    ///   - For `Quantile`: computed quantile threshold
+    pub fn get_threshold(&self, rolling_value: Option<f64>) -> f64 {
         match self {
             ThresholdStrategy::Fixed(threshold) => *threshold,
             ThresholdStrategy::RollingSpread {
                 multiplier,
                 fallback,
                 ..
-            } => rolling_spread_pct
+            } => rolling_value
                 .map(|s| s * multiplier)
                 .unwrap_or(*fallback),
+            ThresholdStrategy::Quantile { fallback, .. } => {
+                rolling_value.unwrap_or(*fallback)
+            }
         }
     }
 
@@ -126,6 +172,57 @@ impl ThresholdStrategy {
             window_size,
             multiplier,
             fallback,
+        }
+    }
+
+    /// Create a quantile-based threshold strategy for balanced classes.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_proportion` - Target proportion for up/down classes (0.0 to 0.5)
+    /// * `window_size` - Number of samples for quantile computation
+    /// * `fallback` - Fallback threshold when insufficient data
+    ///
+    /// # Panics
+    ///
+    /// Panics if `target_proportion` is not in range (0.0, 0.5].
+    pub fn quantile(target_proportion: f64, window_size: usize, fallback: f64) -> Self {
+        assert!(
+            target_proportion > 0.0 && target_proportion <= 0.5,
+            "target_proportion must be in range (0.0, 0.5], got {}",
+            target_proportion
+        );
+        ThresholdStrategy::Quantile {
+            target_proportion,
+            window_size,
+            fallback,
+        }
+    }
+
+    /// Check if this strategy requires rolling computation.
+    pub fn needs_rolling_computation(&self) -> bool {
+        matches!(
+            self,
+            ThresholdStrategy::RollingSpread { .. } | ThresholdStrategy::Quantile { .. }
+        )
+    }
+
+    /// Get the window size for rolling strategies, if applicable.
+    pub fn window_size(&self) -> Option<usize> {
+        match self {
+            ThresholdStrategy::Fixed(_) => None,
+            ThresholdStrategy::RollingSpread { window_size, .. } => Some(*window_size),
+            ThresholdStrategy::Quantile { window_size, .. } => Some(*window_size),
+        }
+    }
+
+    /// Get the target proportion for Quantile strategy, if applicable.
+    pub fn target_proportion(&self) -> Option<f64> {
+        match self {
+            ThresholdStrategy::Quantile {
+                target_proportion, ..
+            } => Some(*target_proportion),
+            _ => None,
         }
     }
 }
@@ -498,6 +595,9 @@ pub struct MultiHorizonLabelGenerator {
 
     /// Rolling spread tracker (for RollingSpread threshold)
     spread_history: Vec<f64>,
+
+    /// Rolling percentage change tracker (for Quantile threshold)
+    pct_change_history: Vec<f64>,
 }
 
 impl MultiHorizonLabelGenerator {
@@ -511,6 +611,7 @@ impl MultiHorizonLabelGenerator {
             config,
             prices: Vec::new(),
             spread_history: Vec::new(),
+            pct_change_history: Vec::new(),
         }
     }
 
@@ -525,6 +626,7 @@ impl MultiHorizonLabelGenerator {
             config,
             prices: Vec::with_capacity(capacity),
             spread_history: Vec::new(),
+            pct_change_history: Vec::new(),
         }
     }
 
@@ -576,8 +678,12 @@ impl MultiHorizonLabelGenerator {
 
     /// Get the current threshold value.
     fn current_threshold(&self) -> f64 {
-        let rolling_spread = self.compute_rolling_spread();
-        self.config.threshold_strategy.get_threshold(rolling_spread)
+        let rolling_value = match &self.config.threshold_strategy {
+            ThresholdStrategy::Fixed(_) => None,
+            ThresholdStrategy::RollingSpread { .. } => self.compute_rolling_spread(),
+            ThresholdStrategy::Quantile { .. } => self.compute_quantile_threshold(),
+        };
+        self.config.threshold_strategy.get_threshold(rolling_value)
     }
 
     /// Compute rolling spread average (for RollingSpread threshold).
@@ -589,6 +695,63 @@ impl MultiHorizonLabelGenerator {
                 let sum: f64 = self.spread_history[start..].iter().sum();
                 return Some(sum / *window_size as f64);
             }
+        }
+        None
+    }
+
+    /// Compute quantile threshold (for Quantile threshold strategy).
+    ///
+    /// This computes the threshold from the quantile of absolute percentage changes.
+    /// For example, with target_proportion = 0.3:
+    /// - We want ~30% Up, ~30% Down, ~40% Stable
+    /// - Threshold = (1 - target_proportion)th quantile of |pct_change|
+    /// - This ensures ~(1 - target_proportion) samples are within ±threshold (Stable)
+    fn compute_quantile_threshold(&self) -> Option<f64> {
+        if let ThresholdStrategy::Quantile {
+            target_proportion,
+            window_size,
+            ..
+        } = &self.config.threshold_strategy
+        {
+            // Need percentage changes to compute quantile
+            if self.prices.len() < 2 {
+                return None;
+            }
+
+            // Compute percentage changes from prices
+            let pct_changes: Vec<f64> = self
+                .prices
+                .windows(2)
+                .map(|w| (w[1] - w[0]) / w[0])
+                .collect();
+
+            if pct_changes.len() < *window_size {
+                return None;
+            }
+
+            // Take the most recent window
+            let start = pct_changes.len().saturating_sub(*window_size);
+            let mut abs_changes: Vec<f64> = pct_changes[start..]
+                .iter()
+                .map(|x| x.abs())
+                .collect();
+
+            // Sort for quantile computation
+            abs_changes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+            // Compute quantile position
+            // We want (1 - 2*target_proportion) of samples to be Stable
+            // So the threshold is at the (1 - target_proportion) quantile
+            let quantile_pos = (1.0 - *target_proportion) * (abs_changes.len() - 1) as f64;
+            let lower_idx = quantile_pos.floor() as usize;
+            let upper_idx = (lower_idx + 1).min(abs_changes.len() - 1);
+            let frac = quantile_pos - lower_idx as f64;
+
+            // Linear interpolation between adjacent values
+            let threshold =
+                abs_changes[lower_idx] * (1.0 - frac) + abs_changes[upper_idx] * frac;
+
+            return Some(threshold);
         }
         None
     }
