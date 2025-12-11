@@ -924,9 +924,9 @@ impl BatchProcessor {
         // Process files in parallel using the local thread pool
         let results: Vec<ProcessResult> = pool.install(|| {
             files
-                .par_iter()
-                .enumerate()
-                .map(|(index, file)| {
+            .par_iter()
+            .enumerate()
+            .map(|(index, file)| {
                 let file_path = file.as_ref().to_string_lossy().to_string();
                 let day = extract_day_from_path(&file_path);
 

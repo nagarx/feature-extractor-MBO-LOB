@@ -2,20 +2,36 @@
 //!
 //! Export processed features and labels to various formats for ML training.
 //!
-//! Supported formats:
+//! # Modules
+//!
+//! - **tensor_format**: Model-specific tensor reshaping (DeepLOB, HLOB, etc.)
+//! - Core exports: NumPy (.npy) and JSON metadata
+//!
+//! # Supported Formats
+//!
 //! - NumPy (.npy) - For Python/PyTorch integration
 //! - JSON - For metadata and configuration
 //!
 //! # Example
+//!
 //! ```ignore
+//! use feature_extractor::export::{NumpyExporter, BatchExporter};
+//! use feature_extractor::export::tensor_format::{TensorFormat, TensorFormatter};
+//!
 //! // Single file export
 //! let exporter = NumpyExporter::new(output_dir);
 //! exporter.export(&pipeline_output)?;
 //!
 //! // Batch export with labels
-//! let batch_exporter = BatchExporter::new(output_dir, Some(label_generator));
+//! let batch_exporter = BatchExporter::new(output_dir, Some(label_config));
 //! let result = batch_exporter.export_day("2025-02-03", &pipeline_output)?;
+//!
+//! // Format tensors for specific model
+//! let formatter = TensorFormatter::deeplob(10);
+//! let tensor = formatter.format_sequence(&features)?;
 //! ```
+
+pub mod tensor_format;
 
 use crate::labeling::{LabelConfig, TlobLabelGenerator, TrendLabel};
 use crate::pipeline::PipelineOutput;
@@ -26,6 +42,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+
+// Re-export tensor formatting types
+pub use tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
 
 // FeatureVec is used in test helper function
 #[cfg(test)]
@@ -931,3 +950,4 @@ mod tests {
         );
     }
 }
+

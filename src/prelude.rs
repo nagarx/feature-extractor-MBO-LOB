@@ -98,6 +98,7 @@ pub use crate::sequence_builder::{
 
 pub use crate::labeling::{
     DeepLobLabelGenerator, DeepLobMethod, LabelConfig, LabelGenerator, LabelStats,
+    MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels, ThresholdStrategy,
     TlobLabelGenerator, TrendLabel,
 };
 
@@ -137,6 +138,7 @@ pub use crate::export::{
     export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
     NumpyExporter, SplitConfig,
 };
+pub use crate::export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
 
 pub use crate::export_aligned::{AlignedBatchExporter, AlignedDayExport};
 

@@ -77,7 +77,9 @@
 
 use crate::{
     config::{PipelineConfig, SamplingStrategy},
+    export::tensor_format::{TensorFormat, TensorFormatter, TensorOutput},
     features::mbo_features::MboEvent,
+    labeling::{MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels},
     preprocessing::{AdaptiveVolumeThreshold, EventBasedSampler, VolumeBasedSampler},
     sequence_builder::{FeatureVec, MultiScaleSequence, MultiScaleWindow},
     FeatureExtractor, Sequence, SequenceBuilder,
@@ -162,6 +164,167 @@ impl PipelineOutput {
     /// Get mid-prices as flat array (for labeling later)
     pub fn get_mid_prices(&self) -> &[f64] {
         &self.mid_prices
+    }
+
+    // ========================================================================
+    // Tensor Formatting API
+    // ========================================================================
+
+    /// Format all sequences using a TensorFormatter.
+    ///
+    /// This method converts sequences to model-specific tensor shapes for
+    /// different deep learning architectures.
+    ///
+    /// # Arguments
+    ///
+    /// * `formatter` - TensorFormatter configured for the target model
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(TensorOutput)` - Formatted tensor (Array3 for single sequences, Array4 for batch)
+    /// * `Err(...)` - Formatting failed
+    ///
+    /// # Supported Formats
+    ///
+    /// | Format | Shape | Models |
+    /// |--------|-------|--------|
+    /// | Flat | (N, T, F) | TLOB, LSTM |
+    /// | DeepLOB | (N, T, 4, L) | DeepLOB |
+    /// | HLOB | (N, T, L, 4) | HLOB |
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::prelude::*;
+    /// use feature_extractor::export::tensor_format::TensorFormatter;
+    ///
+    /// let output = pipeline.process("data.dbn.zst")?;
+    ///
+    /// // Format for DeepLOB (N, T, 4, L)
+    /// let formatter = TensorFormatter::deeplob(10);
+    /// let tensor = output.format_sequences(&formatter)?;
+    /// ```
+    pub fn format_sequences(&self, formatter: &TensorFormatter) -> Result<TensorOutput> {
+        if self.sequences.is_empty() {
+            return Err(mbo_lob_reconstructor::TlobError::generic(
+                "No sequences to format",
+            ));
+        }
+
+        // Convert sequences to Vec<Vec<Vec<f64>>> format for batch formatting
+        let batch: Vec<Vec<Vec<f64>>> = self
+            .sequences
+            .iter()
+            .map(|seq| seq.features.iter().map(|f| f.to_vec()).collect())
+            .collect();
+
+        formatter.format_batch(&batch)
+    }
+
+    /// Format sequences for a specific tensor format.
+    ///
+    /// Convenience method that creates a TensorFormatter internally.
+    ///
+    /// # Arguments
+    ///
+    /// * `format` - Target tensor format
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::export::tensor_format::TensorFormat;
+    ///
+    /// let output = pipeline.process("data.dbn.zst")?;
+    ///
+    /// // Format for DeepLOB
+    /// let tensor = output.format_as(TensorFormat::deeplob())?;
+    /// ```
+    pub fn format_as(&self, format: TensorFormat) -> Result<TensorOutput> {
+        let levels = match &format {
+            TensorFormat::DeepLOB { levels } => *levels,
+            TensorFormat::HLOB { levels } => *levels,
+            _ => 10, // Default for non-level formats
+        };
+
+        let formatter = TensorFormatter::new(
+            format,
+            crate::export::tensor_format::FeatureMapping::standard_lob(levels),
+        );
+
+        self.format_sequences(&formatter)
+    }
+
+    // ========================================================================
+    // Multi-Horizon Labeling API
+    // ========================================================================
+
+    /// Generate multi-horizon labels from mid-prices.
+    ///
+    /// This method creates labels for multiple prediction horizons simultaneously,
+    /// which is required for benchmark reproduction (FI-2010, DeepLOB, TLOB).
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Multi-horizon configuration specifying horizons and thresholds
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(MultiHorizonLabels)` - Labels for all configured horizons
+    /// * `Err(...)` - Label generation failed (insufficient data, etc.)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::prelude::*;
+    ///
+    /// let output = pipeline.process("data.dbn.zst")?;
+    ///
+    /// // Generate labels for FI-2010 horizons: [10, 20, 30, 50, 100]
+    /// let labels = output.generate_multi_horizon_labels(MultiHorizonConfig::fi2010())?;
+    ///
+    /// // Access labels for specific horizon
+    /// let h50_labels = labels.labels_for_horizon(50);
+    /// ```
+    pub fn generate_multi_horizon_labels(
+        &self,
+        config: MultiHorizonConfig,
+    ) -> Result<MultiHorizonLabels> {
+        if self.mid_prices.is_empty() {
+            return Err(mbo_lob_reconstructor::TlobError::generic(
+                "No mid-prices available for label generation",
+            ));
+        }
+
+        let mut generator = MultiHorizonLabelGenerator::new(config);
+        generator.add_prices(&self.mid_prices);
+
+        generator.generate_labels()
+    }
+
+    /// Get the number of features per timestep.
+    ///
+    /// Returns `None` if no sequences are available.
+    pub fn feature_count(&self) -> Option<usize> {
+        self.sequences
+            .first()
+            .and_then(|seq| seq.features.first().map(|f| f.len()))
+    }
+
+    /// Get the number of LOB levels (computed from feature count).
+    ///
+    /// Assumes standard LOB feature layout: 4 features per level.
+    /// Returns `None` if feature count is not divisible by 4 or no sequences available.
+    pub fn lob_levels(&self) -> Option<usize> {
+        self.feature_count().and_then(|count| {
+            if count % 4 == 0 && count >= 4 {
+                Some(count / 4)
+            } else {
+                // May have derived features, try to infer from raw LOB portion
+                // Standard: levels * 4 raw features, potentially + 8 derived + 36 MBO
+                // For now, return None if not a clean multiple
+                None
+            }
+        })
     }
 }
 

@@ -7,20 +7,65 @@
 //! - Feature value validity and ranges
 //! - Sequence generation correctness
 //! - Memory stability during long runs
+//!
+//! ## Performance Optimization
+//!
+//! These tests prefer **hot store** (pre-decompressed) files for faster execution:
+//! - Hot store files: ~3-4x faster (no zstd decompression overhead)
+//! - Falls back to compressed files if hot store is unavailable
+//! - Use `decompress_to_hot_store` CLI to populate the hot store
 
 use feature_extractor::{Pipeline, PipelineConfig, SamplingConfig, SamplingStrategy};
 use mbo_lob_reconstructor::{DbnLoader, LobReconstructor, LobState};
 use std::path::Path;
 
-const DATA_DIR: &str = "../data/NVDA_2025-02-01_to_2025-09-30";
+/// Hot store directory with pre-decompressed DBN files (preferred for speed)
+const HOT_STORE_DIR: &str = "../data/hot_store";
 
-fn get_test_files() -> Vec<String> {
-    let data_path = Path::new(DATA_DIR);
-    if !data_path.exists() {
-        return Vec::new();
+/// Compressed data directory (fallback if hot store unavailable)
+const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-01_to_2025-09-30";
+
+/// Information about which data source is being used
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DataSource {
+    HotStore,
+    Compressed,
+}
+
+/// Get test files, preferring hot store (decompressed) over compressed.
+/// 
+/// Returns (files, source) tuple indicating which data source is being used.
+/// This allows tests to verify they're using optimized paths when available.
+fn get_test_files_with_source() -> (Vec<String>, DataSource) {
+    // First, try hot store (decompressed files - much faster)
+    let hot_store_path = Path::new(HOT_STORE_DIR);
+    if hot_store_path.exists() {
+        let hot_files: Vec<String> = std::fs::read_dir(hot_store_path)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                // Match .mbo.dbn files (decompressed) but NOT .dbn.zst
+                let name = p.to_string_lossy();
+                name.ends_with(".mbo.dbn") && !name.ends_with(".zst")
+            })
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        
+        if !hot_files.is_empty() {
+            let mut files = hot_files;
+            files.sort();
+            return (files, DataSource::HotStore);
+        }
+    }
+    
+    // Fallback to compressed files
+    let compressed_path = Path::new(COMPRESSED_DIR);
+    if !compressed_path.exists() {
+        return (Vec::new(), DataSource::Compressed);
     }
 
-    let mut files: Vec<String> = std::fs::read_dir(data_path)
+    let mut files: Vec<String> = std::fs::read_dir(compressed_path)
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -33,11 +78,33 @@ fn get_test_files() -> Vec<String> {
         .collect();
 
     files.sort();
-    files
+    (files, DataSource::Compressed)
 }
 
+/// Legacy function for backward compatibility - returns just the files
+#[allow(dead_code)]
+fn get_test_files() -> Vec<String> {
+    get_test_files_with_source().0
+}
+
+/// Check if any test data is available
+#[allow(dead_code)]
 fn data_available() -> bool {
     !get_test_files().is_empty()
+}
+
+/// Log which data source is being used (helpful for debugging slow tests)
+fn log_data_source(test_name: &str, source: DataSource, file_count: usize) {
+    match source {
+        DataSource::HotStore => {
+            println!("   📂 Using HOT STORE ({} decompressed files) - FAST PATH", file_count);
+        }
+        DataSource::Compressed => {
+            println!("   📦 Using COMPRESSED files ({} files) - SLOW PATH", file_count);
+            println!("   💡 Tip: Run `decompress_to_hot_store` to speed up tests ~3-4x");
+        }
+    }
+    println!("   Test: {}\n", test_name);
 }
 
 // ============================================================================
@@ -46,15 +113,17 @@ fn data_available() -> bool {
 
 #[test]
 fn test_multi_day_state_isolation() {
-    if !data_available() {
+    let (files, source) = get_test_files_with_source();
+    
+    if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
     }
 
-    let files = get_test_files();
     let test_files: Vec<_> = files.iter().take(3).collect(); // Test first 3 days
 
     println!("\n📊 Multi-Day State Isolation Test");
+    log_data_source("test_multi_day_state_isolation", source, files.len());
     println!("   Testing {} days for state leakage...\n", test_files.len());
 
     // Create pipeline with MBO features for more sensitive state testing
@@ -139,15 +208,17 @@ fn test_multi_day_state_isolation() {
 
 #[test]
 fn test_feature_value_validity() {
-    if !data_available() {
+    let (files, source) = get_test_files_with_source();
+    
+    if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
     }
 
-    let files = get_test_files();
     let test_file = &files[0];
 
     println!("\n📊 Feature Value Validity Test");
+    log_data_source("test_feature_value_validity", source, files.len());
     println!("   File: {}\n", test_file);
 
     let mut config = PipelineConfig::default();
@@ -224,15 +295,17 @@ fn test_feature_value_validity() {
 
 #[test]
 fn test_lob_numerical_precision() {
-    if !data_available() {
+    let (files, source) = get_test_files_with_source();
+    
+    if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
     }
 
-    let files = get_test_files();
     let test_file = &files[0];
 
     println!("\n📊 LOB Numerical Precision Test");
+    log_data_source("test_lob_numerical_precision", source, files.len());
     println!("   File: {}\n", test_file);
 
     let loader = DbnLoader::new(test_file).expect("Failed to create loader");
@@ -347,15 +420,17 @@ fn test_lob_numerical_precision() {
 
 #[test]
 fn test_sequence_timestamp_ordering() {
-    if !data_available() {
+    let (files, source) = get_test_files_with_source();
+    
+    if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
     }
 
-    let files = get_test_files();
     let test_file = &files[0];
 
     println!("\n📊 Sequence Timestamp Ordering Test");
+    log_data_source("test_sequence_timestamp_ordering", source, files.len());
     println!("   File: {}\n", test_file);
 
     let mut config = PipelineConfig::default();
@@ -422,15 +497,17 @@ fn test_sequence_timestamp_ordering() {
 
 #[test]
 fn test_feature_extraction_determinism() {
-    if !data_available() {
+    let (files, source) = get_test_files_with_source();
+    
+    if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
     }
 
-    let files = get_test_files();
     let test_file = &files[0];
 
     println!("\n📊 Feature Extraction Determinism Test");
+    log_data_source("test_feature_extraction_determinism", source, files.len());
     println!("   File: {}\n", test_file);
 
     // Run extraction twice with identical config
@@ -513,15 +590,17 @@ fn test_feature_extraction_determinism() {
 
 #[test]
 fn test_memory_stability_extended() {
-    if !data_available() {
+    let (files, source) = get_test_files_with_source();
+    
+    if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
     }
 
-    let files = get_test_files();
     let test_files: Vec<_> = files.iter().take(5).collect();
 
     println!("\n📊 Memory Stability Test (Extended)");
+    log_data_source("test_memory_stability_extended", source, files.len());
     println!("   Processing {} days...\n", test_files.len());
 
     let mut config = PipelineConfig::default();
@@ -592,15 +671,17 @@ fn test_memory_stability_extended() {
 
 #[test]
 fn test_zero_allocation_api_correctness() {
-    if !data_available() {
+    let (files, source) = get_test_files_with_source();
+    
+    if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
     }
 
-    let files = get_test_files();
     let test_file = &files[0];
 
     println!("\n📊 Zero-Allocation API Correctness Test");
+    log_data_source("test_zero_allocation_api_correctness", source, files.len());
     println!("   File: {}\n", test_file);
 
     let loader = DbnLoader::new(test_file).expect("Failed to create loader");
@@ -694,5 +775,207 @@ fn test_zero_allocation_api_correctness() {
     );
 
     println!("\n   ✅ Zero-allocation API correctness PASSED");
+}
+
+// ============================================================================
+// Test 8: Hot Store vs Compressed Produces Identical Results
+// ============================================================================
+
+/// Critical test: Verifies that hot store (decompressed) and compressed files
+/// produce IDENTICAL numerical results. This ensures data integrity regardless
+/// of which data source is used.
+#[test]
+fn test_hot_store_vs_compressed_identical() {
+    println!("\n📊 Hot Store vs Compressed Equivalence Test");
+    println!("   Verifying data integrity across data sources...\n");
+
+    // Find a date that exists in BOTH hot store and compressed directory
+    let hot_store_path = Path::new(HOT_STORE_DIR);
+    let compressed_path = Path::new(COMPRESSED_DIR);
+
+    if !hot_store_path.exists() || !compressed_path.exists() {
+        println!("   ⏭️  Skipping: Both data sources required for comparison");
+        return;
+    }
+
+    // Get dates available in hot store
+    let hot_dates: std::collections::HashSet<String> = std::fs::read_dir(hot_store_path)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            let name = p.to_string_lossy();
+            name.ends_with(".mbo.dbn") && !name.ends_with(".zst")
+        })
+        .filter_map(|p| {
+            // Extract date from filename: xnas-itch-YYYYMMDD.mbo.dbn
+            let name = p.file_name()?.to_string_lossy().to_string();
+            Some(name.replace("xnas-itch-", "").replace(".mbo.dbn", ""))
+        })
+        .collect();
+
+    // Get dates available in compressed
+    let compressed_dates: std::collections::HashSet<String> = std::fs::read_dir(compressed_path)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.to_string_lossy().contains(".mbo.dbn.zst"))
+        .filter_map(|p| {
+            let name = p.file_name()?.to_string_lossy().to_string();
+            Some(name.replace("xnas-itch-", "").replace(".mbo.dbn.zst", ""))
+        })
+        .collect();
+
+    // Find common dates
+    let common_dates: Vec<&String> = hot_dates.intersection(&compressed_dates).collect();
+
+    if common_dates.is_empty() {
+        println!("   ⏭️  Skipping: No common dates between hot store and compressed");
+        return;
+    }
+
+    // Use the first common date
+    let test_date = common_dates[0];
+    let hot_file = format!("{}/xnas-itch-{}.mbo.dbn", HOT_STORE_DIR, test_date);
+    let compressed_file = format!("{}/xnas-itch-{}.mbo.dbn.zst", COMPRESSED_DIR, test_date);
+
+    println!("   📅 Testing date: {}", test_date);
+    println!("   📂 Hot store: {}", hot_file);
+    println!("   📦 Compressed: {}", compressed_file);
+
+    // Process same config with both sources
+    let mut config = PipelineConfig::default();
+    config.features.include_derived = true;
+    config.features.include_mbo = false;
+    config.sequence.feature_count = config.features.feature_count();
+    config.sequence.window_size = 50;
+    config.sequence.stride = 10;
+    config.sampling = Some(SamplingConfig {
+        strategy: SamplingStrategy::EventBased,
+        event_count: Some(500),
+        ..Default::default()
+    });
+
+    // Process hot store file
+    println!("\n   Processing hot store file...");
+    let start_hot = std::time::Instant::now();
+    let mut pipeline_hot = Pipeline::from_config(config.clone()).expect("Failed to create pipeline");
+    let output_hot = pipeline_hot.process(&hot_file).expect("Failed to process hot store file");
+    let time_hot = start_hot.elapsed();
+    println!("      ✓ Completed in {:.2}s", time_hot.as_secs_f64());
+
+    // Process compressed file
+    println!("   Processing compressed file...");
+    let start_compressed = std::time::Instant::now();
+    let mut pipeline_compressed = Pipeline::from_config(config).expect("Failed to create pipeline");
+    let output_compressed = pipeline_compressed.process(&compressed_file).expect("Failed to process compressed file");
+    let time_compressed = start_compressed.elapsed();
+    println!("      ✓ Completed in {:.2}s", time_compressed.as_secs_f64());
+
+    // === CRITICAL VERIFICATION ===
+    println!("\n   🔍 Verifying numerical equivalence...");
+
+    // 1. Message counts must match exactly
+    assert_eq!(
+        output_hot.messages_processed, output_compressed.messages_processed,
+        "Message count mismatch: hot={} vs compressed={}",
+        output_hot.messages_processed, output_compressed.messages_processed
+    );
+    println!("      ✓ Messages match: {}", output_hot.messages_processed);
+
+    // 2. Feature counts must match exactly
+    assert_eq!(
+        output_hot.features_extracted, output_compressed.features_extracted,
+        "Feature count mismatch: hot={} vs compressed={}",
+        output_hot.features_extracted, output_compressed.features_extracted
+    );
+    println!("      ✓ Features match: {}", output_hot.features_extracted);
+
+    // 3. Sequence counts must match exactly
+    assert_eq!(
+        output_hot.sequences.len(), output_compressed.sequences.len(),
+        "Sequence count mismatch: hot={} vs compressed={}",
+        output_hot.sequences.len(), output_compressed.sequences.len()
+    );
+    println!("      ✓ Sequences match: {}", output_hot.sequences.len());
+
+    // 4. Mid-prices must be BIT-LEVEL identical
+    assert_eq!(
+        output_hot.mid_prices.len(), output_compressed.mid_prices.len(),
+        "Mid-price count mismatch"
+    );
+    let mut mid_price_mismatches = 0;
+    for (i, (hot_price, compressed_price)) in output_hot.mid_prices.iter()
+        .zip(output_compressed.mid_prices.iter())
+        .enumerate()
+    {
+        // Use bit-level comparison for exact equality
+        if hot_price.to_bits() != compressed_price.to_bits() {
+            mid_price_mismatches += 1;
+            if mid_price_mismatches <= 5 {
+                println!(
+                    "      ⚠️ Mid-price mismatch at {}: hot={} vs compressed={} (diff={})",
+                    i, hot_price, compressed_price, (hot_price - compressed_price).abs()
+                );
+            }
+        }
+    }
+    assert_eq!(
+        mid_price_mismatches, 0,
+        "Found {} mid-price bit-level mismatches",
+        mid_price_mismatches
+    );
+    println!("      ✓ Mid-prices bit-level identical: {} values", output_hot.mid_prices.len());
+
+    // 5. Sequence features must be BIT-LEVEL identical
+    let mut feature_mismatches = 0;
+    let sequences_to_check = output_hot.sequences.len().min(100); // Check first 100 sequences
+    
+    for seq_idx in 0..sequences_to_check {
+        let hot_seq = &output_hot.sequences[seq_idx];
+        let compressed_seq = &output_compressed.sequences[seq_idx];
+
+        assert_eq!(
+            hot_seq.features.len(), compressed_seq.features.len(),
+            "Sequence {} feature row count mismatch",
+            seq_idx
+        );
+
+        for (row_idx, (hot_row, compressed_row)) in hot_seq.features.iter()
+            .zip(compressed_seq.features.iter())
+            .enumerate()
+        {
+            for (col_idx, (hot_val, compressed_val)) in hot_row.iter()
+                .zip(compressed_row.iter())
+                .enumerate()
+            {
+                if hot_val.to_bits() != compressed_val.to_bits() {
+                    feature_mismatches += 1;
+                    if feature_mismatches <= 5 {
+                        println!(
+                            "      ⚠️ Feature mismatch seq[{}][{}][{}]: {} vs {}",
+                            seq_idx, row_idx, col_idx, hot_val, compressed_val
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        feature_mismatches, 0,
+        "Found {} feature value bit-level mismatches",
+        feature_mismatches
+    );
+    println!("      ✓ Features bit-level identical: {} sequences checked", sequences_to_check);
+
+    // Report speedup
+    let speedup = time_compressed.as_secs_f64() / time_hot.as_secs_f64();
+    println!("\n   📈 Performance Comparison:");
+    println!("      Hot store:  {:.2}s", time_hot.as_secs_f64());
+    println!("      Compressed: {:.2}s", time_compressed.as_secs_f64());
+    println!("      Speedup:    {:.2}x faster with hot store", speedup);
+
+    println!("\n   ✅ Hot store vs compressed equivalence PASSED");
+    println!("      Data integrity verified - results are BIT-LEVEL identical!");
 }
 

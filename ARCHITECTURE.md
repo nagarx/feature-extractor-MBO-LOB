@@ -42,7 +42,8 @@ feature_extractor/
 │   ├── labeling/                 # Label generation for supervised learning
 │   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats
 │   │   ├── tlob.rs              # TLOB labeling (decoupled h/k)
-│   │   └── deeplob.rs           # DeepLOB labeling (k=h)
+│   │   ├── deeplob.rs           # DeepLOB labeling (k=h)
+│   │   └── multi_horizon.rs     # Multi-horizon labels (FI-2010, DeepLOB presets)
 │   │
 │   ├── preprocessing/            # Normalization and sampling
 │   │   ├── mod.rs               # Module exports
@@ -58,7 +59,9 @@ feature_extractor/
 │   │   └── multiscale.rs        # MultiScaleWindow, push_arc()
 │   │
 │   ├── validation.rs             # Feature validation (crossed quotes, NaN checks)
-│   ├── export.rs                 # NumPy export
+│   ├── export/                   # Export module
+│   │   ├── mod.rs               # NumpyExporter, BatchExporter
+│   │   └── tensor_format.rs     # TensorFormatter, TensorFormat, TensorOutput
 │   └── export_aligned.rs         # Aligned batch export
 │
 ├── benches/
@@ -127,10 +130,12 @@ Single import for all common types:
 use feature_extractor::prelude::*;
 
 // Now you have access to:
-// - Pipeline, PipelineBuilder, PipelineConfig
+// - Pipeline, PipelineBuilder, PipelineConfig, PipelineOutput
 // - FeatureExtractor, FeatureConfig
-// - SequenceBuilder, Sequence, SequenceConfig
+// - SequenceBuilder, Sequence, SequenceConfig, FeatureVec
 // - LabelGenerator, LabelConfig, TrendLabel
+// - MultiHorizonLabelGenerator, MultiHorizonConfig, ThresholdStrategy
+// - TensorFormatter, TensorFormat, TensorOutput, FeatureMapping
 // - All normalizers
 // - All mbo-lob-reconstructor types (LobReconstructor, DbnLoader, etc.)
 ```
@@ -231,8 +236,12 @@ pub enum Preset {
 - [x] **Parallel batch processing** (BatchProcessor, Rayon)
 - [x] **Graceful cancellation** (CancellationToken)
 - [x] **PriceLevel O(1) caching** (in mbo-lob-reconstructor)
+- [x] **Multi-Horizon Label Generator** (FI-2010, DeepLOB, TLOB presets)
+- [x] **TensorFormatter** (DeepLOB, HLOB, Flat, Image formats)
+- [x] **Pipeline Integration** (format_sequences, generate_multi_horizon_labels)
+- [x] **Hot Store Integration** (decompressed file caching, ~30% faster)
 
 ### Pending
 - [ ] crates.io publication
 - [ ] Statistical validation tests (OFI vs ΔP correlation)
-- [ ] Additional paper presets (HLOB, ViT-LOB)
+- [ ] Additional paper presets (ViT-LOB)

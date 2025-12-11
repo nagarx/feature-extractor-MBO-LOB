@@ -119,6 +119,7 @@ pub use export::{
     export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
     NumpyExporter, SplitConfig,
 };
+pub use export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
 pub use export_aligned::{AlignedBatchExporter, AlignedDayExport};
 
 // Re-exports - Validation
@@ -129,7 +130,8 @@ pub use validation::{
 // Re-exports - Labeling
 pub use labeling::{
     DeepLobLabelGenerator, DeepLobMethod, LabelConfig, LabelGenerator, LabelStats,
-    TlobLabelGenerator, TrendLabel,
+    MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels, MultiHorizonSummary,
+    ThresholdStrategy, TlobLabelGenerator, TrendLabel,
 };
 
 // Re-exports - Pipeline

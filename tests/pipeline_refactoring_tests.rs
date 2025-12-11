@@ -3,6 +3,12 @@
 //! These tests ensure that any refactoring to consolidate code paths maintains
 //! exact numerical precision and identical results.
 //!
+//! ## Performance Optimization
+//!
+//! These tests prefer **hot store** (pre-decompressed) files for faster execution:
+//! - Hot store files: ~3-4x faster (no zstd decompression overhead)
+//! - Falls back to compressed files if hot store is unavailable
+//!
 //! Run with: cargo test --release --test pipeline_refactoring_tests
 
 use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig};
@@ -13,14 +19,65 @@ use std::path::Path;
 // Test Fixtures
 // ============================================================================
 
-fn get_test_file() -> Option<String> {
-    let data_dir = Path::new("../data/NVDA_2025-02-01_to_2025-09-30");
+/// Hot store directory with pre-decompressed DBN files (preferred for speed)
+const HOT_STORE_DIR: &str = "../data/hot_store";
 
-    if !data_dir.exists() {
+/// Compressed data directory (fallback if hot store unavailable)
+const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-01_to_2025-09-30";
+
+/// Information about which data source is being used
+#[derive(Debug, Clone, Copy)]
+enum DataSource {
+    HotStore,
+    Compressed,
+}
+
+/// Get test file, preferring hot store (decompressed) over compressed.
+fn get_test_file() -> Option<String> {
+    let (file, source) = get_test_file_with_source()?;
+    
+    // Log which source is being used
+    match source {
+        DataSource::HotStore => println!("   📂 Using HOT STORE - FAST PATH"),
+        DataSource::Compressed => {
+            println!("   📦 Using COMPRESSED - SLOW PATH");
+            println!("   💡 Tip: Run `decompress_to_hot_store` to speed up tests ~3-4x");
+        }
+    }
+    
+    Some(file)
+}
+
+/// Get test file with source information
+fn get_test_file_with_source() -> Option<(String, DataSource)> {
+    // First, try hot store (decompressed files - much faster)
+    let hot_store_path = Path::new(HOT_STORE_DIR);
+    if hot_store_path.exists() {
+        let mut hot_files: Vec<String> = std::fs::read_dir(hot_store_path)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                // Match .mbo.dbn files (decompressed) but NOT .dbn.zst
+                let name = p.to_string_lossy();
+                name.ends_with(".mbo.dbn") && !name.ends_with(".zst")
+            })
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        
+        if !hot_files.is_empty() {
+            hot_files.sort();
+            return Some((hot_files.first().cloned()?, DataSource::HotStore));
+        }
+    }
+    
+    // Fallback to compressed files
+    let compressed_path = Path::new(COMPRESSED_DIR);
+    if !compressed_path.exists() {
         return None;
     }
 
-    let mut files: Vec<String> = std::fs::read_dir(data_dir)
+    let mut files: Vec<String> = std::fs::read_dir(compressed_path)
         .ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -29,7 +86,7 @@ fn get_test_file() -> Option<String> {
         .collect();
 
     files.sort();
-    files.first().cloned()
+    Some((files.first().cloned()?, DataSource::Compressed))
 }
 
 fn create_test_config() -> PipelineConfig {

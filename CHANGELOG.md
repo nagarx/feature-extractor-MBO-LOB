@@ -72,6 +72,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `test_process_source_equivalence` - Validate source abstraction
   - `test_all_processing_methods_equivalence` - Cross-validate all 3 methods
 
+- **Multi-Horizon Label Generator** (`src/labeling/multi_horizon.rs`)
+  - `MultiHorizonConfig` - Configure multiple prediction horizons in single pass
+    - `fi2010()` - FI-2010 preset: [10, 20, 30, 50, 100] horizons
+    - `deeplob()` - DeepLOB preset: [10, 20, 50, 100] horizons
+    - `tlob()` - TLOB preset: [1, 3, 5, 10, 30, 50] horizons
+  - `MultiHorizonLabelGenerator` - Generate labels for multiple horizons simultaneously
+    - `add_prices()` / `add_price()` - Accumulate mid-prices
+    - `generate_labels()` - Single-pass label generation for all horizons
+    - `compute_stats()` - Per-horizon statistics (class balance, distribution)
+  - `MultiHorizonLabels` - Output container with per-horizon access
+    - `labels_for_horizon(h)` - Get labels for specific horizon
+    - `horizons()` - List all configured horizons
+    - `summary()` - Aggregate statistics across all horizons
+  - `ThresholdStrategy` - Configurable classification thresholds
+    - `Fixed(f64)` - Fixed percentage threshold (default: 0.002)
+    - `RollingSpread { window_size, multiplier, fallback }` - Adaptive spread-based
+  - Memory efficient: Single price buffer shared across all horizons
+  - O(T × H) complexity where H = number of horizons
+  - 16 comprehensive unit tests + integration tests
+
+- **TensorFormatter for Model-Specific Input Shapes** (`src/export/tensor_format.rs`)
+  - `TensorFormat` enum - Target tensor shape specification
+    - `Flat` - (T, F) for TLOB, LSTM, MLP models
+    - `DeepLOB { levels }` - (T, 4, L) with channels [ask_p, ask_v, bid_p, bid_v]
+    - `HLOB { levels }` - (T, L, 4) level-first ordering
+    - `Image { channels, height, width }` - (T, C, H, W) for CNN models
+  - `TensorFormatter` - Efficient tensor reshaping
+    - `format_sequence()` - Format single sequence
+    - `format_batch()` - Format multiple sequences
+    - `deeplob(levels)` - Convenience constructor for DeepLOB format
+    - `hlob(levels)` - Convenience constructor for HLOB format
+  - `FeatureMapping` - Map feature indices to tensor positions
+    - `standard_lob(levels)` - Standard LOB layout
+    - `with_derived(levels)` - LOB + derived features
+  - `TensorOutput` - Type-safe output container (Array2/Array3/Array4)
+  - Uses ndarray for efficient memory layout
+  - Zero-copy when format matches source
+  - Comprehensive tests for shape validation and precision
+
+- **Pipeline Integration for Tensor Formatting and Multi-Horizon Labels**
+  - `PipelineOutput::format_sequences(&self, formatter: &TensorFormatter)` - Format all sequences
+  - `PipelineOutput::format_as(format: TensorFormat, mapping: FeatureMapping)` - Convenience method
+  - `PipelineOutput::generate_multi_horizon_labels(config: MultiHorizonConfig)` - Generate labels
+  - Integration tests in `tests/pipeline_integration_tests.rs`
+  - 21 new integration tests covering all combinations
+
+- **Export Module Restructured as Directory**
+  - `src/export.rs` → `src/export/mod.rs` + `src/export/tensor_format.rs`
+  - Re-exports: `TensorFormat`, `TensorFormatter`, `TensorOutput`, `FeatureMapping`
+  - Backward compatible: Existing `NumpyExporter`, `BatchExporter` unchanged
+
+- **Hot Store Integration in Stress Tests**
+  - `tests/real_nvidia_validation.rs` - Updated to prefer hot store files
+  - `tests/pipeline_refactoring_tests.rs` - Updated to prefer hot store files
+  - `get_test_file_path()` helper - Auto-resolves to decompressed when available
+  - `log_data_source()` helper - Logs which data source is being used
+  - `test_hot_store_vs_compressed_identical()` - Verifies bit-identical results
+  - Significant test speedup (~1.2x faster with hot store on M1 Pro)
+
 ### Changed
 
 - **Pipeline DRY Refactoring**

@@ -93,14 +93,17 @@ src/
 ├── labeling/
 │   ├── mod.rs                # LabelConfig, TrendLabel, LabelStats
 │   ├── tlob.rs               # TlobLabelGenerator
-│   └── deeplob.rs            # DeepLobLabelGenerator
+│   ├── deeplob.rs            # DeepLobLabelGenerator
+│   └── multi_horizon.rs      # MultiHorizonLabelGenerator, ThresholdStrategy
 │
 ├── schema/
 │   ├── mod.rs                # Module exports
 │   ├── presets.rs            # Preset feature configurations
 │   └── feature_def.rs        # Feature definitions
 │
-├── export.rs                 # NumpyExporter, BatchExporter
+├── export/                   # Export module (directory)
+│   ├── mod.rs                # NumpyExporter, BatchExporter, re-exports
+│   └── tensor_format.rs      # TensorFormat, TensorFormatter, TensorOutput
 └── export_aligned.rs         # Aligned feature/label export
 ```
 
@@ -155,8 +158,8 @@ pub fn process<P: AsRef<Path>>(&mut self, input_path: P) -> Result<PipelineOutpu
 pub fn process_source<S: MarketDataSource>(&mut self, source: S) -> Result<PipelineOutput> {
     let messages = source.messages()?;
     self.process_messages(messages)  // Delegates to process_messages
-}
-
+    }
+    
 // Method 3: Process an iterator of messages (core implementation)
 pub fn process_messages<I>(&mut self, messages: I) -> Result<PipelineOutput>
 where
@@ -175,6 +178,41 @@ where
 
 **Note**: `process()` delegates to `process_messages()` (DRY principle). This ensures
 a single code path for all processing methods, making bug fixes apply universally.
+
+### PipelineOutput
+
+Output container from pipeline processing with methods for post-processing:
+
+```rust
+pub struct PipelineOutput {
+    pub sequences: Vec<Sequence>,       // Generated sequences [N_sequences, window_size, features]
+    pub mid_prices: Vec<f64>,           // Mid-prices for labeling
+    pub messages_processed: usize,      // Total MBO messages
+    pub features_extracted: usize,      // Sampled LOB snapshots
+    pub sequences_generated: usize,     // Complete sequences
+    pub stride: usize,                  // Stride used for sequences
+    pub window_size: usize,             // Window size used
+    pub multiscale_sequences: Option<MultiScaleSequence>,  // Multi-scale (if enabled)
+    pub adaptive_stats: Option<AdaptiveSamplingStats>,     // Adaptive stats (if enabled)
+}
+
+impl PipelineOutput {
+    /// Format sequences for model-specific tensor shapes
+    pub fn format_sequences(&self, formatter: &TensorFormatter) -> Result<TensorOutput>;
+    
+    /// Convenience method for formatting with format and mapping
+    pub fn format_as(&self, format: TensorFormat, mapping: FeatureMapping) -> Result<TensorOutput>;
+    
+    /// Generate labels for multiple prediction horizons
+    pub fn generate_multi_horizon_labels(&self, config: MultiHorizonConfig) -> Result<MultiHorizonLabels>;
+    
+    /// Get feature count per timestep (if sequences available)
+    pub fn feature_count(&self) -> Option<usize>;
+    
+    /// Get features as flat 2D array for export
+    pub fn features_flat(&self) -> Vec<Vec<f64>>;
+}
+```
 
 ---
 
@@ -497,6 +535,82 @@ Label = Up     if l > θ
         Stable otherwise
 ```
 
+### Multi-Horizon Label Generation
+
+For benchmark reproduction, labels are needed at multiple prediction horizons simultaneously.
+
+#### MultiHorizonConfig
+
+```rust
+pub struct MultiHorizonConfig {
+    pub horizons: Vec<usize>,              // Prediction horizons (e.g., [10, 20, 50, 100])
+    pub smoothing_window: usize,           // Smoothing window size (default: 5)
+    pub threshold_strategy: ThresholdStrategy,  // Classification threshold strategy
+}
+
+impl MultiHorizonConfig {
+    pub fn fi2010() -> Self;     // Horizons: [10, 20, 30, 50, 100]
+    pub fn deeplob() -> Self;    // Horizons: [10, 20, 50, 100]
+    pub fn tlob() -> Self;       // Horizons: [1, 3, 5, 10, 30, 50]
+}
+```
+
+#### ThresholdStrategy
+
+```rust
+pub enum ThresholdStrategy {
+    /// Fixed percentage threshold (default: 0.002 = 0.2%)
+    Fixed(f64),
+    
+    /// Rolling spread-based threshold (adaptive to market conditions)
+    RollingSpread {
+        window_size: usize,   // Rolling window size
+        multiplier: f64,      // Multiplier for average spread
+        fallback: f64,        // Fallback threshold when insufficient data
+    },
+}
+```
+
+#### MultiHorizonLabelGenerator
+
+```rust
+pub struct MultiHorizonLabelGenerator {
+    config: MultiHorizonConfig,
+    prices: Vec<f64>,          // Single buffer shared across all horizons
+}
+
+impl MultiHorizonLabelGenerator {
+    pub fn new(config: MultiHorizonConfig) -> Self;
+    pub fn add_prices(&mut self, prices: &[f64]);    // Batch add
+    pub fn add_price(&mut self, price: f64);         // Single add
+    pub fn generate_labels(&self) -> Result<MultiHorizonLabels>;
+    pub fn compute_stats(&self) -> BTreeMap<usize, LabelStats>;
+}
+```
+
+#### MultiHorizonLabels (Output)
+
+```rust
+pub struct MultiHorizonLabels {
+    horizons: Vec<usize>,
+    labels: BTreeMap<usize, Vec<(usize, TrendLabel, f64)>>,  // horizon → [(index, label, change)]
+}
+
+impl MultiHorizonLabels {
+    pub fn horizons(&self) -> &[usize];                        // List all horizons
+    pub fn labels_for_horizon(&self, h: usize) -> Option<&Vec<...>>;  // Get labels for horizon
+    pub fn summary(&self) -> MultiHorizonSummary;              // Aggregate statistics
+}
+```
+
+#### Research Reference
+
+| Paper | Horizons | Unit |
+|-------|----------|------|
+| FI-2010 | 10, 20, 30, 50, 100 | Events |
+| DeepLOB | 10, 20, 50, 100 | Ticks |
+| TLOB | 1, 3, 5, 10, 30, 50 | Seconds |
+
 ---
 
 ## 9. Export Pipeline
@@ -537,6 +651,112 @@ impl BatchExporter {
 3. Write to NumPy format
 4. Generate labels from mid-prices (if configured)
 5. Write metadata JSON
+
+### TensorFormatter (Model-Specific Shapes)
+
+Different deep learning models expect LOB data in different tensor shapes.
+The `TensorFormatter` provides efficient reshaping for model-specific formats.
+
+#### TensorFormat
+
+```rust
+pub enum TensorFormat {
+    /// Flat features: (T, F) - for TLOB, LSTM, MLP
+    Flat,
+    
+    /// DeepLOB format: (T, 4, L) - channels [ask_p, ask_v, bid_p, bid_v]
+    DeepLOB { levels: usize },
+    
+    /// HLOB format: (T, L, 4) - level-first ordering
+    HLOB { levels: usize },
+    
+    /// Image format: (T, C, H, W) - for CNN models
+    Image { channels: usize, height: usize, width: usize },
+}
+
+impl TensorFormat {
+    pub fn output_shape(&self, seq_len: usize, n_features: usize) -> Vec<usize>;
+}
+```
+
+#### FeatureMapping
+
+Maps feature indices to tensor positions:
+
+```rust
+pub struct FeatureMapping {
+    pub ask_price_start: usize,   // Start index of ask prices (default: 0)
+    pub ask_volume_start: usize,  // Start index of ask volumes (default: 10)
+    pub bid_price_start: usize,   // Start index of bid prices (default: 20)
+    pub bid_volume_start: usize,  // Start index of bid volumes (default: 30)
+    pub levels: usize,            // Number of levels
+}
+
+impl FeatureMapping {
+    pub fn standard_lob(levels: usize) -> Self;     // Standard 40-feature LOB
+    pub fn with_derived(levels: usize) -> Self;     // LOB + 8 derived features
+}
+```
+
+#### TensorFormatter
+
+```rust
+pub struct TensorFormatter {
+    format: TensorFormat,
+    mapping: FeatureMapping,
+}
+
+impl TensorFormatter {
+    pub fn new(format: TensorFormat, mapping: FeatureMapping) -> Self;
+    pub fn deeplob(levels: usize) -> Self;     // Convenience constructor
+    pub fn hlob(levels: usize) -> Self;        // Convenience constructor
+    
+    pub fn format_sequence(&self, features: &[Vec<f64>]) -> Result<TensorOutput>;
+    pub fn format_batch(&self, sequences: &[Vec<Vec<f64>>]) -> Result<TensorOutput>;
+}
+```
+
+#### TensorOutput
+
+Type-safe output container:
+
+```rust
+pub enum TensorOutput {
+    Flat2D(Array2<f64>),      // (T, F)
+    Channel3D(Array3<f64>),   // (T, C, L) or (T, L, C)
+    Image4D(Array4<f64>),     // (T, C, H, W)
+}
+
+impl TensorOutput {
+    pub fn shape(&self) -> Vec<usize>;
+    pub fn as_flat(&self) -> Option<&Array2<f64>>;
+    pub fn as_channel(&self) -> Option<&Array3<f64>>;
+    pub fn as_image(&self) -> Option<&Array4<f64>>;
+}
+```
+
+#### Format Comparison
+
+| Format | Shape | Models | When to Use |
+|--------|-------|--------|-------------|
+| Flat | (T, F) | TLOB, LSTM, MLP | Sequence models, attention |
+| DeepLOB | (T, 4, L) | DeepLOB, CNN-LSTM | CNN with channel semantics |
+| HLOB | (T, L, 4) | HLOB | Level-aware architectures |
+| Image | (T, C, H, W) | CNN | Image-processing pipelines |
+
+#### Usage via PipelineOutput
+
+```rust
+// Method 1: With pre-configured formatter
+let formatter = TensorFormatter::deeplob(10);
+let tensor = output.format_sequences(&formatter)?;
+
+// Method 2: Convenience method
+let tensor = output.format_as(
+    TensorFormat::DeepLOB { levels: 10 },
+    FeatureMapping::standard_lob(10)
+)?;
+```
 
 ---
 

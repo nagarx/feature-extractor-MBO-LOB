@@ -73,10 +73,15 @@
 //! ```
 
 pub mod deeplob;
+pub mod multi_horizon;
 pub mod tlob;
 
 // Re-exports for convenience
 pub use deeplob::{DeepLobLabelGenerator, DeepLobMethod};
+pub use multi_horizon::{
+    MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels, MultiHorizonSummary,
+    ThresholdStrategy,
+};
 pub use tlob::TlobLabelGenerator;
 
 // Backward compatibility alias

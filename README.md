@@ -16,11 +16,14 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 - **Auto-Computed Feature Count**: No manual calculation required
 - **Comprehensive Feature Set**: 200+ features across multiple categories
 - **Label Generation**: TLOB and DeepLOB labeling methods for supervised learning
+- **Multi-Horizon Labels**: Generate labels for multiple prediction horizons (FI-2010, DeepLOB presets)
+- **TensorFormatter**: Model-specific tensor shapes (DeepLOB, HLOB, Flat, Image formats)
 - **Multiple Normalization Strategies**: Z-score, Rolling Z-score, Global Z-score, Bilinear
 - **Multi-Scale Sequences**: Fast/Medium/Slow temporal resolution
 - **High Performance**: Single-pass computation, zero-allocation hot paths
 - **Parallel Processing**: Multi-threaded batch processing with Rayon (optional)
 - **Graceful Cancellation**: Cancel long-running jobs from any thread
+- **Hot Store Support**: Pre-decompress data for ~30% faster processing
 
 ## Quick Start
 
@@ -215,6 +218,76 @@ let config = LabelConfig::medium_term();  // h=100, k=20, threshold=0.5%
 // FI-2010 benchmark (k = h)
 let config = LabelConfig::fi2010(50);
 ```
+
+### Multi-Horizon Label Generation
+
+For benchmark reproduction, generate labels at multiple prediction horizons:
+
+```rust
+use feature_extractor::prelude::*;
+
+// FI-2010 preset: horizons [10, 20, 30, 50, 100]
+let config = MultiHorizonConfig::fi2010();
+
+// Generate labels from pipeline output
+let labels = output.generate_multi_horizon_labels(config)?;
+
+// Access per-horizon labels
+for horizon in labels.horizons() {
+    let horizon_labels = labels.labels_for_horizon(*horizon).unwrap();
+    println!("Horizon {}: {} labels", horizon, horizon_labels.len());
+}
+
+// Get summary statistics
+let summary = labels.summary();
+println!("Total labels: {}, Horizons: {}", summary.total_labels, summary.num_horizons);
+```
+
+#### Threshold Strategies
+
+```rust
+// Fixed threshold (default: 0.2%)
+let config = MultiHorizonConfig::new(
+    vec![10, 20, 50, 100],
+    5,
+    ThresholdStrategy::Fixed(0.002)
+);
+
+// Rolling spread-based (adaptive to market conditions)
+let config = MultiHorizonConfig::new(
+    vec![10, 20, 50, 100],
+    5,
+    ThresholdStrategy::rolling_spread(100, 1.0, 0.002)
+);
+```
+
+## Tensor Formatting
+
+Format sequences for specific model architectures:
+
+```rust
+use feature_extractor::prelude::*;
+
+// DeepLOB format: (T, 4, L) with channels [ask_p, ask_v, bid_p, bid_v]
+let formatter = TensorFormatter::deeplob(10);
+let tensor = output.format_sequences(&formatter)?;
+
+// HLOB format: (T, L, 4) level-first ordering
+let formatter = TensorFormatter::hlob(10);
+let tensor = output.format_sequences(&formatter)?;
+
+// Flat format: (T, F) for LSTM/Transformer models
+let tensor = output.format_as(TensorFormat::Flat, FeatureMapping::standard_lob(10))?;
+```
+
+#### Supported Formats
+
+| Format | Shape | Models | Description |
+|--------|-------|--------|-------------|
+| `Flat` | (T, F) | TLOB, LSTM | Standard flat features |
+| `DeepLOB` | (T, 4, L) | DeepLOB, CNN-LSTM | Channel-first format |
+| `HLOB` | (T, L, 4) | HLOB | Level-first format |
+| `Image` | (T, C, H, W) | CNN | Image-like representation |
 
 ## Export to NumPy
 
