@@ -120,7 +120,9 @@ pub use export::{
     NumpyExporter, SplitConfig,
 };
 pub use export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
-pub use export_aligned::{AlignedBatchExporter, AlignedDayExport};
+pub use export_aligned::{
+    AlignedBatchExporter, AlignedDayExport, NormalizationParams, NormalizationStrategy,
+};
 
 // Re-exports - Validation
 pub use validation::{

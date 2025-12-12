@@ -758,6 +758,102 @@ let tensor = output.format_as(
 )?;
 ```
 
+### Normalization Output
+
+The `AlignedBatchExporter` exports normalization parameters alongside sequences,
+enabling Python-side denormalization and validation.
+
+#### Normalization Strategy
+
+```rust
+/// Normalization strategy used for feature export.
+pub enum NormalizationStrategy {
+    None,                    // Raw values
+    PerFeatureZScore,        // Independent z-score per feature
+    MarketStructureZScore,   // Shared price stats (ask+bid per level)
+    GlobalZScore,            // All features share mean/std
+    Bilinear,                // (price - mid) / (k * tick)
+}
+```
+
+**Default: `MarketStructureZScore`** — Preserves market structure (ask > bid ordering).
+
+#### Normalization Params Structure
+
+```rust
+pub struct NormalizationParams {
+    pub strategy: NormalizationStrategy,
+    pub price_means: Vec<f64>,    // 10 values (per level, shared ask+bid)
+    pub price_stds: Vec<f64>,     // 10 values
+    pub size_means: Vec<f64>,     // 20 values (10 ask + 10 bid)
+    pub size_stds: Vec<f64>,      // 20 values
+    pub sample_count: usize,       // Samples used for statistics
+    pub feature_layout: String,    // "ask_prices_10_ask_sizes_10_bid_prices_10_bid_sizes_10"
+    pub levels: usize,             // Number of LOB levels
+}
+```
+
+#### Export Output Files
+
+```
+{day}/
+├── {day}_sequences.npy       # Normalized features [N, T, F]
+├── {day}_labels.npy          # Labels [N] or [N, H]
+├── {day}_normalization.json  # Normalization params (NEW)
+└── {day}_metadata.json       # Includes normalization section
+```
+
+#### Example `{day}_normalization.json`
+
+```json
+{
+  "strategy": "market_structure_z_score",
+  "price_means": [120.50, 120.51, 120.52, ...],
+  "price_stds": [0.05, 0.06, 0.07, ...],
+  "size_means": [150.0, 145.0, ...],
+  "size_stds": [50.0, 48.0, ...],
+  "sample_count": 10000,
+  "feature_layout": "ask_prices_10_ask_sizes_10_bid_prices_10_bid_sizes_10",
+  "levels": 10
+}
+```
+
+#### Example `{day}_metadata.json` (normalization section)
+
+```json
+{
+  "normalization": {
+    "strategy": "market_structure_zscore",
+    "applied": true,
+    "levels": 10,
+    "sample_count": 10000,
+    "feature_layout": "ask_prices_10_ask_sizes_10_bid_prices_10_bid_sizes_10",
+    "params_file": "2025-02-03_normalization.json"
+  }
+}
+```
+
+#### Python Usage
+
+```python
+import json
+import numpy as np
+
+# Load normalization params
+with open("2025-02-03_normalization.json") as f:
+    norm_params = json.load(f)
+
+# Denormalize prices (for interpretability)
+def denormalize_prices(normalized, means, stds, levels=10):
+    result = normalized.copy()
+    for level in range(levels):
+        # Ask prices (0-9)
+        result[:, :, level] = normalized[:, :, level] * stds[level] + means[level]
+        # Bid prices (20-29)
+        result[:, :, 20 + level] = normalized[:, :, 20 + level] * stds[level] + means[level]
+    return result
+```
+
 ---
 
 ## 10. Parallel Batch Processing

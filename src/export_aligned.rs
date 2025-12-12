@@ -31,6 +31,139 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
+// ============================================================================
+// Normalization Types
+// ============================================================================
+
+/// Normalization strategy used for feature export.
+///
+/// This is included in metadata so consumers know how data was normalized.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NormalizationStrategy {
+    /// No normalization applied (raw values)
+    None,
+    /// Per-feature z-score: (x - mean) / std
+    PerFeatureZScore,
+    /// Market-structure preserving z-score:
+    /// - Prices: shared mean/std per level (ask_L and bid_L)
+    /// - Sizes: independent mean/std
+    MarketStructureZScore,
+    /// Global z-score: all features share same mean/std
+    GlobalZScore,
+    /// Bilinear: (price - mid_price) / (k * tick_size)
+    Bilinear,
+}
+
+impl Default for NormalizationStrategy {
+    fn default() -> Self {
+        Self::MarketStructureZScore
+    }
+}
+
+impl std::fmt::Display for NormalizationStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::PerFeatureZScore => write!(f, "per_feature_zscore"),
+            Self::MarketStructureZScore => write!(f, "market_structure_zscore"),
+            Self::GlobalZScore => write!(f, "global_zscore"),
+            Self::Bilinear => write!(f, "bilinear"),
+        }
+    }
+}
+
+/// Normalization parameters for a single day export.
+///
+/// Contains mean/std values for each feature group, enabling:
+/// - Python-side validation of normalization
+/// - Denormalization for interpretability
+/// - Transfer to inference pipeline
+///
+/// # Feature Layout
+///
+/// Standard 40-feature LOB layout:
+/// - `price_params[0..10]`: Ask prices (levels 1-10)
+/// - `size_params[0..10]`: Ask sizes (levels 1-10)
+/// - `price_params[0..10]`: Also used for Bid prices (shared stats)
+/// - `size_params[10..20]`: Bid sizes (levels 1-10)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NormalizationParams {
+    /// Normalization strategy applied
+    pub strategy: NormalizationStrategy,
+    
+    /// Mean values for price features (per-level, shared ask/bid)
+    /// Length: 10 (one per LOB level)
+    pub price_means: Vec<f64>,
+    
+    /// Std values for price features (per-level, shared ask/bid)
+    /// Length: 10 (one per LOB level)
+    pub price_stds: Vec<f64>,
+    
+    /// Mean values for size features (independent per feature)
+    /// Length: 20 (10 ask sizes + 10 bid sizes)
+    pub size_means: Vec<f64>,
+    
+    /// Std values for size features (independent per feature)
+    /// Length: 20 (10 ask sizes + 10 bid sizes)
+    pub size_stds: Vec<f64>,
+    
+    /// Number of samples used to compute statistics
+    pub sample_count: usize,
+    
+    /// Feature layout description for validation
+    pub feature_layout: String,
+    
+    /// Number of LOB levels
+    pub levels: usize,
+}
+
+impl NormalizationParams {
+    /// Create new normalization params with market-structure preserving stats
+    pub fn new(
+        price_means: Vec<f64>,
+        price_stds: Vec<f64>,
+        size_means: Vec<f64>,
+        size_stds: Vec<f64>,
+        sample_count: usize,
+        levels: usize,
+    ) -> Self {
+        Self {
+            strategy: NormalizationStrategy::MarketStructureZScore,
+            price_means,
+            price_stds,
+            size_means,
+            size_stds,
+            sample_count,
+            feature_layout: format!(
+                "ask_prices_{}_ask_sizes_{}_bid_prices_{}_bid_sizes_{}",
+                levels, levels, levels, levels
+            ),
+            levels,
+        }
+    }
+    
+    /// Save normalization params to JSON file
+    pub fn save_json<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let file = File::create(path.as_ref())?;
+        serde_json::to_writer_pretty(file, self)
+            .map_err(|e| std::io::Error::other(format!("Failed to write normalization params: {e}")))?;
+        Ok(())
+    }
+    
+    /// Load normalization params from JSON file
+    pub fn load_json<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let file = File::open(path.as_ref())?;
+        let params: Self = serde_json::from_reader(file)
+            .map_err(|e| std::io::Error::other(format!("Failed to read normalization params: {e}")))?;
+        Ok(params)
+    }
+}
+
+// ============================================================================
+// Export Types
+// ============================================================================
+
 /// Result of exporting a single day with aligned sequences and labels
 #[derive(Debug)]
 pub struct AlignedDayExport {
@@ -305,7 +438,7 @@ impl AlignedBatchExporter {
         self.verify_raw_spreads(&aligned_sequences)?;
 
         // Step 3.6: Apply Z-score normalization (CRITICAL: prevents NaN in training!)
-        let aligned_sequences = self.normalize_sequences(&aligned_sequences)?;
+        let (aligned_sequences, norm_params) = self.normalize_sequences(&aligned_sequences)?;
 
         // Step 4: Export sequences (with optional tensor formatting)
         let seq_shape = if !aligned_sequences.is_empty() {
@@ -327,6 +460,11 @@ impl AlignedBatchExporter {
         let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
         self.export_labels(&aligned_labels, &labels_path)?;
 
+        // Step 5.5: Export normalization params (enables Python-side denormalization)
+        let norm_params_path = self.output_dir.join(format!("{day_name}_normalization.json"));
+        norm_params.save_json(&norm_params_path)?;
+        println!("  📊 Exported normalization params: {:?}", norm_params_path);
+
         // Step 6: Export metadata with verification info
         let drop_rate = if sequences_generated > 0 {
             (sequences_dropped as f64 / sequences_generated as f64) * 100.0
@@ -346,6 +484,14 @@ impl AlignedBatchExporter {
             "label_distribution": label_dist,
             "messages_processed": output.messages_processed,
             "export_timestamp": chrono::Utc::now().to_rfc3339(),
+            "normalization": {
+                "strategy": norm_params.strategy.to_string(),
+                "applied": true,
+                "levels": norm_params.levels,
+                "sample_count": norm_params.sample_count,
+                "feature_layout": &norm_params.feature_layout,
+                "params_file": format!("{day_name}_normalization.json"),
+            },
             "validation": {
                 "sequences_labels_match": aligned_sequences.len() == aligned_labels.len(),
                 "label_range_valid": true,
@@ -448,7 +594,7 @@ impl AlignedBatchExporter {
         self.verify_raw_spreads(&aligned_sequences)?;
 
         // Step 6: Normalize sequences
-        let aligned_sequences = self.normalize_sequences(&aligned_sequences)?;
+        let (aligned_sequences, norm_params) = self.normalize_sequences(&aligned_sequences)?;
 
         // Step 7: Export sequences (with optional tensor formatting)
         let seq_shape = if !aligned_sequences.is_empty() {
@@ -469,6 +615,11 @@ impl AlignedBatchExporter {
         // Step 8: Export multi-horizon labels
         let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
         self.export_multi_horizon_labels(&aligned_label_matrix, &labels_path)?;
+
+        // Step 8.5: Export normalization params
+        let norm_params_path = self.output_dir.join(format!("{day_name}_normalization.json"));
+        norm_params.save_json(&norm_params_path)?;
+        println!("  📊 Exported normalization params: {:?}", norm_params_path);
 
         // Step 9: Export horizons configuration
         let horizons_path = self.output_dir.join(format!("{day_name}_horizons.json"));
@@ -526,6 +677,14 @@ impl AlignedBatchExporter {
             "label_distribution_per_horizon": label_dist,
             "messages_processed": output.messages_processed,
             "export_timestamp": chrono::Utc::now().to_rfc3339(),
+            "normalization": {
+                "strategy": norm_params.strategy.to_string(),
+                "applied": true,
+                "levels": norm_params.levels,
+                "sample_count": norm_params.sample_count,
+                "feature_layout": &norm_params.feature_layout,
+                "params_file": format!("{day_name}_normalization.json"),
+            },
             "validation": {
                 "sequences_labels_match": aligned_sequences.len() == aligned_label_matrix.len(),
                 "all_horizons_valid": true,
@@ -1273,20 +1432,44 @@ impl AlignedBatchExporter {
     ///
     /// CRITICAL FIX: Normalizes ask+bid prices TOGETHER per level to preserve ordering.
     ///
-    /// Feature layout: [Ask_prices(10), Ask_sizes(10), Bid_prices(10), Bid_sizes(10)]
-    ///                  0-9            10-19          20-29          30-39
+    /// # Feature Layout
     ///
-    /// For prices: Normalize ask_L and bid_L using SHARED mean/std for level L
-    /// For sizes: Normalize independently (no ordering constraint)
+    /// Standard 40-feature LOB:
+    /// - `[0..10]`: Ask prices (levels 1-10)
+    /// - `[10..20]`: Ask sizes (levels 1-10)
+    /// - `[20..30]`: Bid prices (levels 1-10)
+    /// - `[30..40]`: Bid sizes (levels 1-10)
     ///
-    /// This ensures: if ask > bid, then ask_norm > bid_norm (market structure preserved!)
-    fn normalize_sequences(&self, sequences: &[Vec<Vec<f64>>]) -> Result<Vec<Vec<Vec<f64>>>> {
+    /// # Normalization Strategy
+    ///
+    /// - **Prices**: Shared mean/std per level (ask_L and bid_L use same stats)
+    /// - **Sizes**: Independent mean/std per feature
+    ///
+    /// This ensures: if `ask > bid` in raw data, then `ask_norm > bid_norm` (market structure preserved!)
+    ///
+    /// # Returns
+    ///
+    /// Tuple of (normalized_sequences, normalization_params) for export.
+    fn normalize_sequences(
+        &self,
+        sequences: &[Vec<Vec<f64>>],
+    ) -> Result<(Vec<Vec<Vec<f64>>>, NormalizationParams)> {
         if sequences.is_empty() {
-            return Ok(Vec::new());
+            // Return empty with default params
+            let empty_params = NormalizationParams::new(
+                vec![0.0; 10],
+                vec![1.0; 10],
+                vec![0.0; 20],
+                vec![1.0; 20],
+                0,
+                10,
+            );
+            return Ok((Vec::new(), empty_params));
         }
 
         let n_features = sequences[0][0].len();
         let epsilon = 1e-8;
+        let levels = 10; // Standard LOB levels
 
         println!("  🔧 Applying market-structure preserving Z-score normalization...");
 
@@ -1295,13 +1478,16 @@ impl AlignedBatchExporter {
         // For sizes: independent mean/std
 
         // Collect all values per feature for statistics
-        let mut price_level_values: Vec<Vec<f64>> = vec![Vec::new(); 10]; // 10 price levels
-        let mut size_values: Vec<Vec<f64>> = vec![Vec::new(); 20]; // 20 size features (10 ask + 10 bid)
+        let mut price_level_values: Vec<Vec<f64>> = vec![Vec::new(); levels];
+        let mut size_values: Vec<Vec<f64>> = vec![Vec::new(); levels * 2];
+        let mut total_samples = 0usize;
 
         for seq in sequences {
             for timestep in seq {
+                total_samples += 1;
+                
                 // Collect ask prices (0-9) and bid prices (20-29) together per level
-                for level in 0..10 {
+                for level in 0..levels {
                     let ask_price = timestep[level];
                     let bid_price = timestep[20 + level];
 
@@ -1311,18 +1497,18 @@ impl AlignedBatchExporter {
                 }
 
                 // Collect sizes independently
-                for i in 0..10 {
+                for i in 0..levels {
                     size_values[i].push(timestep[10 + i]); // Ask sizes
-                    size_values[10 + i].push(timestep[30 + i]); // Bid sizes
+                    size_values[levels + i].push(timestep[30 + i]); // Bid sizes
                 }
             }
         }
 
         // Compute mean/std for each price level (shared across ask+bid)
-        let mut price_means = [0.0; 10];
-        let mut price_stds = [1.0; 10];
+        let mut price_means = vec![0.0; levels];
+        let mut price_stds = vec![1.0; levels];
 
-        for level in 0..10 {
+        for level in 0..levels {
             let values = &price_level_values[level];
             if !values.is_empty() {
                 let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
@@ -1340,10 +1526,10 @@ impl AlignedBatchExporter {
         }
 
         // Compute mean/std for each size feature (independent)
-        let mut size_means = [0.0; 20];
-        let mut size_stds = [1.0; 20];
+        let mut size_means = vec![0.0; levels * 2];
+        let mut size_stds = vec![1.0; levels * 2];
 
-        for i in 0..20 {
+        for i in 0..(levels * 2) {
             let values = &size_values[i];
             if !values.is_empty() {
                 let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
@@ -1359,6 +1545,16 @@ impl AlignedBatchExporter {
                 size_stds[i] = std;
             }
         }
+
+        // Create normalization params for export
+        let norm_params = NormalizationParams::new(
+            price_means.clone(),
+            price_stds.clone(),
+            size_means.clone(),
+            size_stds.clone(),
+            total_samples,
+            levels,
+        );
 
         // Step 2: Normalize all sequences using computed statistics
         let mut normalized = Vec::with_capacity(sequences.len());
@@ -1402,8 +1598,12 @@ impl AlignedBatchExporter {
         }
 
         println!("    ✓ Market-structure preserved (ask > bid maintained)");
+        println!(
+            "    📊 Stats: {} samples, {} levels",
+            total_samples, levels
+        );
 
-        Ok(normalized)
+        Ok((normalized, norm_params))
     }
 
     /// Export sequences as 3D numpy array

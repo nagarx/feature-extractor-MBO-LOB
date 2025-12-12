@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Normalization Metadata Export**
+  - New `NormalizationStrategy` enum: `None`, `PerFeatureZScore`, `MarketStructureZScore`, `GlobalZScore`, `Bilinear`
+  - New `NormalizationParams` struct with serialization support
+  - Exports `{day}_normalization.json` alongside sequences
+  - Metadata JSON now includes `normalization` section with strategy, sample count, and params file path
+  - Enables Python-side denormalization and validation
+  - 5 new tests for normalization types
+
 - **Zero-Allocation Feature Extraction API (Phase 1)**
   - `FeatureExtractor::extract_into()` - Write features to pre-allocated buffer
   - `FeatureExtractor::extract_arc()` - Extract and wrap in `Arc<Vec<f64>>`

@@ -299,3 +299,139 @@ fn test_exporter_creates_output_directory() {
     let _ = std::fs::remove_dir_all(test_dir);
 }
 
+// ============================================================================
+// Normalization Types Tests
+// ============================================================================
+
+#[test]
+fn test_normalization_strategy_default() {
+    let strategy = NormalizationStrategy::default();
+    assert_eq!(strategy, NormalizationStrategy::MarketStructureZScore);
+}
+
+#[test]
+fn test_normalization_strategy_display() {
+    // Note: Display impl uses custom formatting, different from serde
+    assert_eq!(NormalizationStrategy::None.to_string(), "none");
+    assert_eq!(
+        NormalizationStrategy::PerFeatureZScore.to_string(),
+        "per_feature_zscore"
+    );
+    assert_eq!(
+        NormalizationStrategy::MarketStructureZScore.to_string(),
+        "market_structure_zscore"
+    );
+    assert_eq!(
+        NormalizationStrategy::GlobalZScore.to_string(),
+        "global_zscore"
+    );
+    assert_eq!(NormalizationStrategy::Bilinear.to_string(), "bilinear");
+    
+    // Serde uses rename_all = "snake_case" which produces slightly different output
+    // e.g., MarketStructureZScore -> "market_structure_z_score" in JSON
+}
+
+#[test]
+fn test_normalization_params_new() {
+    let price_means = vec![100.0; 10];
+    let price_stds = vec![0.1; 10];
+    let size_means = vec![500.0; 20];
+    let size_stds = vec![100.0; 20];
+
+    let params = NormalizationParams::new(
+        price_means.clone(),
+        price_stds.clone(),
+        size_means.clone(),
+        size_stds.clone(),
+        10000,
+        10,
+    );
+
+    assert_eq!(params.strategy, NormalizationStrategy::MarketStructureZScore);
+    assert_eq!(params.price_means.len(), 10);
+    assert_eq!(params.price_stds.len(), 10);
+    assert_eq!(params.size_means.len(), 20);
+    assert_eq!(params.size_stds.len(), 20);
+    assert_eq!(params.sample_count, 10000);
+    assert_eq!(params.levels, 10);
+    assert_eq!(
+        params.feature_layout,
+        "ask_prices_10_ask_sizes_10_bid_prices_10_bid_sizes_10"
+    );
+}
+
+#[test]
+fn test_normalization_params_serialization() {
+    let params = NormalizationParams::new(
+        vec![100.0, 100.01, 100.02, 100.03, 100.04, 100.05, 100.06, 100.07, 100.08, 100.09],
+        vec![0.1; 10],
+        vec![500.0; 20],
+        vec![100.0; 20],
+        5000,
+        10,
+    );
+
+    // Serialize to JSON string
+    let json = serde_json::to_string_pretty(&params).expect("Failed to serialize");
+
+    // Verify JSON contains expected fields (strategy is serialized with serde rename_all)
+    // Note: serde rename_all = "snake_case" converts MarketStructureZScore to market_structure_z_score
+    assert!(
+        json.contains("market_structure_z_score"),
+        "JSON should contain strategy: {}",
+        json
+    );
+    assert!(json.contains("sample_count"), "JSON should contain sample_count");
+    assert!(json.contains("5000"), "JSON should contain sample count value");
+    assert!(json.contains("levels"), "JSON should contain levels");
+    assert!(json.contains("price_means"), "JSON should contain price_means");
+    assert!(json.contains("price_stds"), "JSON should contain price_stds");
+    assert!(json.contains("size_means"), "JSON should contain size_means");
+    assert!(json.contains("size_stds"), "JSON should contain size_stds");
+
+    // Deserialize back
+    let deserialized: NormalizationParams =
+        serde_json::from_str(&json).expect("Failed to deserialize");
+
+    assert_eq!(deserialized.strategy, params.strategy);
+    assert_eq!(deserialized.sample_count, params.sample_count);
+    assert_eq!(deserialized.levels, params.levels);
+    assert_eq!(deserialized.price_means.len(), 10);
+}
+
+#[test]
+fn test_normalization_params_save_load() {
+    let temp_dir = std::env::temp_dir().join("normalization_test");
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let path = temp_dir.join("test_norm_params.json");
+
+    let params = NormalizationParams::new(
+        vec![100.0; 10],
+        vec![0.1; 10],
+        vec![500.0; 20],
+        vec![100.0; 20],
+        8000,
+        10,
+    );
+
+    // Save to file
+    params.save_json(&path).expect("Failed to save");
+
+    // Verify file exists
+    assert!(path.exists());
+
+    // Load from file
+    let loaded = NormalizationParams::load_json(&path).expect("Failed to load");
+
+    assert_eq!(loaded.strategy, params.strategy);
+    assert_eq!(loaded.sample_count, params.sample_count);
+    assert_eq!(loaded.levels, params.levels);
+    assert_eq!(loaded.price_means, params.price_means);
+    assert_eq!(loaded.price_stds, params.price_stds);
+    assert_eq!(loaded.size_means, params.size_means);
+    assert_eq!(loaded.size_stds, params.size_stds);
+
+    // Cleanup
+    std::fs::remove_dir_all(temp_dir).unwrap();
+}
+

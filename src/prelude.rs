@@ -140,7 +140,9 @@ pub use crate::export::{
 };
 pub use crate::export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
 
-pub use crate::export_aligned::{AlignedBatchExporter, AlignedDayExport};
+pub use crate::export_aligned::{
+    AlignedBatchExporter, AlignedDayExport, NormalizationParams, NormalizationStrategy,
+};
 
 // ============================================================================
 // Validation
@@ -171,7 +173,7 @@ pub use mbo_lob_reconstructor::{
     MarketImpact,
 
     MboMessage,
-    NormalizationParams,
+    // NormalizationParams removed - use export_aligned::NormalizationParams instead for export
 
     // Error handling
     Result,
