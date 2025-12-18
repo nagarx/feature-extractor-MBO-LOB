@@ -23,9 +23,9 @@ databento = ["mbo-lob-reconstructor/databento", "dep:dbn"]
 parallel = ["dep:rayon"]
 
 [dependencies]
-# MBO-LOB Reconstructor - using local path for optimization work
-# Original git dependency: mbo-lob-reconstructor = { git = "https://github.com/nagarx/MBO-LOB-reconstructor.git", branch = "main" }
-mbo-lob-reconstructor = { path = "../MBO-LOB-reconstructor" }
+# MBO-LOB Reconstructor
+# For local development with path override, see .cargo/config.toml
+mbo-lob-reconstructor = { git = "https://github.com/nagarx/MBO-LOB-reconstructor.git", branch = "main" }
 dbn = { git = "https://github.com/databento/dbn.git", tag = "v0.20.0", optional = true }
 
 # Hash maps

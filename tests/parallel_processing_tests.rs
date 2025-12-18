@@ -80,12 +80,7 @@ fn test_batch_config_hardware_scaling() {
 
     for (threads, name) in configs {
         let config = BatchConfig::new().with_threads(threads);
-        assert_eq!(
-            config.num_threads,
-            Some(threads),
-            "Failed for {}",
-            name
-        );
+        assert_eq!(config.num_threads, Some(threads), "Failed for {}", name);
     }
 }
 
@@ -312,8 +307,11 @@ fn test_parallel_numerical_correctness() {
             "Sequence length mismatch"
         );
 
-        for (snap_idx, (seq_snap, par_snap)) in
-            seq_first.features.iter().zip(par_first.features.iter()).enumerate()
+        for (snap_idx, (seq_snap, par_snap)) in seq_first
+            .features
+            .iter()
+            .zip(par_first.features.iter())
+            .enumerate()
         {
             for (feat_idx, (seq_val, par_val)) in seq_snap.iter().zip(par_snap.iter()).enumerate() {
                 assert_eq!(
@@ -437,15 +435,27 @@ fn test_batch_output_statistics() {
     println!("   Successful: {}", output.successful_count());
     println!("   Total messages: {}", output.total_messages());
     println!("   Total sequences: {}", output.total_sequences());
-    println!("   Throughput: {:.2} msg/sec", output.throughput_msg_per_sec());
+    println!(
+        "   Throughput: {:.2} msg/sec",
+        output.throughput_msg_per_sec()
+    );
     println!("   Speedup: {:.2}x", output.speedup_factor());
     println!("   Elapsed: {:?}", output.elapsed);
 
     // Verify statistics are reasonable
-    assert!(output.total_messages() > 0, "Should have processed messages");
-    assert!(output.throughput_msg_per_sec() > 0.0, "Throughput should be positive");
+    assert!(
+        output.total_messages() > 0,
+        "Should have processed messages"
+    );
+    assert!(
+        output.throughput_msg_per_sec() > 0.0,
+        "Throughput should be positive"
+    );
     assert!(output.speedup_factor() > 0.0, "Speedup should be positive");
-    assert!(output.elapsed.as_nanos() > 0, "Elapsed time should be positive");
+    assert!(
+        output.elapsed.as_nanos() > 0,
+        "Elapsed time should be positive"
+    );
 
     // Verify individual results
     for result in output.iter() {
@@ -504,19 +514,31 @@ fn test_cancellation_token_basic() {
     let token = CancellationToken::new();
 
     // Initially not cancelled
-    assert!(!token.is_cancelled(), "Token should not be cancelled initially");
+    assert!(
+        !token.is_cancelled(),
+        "Token should not be cancelled initially"
+    );
 
     // Cancel
     token.cancel();
-    assert!(token.is_cancelled(), "Token should be cancelled after cancel()");
+    assert!(
+        token.is_cancelled(),
+        "Token should be cancelled after cancel()"
+    );
 
     // Clone should share state
     let token2 = token.clone();
-    assert!(token2.is_cancelled(), "Cloned token should also be cancelled");
+    assert!(
+        token2.is_cancelled(),
+        "Cloned token should also be cancelled"
+    );
 
     // Reset
     token.reset();
-    assert!(!token.is_cancelled(), "Token should not be cancelled after reset()");
+    assert!(
+        !token.is_cancelled(),
+        "Token should not be cancelled after reset()"
+    );
     assert!(
         !token2.is_cancelled(),
         "Cloned token should also be reset (shared state)"
@@ -545,8 +567,8 @@ fn test_cancellation_immediate() {
     // Cancel BEFORE processing
     token.cancel();
 
-    let processor = BatchProcessor::new(pipeline_config, batch_config)
-        .with_cancellation_token(token.clone());
+    let processor =
+        BatchProcessor::new(pipeline_config, batch_config).with_cancellation_token(token.clone());
 
     let output = processor.process_files(&test_files).unwrap();
 
@@ -577,11 +599,17 @@ fn test_cancellation_processor_methods() {
 
     // Get token from processor
     let token = processor.cancellation_token();
-    assert!(!processor.is_cancelled(), "Should not be cancelled initially");
+    assert!(
+        !processor.is_cancelled(),
+        "Should not be cancelled initially"
+    );
 
     // Cancel via processor method
     processor.cancel();
-    assert!(processor.is_cancelled(), "Should be cancelled after cancel()");
+    assert!(
+        processor.is_cancelled(),
+        "Should be cancelled after cancel()"
+    );
     assert!(token.is_cancelled(), "Token should also show cancelled");
 
     println!("   ✅ BatchProcessor cancellation methods work correctly!");
@@ -618,7 +646,10 @@ fn test_cancellation_with_custom_token() {
         "All files should be processed"
     );
 
-    println!("   Processed {} files successfully", output.successful_count());
+    println!(
+        "   Processed {} files successfully",
+        output.successful_count()
+    );
     println!("   ✅ Custom token integration works correctly!");
 }
 
@@ -666,8 +697,8 @@ fn test_cancellation_with_error_mode() {
     let token = CancellationToken::new();
     token.cancel(); // Cancel immediately
 
-    let processor = BatchProcessor::new(pipeline_config, batch_config)
-        .with_cancellation_token(token);
+    let processor =
+        BatchProcessor::new(pipeline_config, batch_config).with_cancellation_token(token);
 
     let output = processor.process_files(&test_files_ref).unwrap();
 
@@ -770,25 +801,31 @@ fn test_batch_processor_with_hot_store() {
     let hot_store = HotStoreManager::for_dbn("../data/hot_store");
 
     // Process with hot store (should resolve to decompressed files)
-    let processor_with_hot_store = BatchProcessor::new(config.clone(), batch_config.clone())
-        .with_hot_store(hot_store);
+    let processor_with_hot_store =
+        BatchProcessor::new(config.clone(), batch_config.clone()).with_hot_store(hot_store);
 
     // Use first compressed file (will be resolved to hot store if available)
     let test_file = &compressed_files[0];
     let test_files_ref: Vec<&str> = vec![test_file.as_str()];
 
     let result = processor_with_hot_store.process_files(&test_files_ref);
-    
+
     match result {
         Ok(output) => {
             println!("   Processed {} files", output.successful_count());
             println!("   Total messages: {}", output.total_messages());
-            assert!(output.successful_count() > 0, "Should process at least one file");
+            assert!(
+                output.successful_count() > 0,
+                "Should process at least one file"
+            );
             println!("   ✅ Hot store integration works!");
         }
         Err(e) => {
             // It's OK if the file doesn't exist in hot store
-            println!("   ⚠️  Processing failed (expected if file not in hot store): {}", e);
+            println!(
+                "   ⚠️  Processing failed (expected if file not in hot store): {}",
+                e
+            );
         }
     }
 }
@@ -811,12 +848,9 @@ fn test_hot_store_produces_same_results_as_direct() {
         .unwrap()
         .to_string_lossy()
         .to_string();
-    
+
     // Construct compressed path
-    let compressed_path = format!(
-        "../data/NVDA_2025-02-01_to_2025-09-30/{}.zst",
-        hot_filename
-    );
+    let compressed_path = format!("../data/NVDA_2025-02-01_to_2025-09-30/{}.zst", hot_filename);
 
     if !Path::new(&compressed_path).exists() {
         println!("   ⏭️  Skipped: Corresponding compressed file not found");
@@ -829,20 +863,18 @@ fn test_hot_store_produces_same_results_as_direct() {
     let mut pipeline1 = Pipeline::from_config(config.clone()).unwrap();
     let output_compressed = pipeline1.process(&compressed_path).unwrap();
 
-    // Process decompressed file directly  
+    // Process decompressed file directly
     let mut pipeline2 = Pipeline::from_config(config.clone()).unwrap();
     let output_decompressed = pipeline2.process(hot_file).unwrap();
 
     // Results should be identical
     assert_eq!(
-        output_compressed.messages_processed,
-        output_decompressed.messages_processed,
+        output_compressed.messages_processed, output_decompressed.messages_processed,
         "Message counts should match"
     );
-    
+
     assert_eq!(
-        output_compressed.features_extracted,
-        output_decompressed.features_extracted,
+        output_compressed.features_extracted, output_decompressed.features_extracted,
         "Feature counts should match"
     );
 
@@ -856,20 +888,27 @@ fn test_hot_store_produces_same_results_as_direct() {
     if !output_compressed.sequences.is_empty() && !output_decompressed.sequences.is_empty() {
         let seq1 = &output_compressed.sequences[0];
         let seq2 = &output_decompressed.sequences[0];
-        
-        assert_eq!(seq1.features.len(), seq2.features.len(), "Feature vector lengths should match");
-        
+
+        assert_eq!(
+            seq1.features.len(),
+            seq2.features.len(),
+            "Feature vector lengths should match"
+        );
+
         // Check first few features are exactly equal
         for i in 0..seq1.features.len().min(10) {
             let f1 = &seq1.features[i];
             let f2 = &seq2.features[i];
             assert_eq!(f1.len(), f2.len(), "Feature row {} length mismatch", i);
-            
+
             for j in 0..f1.len().min(5) {
                 assert!(
                     (f1[j] - f2[j]).abs() < 1e-10,
                     "Feature [{},{}] mismatch: {} vs {}",
-                    i, j, f1[j], f2[j]
+                    i,
+                    j,
+                    f1[j],
+                    f2[j]
                 );
             }
         }
@@ -895,7 +934,10 @@ fn test_batch_config_with_hot_store_dir() {
         .with_hot_store_dir("data/hot_store/");
 
     assert!(config.has_hot_store(), "Should have hot store configured");
-    assert_eq!(config.hot_store_dir.as_ref().unwrap().to_str().unwrap(), "data/hot_store/");
+    assert_eq!(
+        config.hot_store_dir.as_ref().unwrap().to_str().unwrap(),
+        "data/hot_store/"
+    );
     assert_eq!(config.num_threads, Some(4));
 
     println!("   ✅ BatchConfig.with_hot_store_dir() works correctly!");
@@ -907,7 +949,10 @@ fn test_batch_config_hot_store_default_none() {
 
     let config = BatchConfig::new();
 
-    assert!(!config.has_hot_store(), "Should not have hot store by default");
+    assert!(
+        !config.has_hot_store(),
+        "Should not have hot store by default"
+    );
     assert!(config.hot_store_dir.is_none());
 
     println!("   ✅ BatchConfig defaults to no hot store!");
@@ -918,17 +963,16 @@ fn test_batch_processor_auto_creates_hot_store_manager() {
     println!("\n📊 BatchProcessor Auto-Creates HotStoreManager Test");
 
     let pipeline_config = create_test_config();
-    
+
     // Test 1: Without hot store dir
     let batch_config_no_hot = BatchConfig::new();
     let _processor_no_hot = BatchProcessor::new(pipeline_config.clone(), batch_config_no_hot);
     // Can't directly check hot_store_manager, but we can verify it works
-    
+
     // Test 2: With hot store dir (processor should auto-create manager)
-    let batch_config_with_hot = BatchConfig::new()
-        .with_hot_store_dir("../data/hot_store/");
+    let batch_config_with_hot = BatchConfig::new().with_hot_store_dir("../data/hot_store/");
     let _processor_with_hot = BatchProcessor::new(pipeline_config.clone(), batch_config_with_hot);
-    
+
     println!("   ✅ BatchProcessor auto-creates HotStoreManager from config!");
 }
 
@@ -962,8 +1006,11 @@ fn test_convenience_functions_with_batch_config_hot_store() {
     match result {
         Ok(output) => {
             assert!(output.successful_count() > 0, "Should process successfully");
-            println!("   Processed {} files with {} messages", 
-                output.successful_count(), output.total_messages());
+            println!(
+                "   Processed {} files with {} messages",
+                output.successful_count(),
+                output.total_messages()
+            );
             println!("   ✅ Convenience functions work with default BatchConfig!");
         }
         Err(e) => {
@@ -994,23 +1041,25 @@ fn test_batch_processor_with_config_hot_store_produces_correct_results() {
     let processor1 = BatchProcessor::new(pipeline_config.clone(), batch_config1);
     let result1 = processor1.process_files(&[test_file.as_str()]);
 
-    // Method 2: Direct with_hot_store() 
+    // Method 2: Direct with_hot_store()
     use mbo_lob_reconstructor::HotStoreManager;
     let hot_store = HotStoreManager::for_dbn("../data/hot_store/");
     let batch_config2 = BatchConfig::new().with_threads(2);
-    let processor2 = BatchProcessor::new(pipeline_config.clone(), batch_config2)
-        .with_hot_store(hot_store);
+    let processor2 =
+        BatchProcessor::new(pipeline_config.clone(), batch_config2).with_hot_store(hot_store);
     let result2 = processor2.process_files(&[test_file.as_str()]);
 
     match (result1, result2) {
         (Ok(output1), Ok(output2)) => {
             // Both should produce identical results
             assert_eq!(
-                output1.total_messages(), output2.total_messages(),
+                output1.total_messages(),
+                output2.total_messages(),
                 "Message counts should match"
             );
             assert_eq!(
-                output1.total_sequences(), output2.total_sequences(),
+                output1.total_sequences(),
+                output2.total_sequences(),
                 "Sequence counts should match"
             );
             println!("   Messages: {}", output1.total_messages());
@@ -1018,11 +1067,13 @@ fn test_batch_processor_with_config_hot_store_produces_correct_results() {
             println!("   ✅ Config hot store and direct hot store produce identical results!");
         }
         (Err(e1), Err(e2)) => {
-            println!("   Both failed (expected if hot file doesn't exist): {} / {}", e1, e2);
+            println!(
+                "   Both failed (expected if hot file doesn't exist): {} / {}",
+                e1, e2
+            );
         }
         _ => {
             println!("   ⚠️  Inconsistent results between methods");
         }
     }
 }
-

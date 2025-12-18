@@ -35,7 +35,7 @@ enum DataSource {
 /// Get test file, preferring hot store (decompressed) over compressed.
 fn get_test_file() -> Option<String> {
     let (file, source) = get_test_file_with_source()?;
-    
+
     // Log which source is being used
     match source {
         DataSource::HotStore => println!("   📂 Using HOT STORE - FAST PATH"),
@@ -44,7 +44,7 @@ fn get_test_file() -> Option<String> {
             println!("   💡 Tip: Run `decompress_to_hot_store` to speed up tests ~3-4x");
         }
     }
-    
+
     Some(file)
 }
 
@@ -64,13 +64,13 @@ fn get_test_file_with_source() -> Option<(String, DataSource)> {
             })
             .map(|p| p.to_string_lossy().to_string())
             .collect();
-        
+
         if !hot_files.is_empty() {
             hot_files.sort();
             return Some((hot_files.first().cloned()?, DataSource::HotStore));
         }
     }
-    
+
     // Fallback to compressed files
     let compressed_path = Path::new(COMPRESSED_DIR);
     if !compressed_path.exists() {
@@ -118,7 +118,10 @@ fn test_process_vs_process_messages_equivalence() {
         }
     };
 
-    println!("   Test file: {}", test_file.split('/').last().unwrap_or(&test_file));
+    println!(
+        "   Test file: {}",
+        test_file.split('/').last().unwrap_or(&test_file)
+    );
 
     let config = create_test_config();
 
@@ -129,7 +132,9 @@ fn test_process_vs_process_messages_equivalence() {
     // Method 2: Use process_messages() with DbnLoader
     let mut pipeline2 = Pipeline::from_config(config.clone()).unwrap();
     let loader = DbnLoader::new(&test_file).unwrap();
-    let output2 = pipeline2.process_messages(loader.iter_messages().unwrap()).unwrap();
+    let output2 = pipeline2
+        .process_messages(loader.iter_messages().unwrap())
+        .unwrap();
 
     // ========================================================================
     // Verify ALL fields are identical
@@ -143,7 +148,10 @@ fn test_process_vs_process_messages_equivalence() {
         "Messages processed mismatch: {} vs {}",
         output1.messages_processed, output2.messages_processed
     );
-    println!("   ✓ messages_processed: {} == {}", output1.messages_processed, output2.messages_processed);
+    println!(
+        "   ✓ messages_processed: {} == {}",
+        output1.messages_processed, output2.messages_processed
+    );
 
     // 2. Features extracted
     assert_eq!(
@@ -151,7 +159,10 @@ fn test_process_vs_process_messages_equivalence() {
         "Features extracted mismatch: {} vs {}",
         output1.features_extracted, output2.features_extracted
     );
-    println!("   ✓ features_extracted: {} == {}", output1.features_extracted, output2.features_extracted);
+    println!(
+        "   ✓ features_extracted: {} == {}",
+        output1.features_extracted, output2.features_extracted
+    );
 
     // 3. Sequences generated
     assert_eq!(
@@ -159,44 +170,73 @@ fn test_process_vs_process_messages_equivalence() {
         "Sequences generated mismatch: {} vs {}",
         output1.sequences_generated, output2.sequences_generated
     );
-    println!("   ✓ sequences_generated: {} == {}", output1.sequences_generated, output2.sequences_generated);
+    println!(
+        "   ✓ sequences_generated: {} == {}",
+        output1.sequences_generated, output2.sequences_generated
+    );
 
     // 4. Sequence count
     assert_eq!(
-        output1.sequences.len(), output2.sequences.len(),
+        output1.sequences.len(),
+        output2.sequences.len(),
         "Sequence count mismatch: {} vs {}",
-        output1.sequences.len(), output2.sequences.len()
+        output1.sequences.len(),
+        output2.sequences.len()
     );
-    println!("   ✓ sequences.len(): {} == {}", output1.sequences.len(), output2.sequences.len());
+    println!(
+        "   ✓ sequences.len(): {} == {}",
+        output1.sequences.len(),
+        output2.sequences.len()
+    );
 
     // 5. Mid prices count
     assert_eq!(
-        output1.mid_prices.len(), output2.mid_prices.len(),
+        output1.mid_prices.len(),
+        output2.mid_prices.len(),
         "Mid prices count mismatch: {} vs {}",
-        output1.mid_prices.len(), output2.mid_prices.len()
+        output1.mid_prices.len(),
+        output2.mid_prices.len()
     );
-    println!("   ✓ mid_prices.len(): {} == {}", output1.mid_prices.len(), output2.mid_prices.len());
+    println!(
+        "   ✓ mid_prices.len(): {} == {}",
+        output1.mid_prices.len(),
+        output2.mid_prices.len()
+    );
 
     // 6. Stride and window size (should be config-based, just verify)
     assert_eq!(output1.stride, output2.stride);
     assert_eq!(output1.window_size, output2.window_size);
     println!("   ✓ stride: {} == {}", output1.stride, output2.stride);
-    println!("   ✓ window_size: {} == {}", output1.window_size, output2.window_size);
+    println!(
+        "   ✓ window_size: {} == {}",
+        output1.window_size, output2.window_size
+    );
 
     // ========================================================================
     // Verify numerical precision of mid_prices
     // ========================================================================
 
     println!("\n   Verifying mid_price numerical precision...");
-    
-    for (i, (p1, p2)) in output1.mid_prices.iter().zip(output2.mid_prices.iter()).enumerate() {
+
+    for (i, (p1, p2)) in output1
+        .mid_prices
+        .iter()
+        .zip(output2.mid_prices.iter())
+        .enumerate()
+    {
         assert!(
             (p1 - p2).abs() < 1e-10,
             "Mid price mismatch at index {}: {} vs {} (diff: {})",
-            i, p1, p2, (p1 - p2).abs()
+            i,
+            p1,
+            p2,
+            (p1 - p2).abs()
         );
     }
-    println!("   ✓ All {} mid_prices match with <1e-10 precision", output1.mid_prices.len());
+    println!(
+        "   ✓ All {} mid_prices match with <1e-10 precision",
+        output1.mid_prices.len()
+    );
 
     // ========================================================================
     // Verify sequences match exactly
@@ -204,20 +244,32 @@ fn test_process_vs_process_messages_equivalence() {
 
     println!("\n   Verifying sequence contents...");
 
-    for (seq_idx, (seq1, seq2)) in output1.sequences.iter().zip(output2.sequences.iter()).enumerate() {
+    for (seq_idx, (seq1, seq2)) in output1
+        .sequences
+        .iter()
+        .zip(output2.sequences.iter())
+        .enumerate()
+    {
         // Check feature matrix dimensions
         assert_eq!(
-            seq1.features.len(), seq2.features.len(),
+            seq1.features.len(),
+            seq2.features.len(),
             "Sequence {} feature count mismatch: {} vs {}",
-            seq_idx, seq1.features.len(), seq2.features.len()
+            seq_idx,
+            seq1.features.len(),
+            seq2.features.len()
         );
 
         // Check each feature row
         for (row_idx, (row1, row2)) in seq1.features.iter().zip(seq2.features.iter()).enumerate() {
             assert_eq!(
-                row1.len(), row2.len(),
+                row1.len(),
+                row2.len(),
                 "Sequence {} row {} length mismatch: {} vs {}",
-                seq_idx, row_idx, row1.len(), row2.len()
+                seq_idx,
+                row_idx,
+                row1.len(),
+                row2.len()
             );
 
             // Check numerical precision
@@ -225,18 +277,28 @@ fn test_process_vs_process_messages_equivalence() {
                 assert!(
                     (v1 - v2).abs() < 1e-10,
                     "Sequence {} feature [{},{}] mismatch: {} vs {} (diff: {})",
-                    seq_idx, row_idx, col_idx, v1, v2, (v1 - v2).abs()
+                    seq_idx,
+                    row_idx,
+                    col_idx,
+                    v1,
+                    v2,
+                    (v1 - v2).abs()
                 );
             }
         }
     }
 
-    let total_features: usize = output1.sequences.iter()
+    let total_features: usize = output1
+        .sequences
+        .iter()
         .map(|s| s.features.len() * s.features.first().map(|r| r.len()).unwrap_or(0))
         .sum();
-    
-    println!("   ✓ All {} sequences verified ({} total feature values)", 
-        output1.sequences.len(), total_features);
+
+    println!(
+        "   ✓ All {} sequences verified ({} total feature values)",
+        output1.sequences.len(),
+        total_features
+    );
 
     // ========================================================================
     // Final Summary
@@ -264,7 +326,10 @@ fn test_process_source_equivalence() {
         }
     };
 
-    println!("   Test file: {}", test_file.split('/').last().unwrap_or(&test_file));
+    println!(
+        "   Test file: {}",
+        test_file.split('/').last().unwrap_or(&test_file)
+    );
 
     let config = create_test_config();
 
@@ -340,37 +405,51 @@ fn test_all_processing_methods_equivalence() {
     {
         let mut pipeline = Pipeline::from_config(config.clone()).unwrap();
         let loader = DbnLoader::new(&test_file).unwrap();
-        results.push(("process_messages(iter)", pipeline.process_messages(loader.iter_messages().unwrap()).unwrap()));
+        results.push((
+            "process_messages(iter)",
+            pipeline
+                .process_messages(loader.iter_messages().unwrap())
+                .unwrap(),
+        ));
     }
 
     // Method 3: process_source(DbnSource)
     {
         let mut pipeline = Pipeline::from_config(config.clone()).unwrap();
         let source = DbnSource::new(&test_file).unwrap();
-        results.push(("process_source(DbnSource)", pipeline.process_source(source).unwrap()));
+        results.push((
+            "process_source(DbnSource)",
+            pipeline.process_source(source).unwrap(),
+        ));
     }
 
     // Verify all produce identical results
     let baseline = &results[0].1;
-    
+
     for (name, output) in &results[1..] {
         assert_eq!(
             baseline.messages_processed, output.messages_processed,
-            "{} messages_processed differs from baseline", name
+            "{} messages_processed differs from baseline",
+            name
         );
         assert_eq!(
             baseline.features_extracted, output.features_extracted,
-            "{} features_extracted differs from baseline", name
+            "{} features_extracted differs from baseline",
+            name
         );
         assert_eq!(
-            baseline.sequences.len(), output.sequences.len(),
-            "{} sequence count differs from baseline", name
+            baseline.sequences.len(),
+            output.sequences.len(),
+            "{} sequence count differs from baseline",
+            name
         );
         println!("   ✓ {} matches baseline", name);
     }
 
     println!("\n═══════════════════════════════════════════════════════════════════");
-    println!("   ✅ PASS: All {} processing methods produce IDENTICAL results", results.len());
+    println!(
+        "   ✅ PASS: All {} processing methods produce IDENTICAL results",
+        results.len()
+    );
     println!("═══════════════════════════════════════════════════════════════════\n");
 }
-

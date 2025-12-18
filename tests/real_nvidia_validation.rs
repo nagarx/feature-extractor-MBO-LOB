@@ -33,7 +33,7 @@ enum DataSource {
 }
 
 /// Get test files, preferring hot store (decompressed) over compressed.
-/// 
+///
 /// Returns (files, source) tuple indicating which data source is being used.
 /// This allows tests to verify they're using optimized paths when available.
 fn get_test_files_with_source() -> (Vec<String>, DataSource) {
@@ -51,14 +51,14 @@ fn get_test_files_with_source() -> (Vec<String>, DataSource) {
             })
             .map(|p| p.to_string_lossy().to_string())
             .collect();
-        
+
         if !hot_files.is_empty() {
             let mut files = hot_files;
             files.sort();
             return (files, DataSource::HotStore);
         }
     }
-    
+
     // Fallback to compressed files
     let compressed_path = Path::new(COMPRESSED_DIR);
     if !compressed_path.exists() {
@@ -70,10 +70,7 @@ fn get_test_files_with_source() -> (Vec<String>, DataSource) {
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().map_or(false, |ext| ext == "zst"))
-        .filter(|p| {
-            p.to_string_lossy()
-                .contains(".mbo.dbn.zst")
-        })
+        .filter(|p| p.to_string_lossy().contains(".mbo.dbn.zst"))
         .map(|p| p.to_string_lossy().to_string())
         .collect();
 
@@ -97,10 +94,16 @@ fn data_available() -> bool {
 fn log_data_source(test_name: &str, source: DataSource, file_count: usize) {
     match source {
         DataSource::HotStore => {
-            println!("   📂 Using HOT STORE ({} decompressed files) - FAST PATH", file_count);
+            println!(
+                "   📂 Using HOT STORE ({} decompressed files) - FAST PATH",
+                file_count
+            );
         }
         DataSource::Compressed => {
-            println!("   📦 Using COMPRESSED files ({} files) - SLOW PATH", file_count);
+            println!(
+                "   📦 Using COMPRESSED files ({} files) - SLOW PATH",
+                file_count
+            );
             println!("   💡 Tip: Run `decompress_to_hot_store` to speed up tests ~3-4x");
         }
     }
@@ -114,7 +117,7 @@ fn log_data_source(test_name: &str, source: DataSource, file_count: usize) {
 #[test]
 fn test_multi_day_state_isolation() {
     let (files, source) = get_test_files_with_source();
-    
+
     if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
@@ -124,7 +127,10 @@ fn test_multi_day_state_isolation() {
 
     println!("\n📊 Multi-Day State Isolation Test");
     log_data_source("test_multi_day_state_isolation", source, files.len());
-    println!("   Testing {} days for state leakage...\n", test_files.len());
+    println!(
+        "   Testing {} days for state leakage...\n",
+        test_files.len()
+    );
 
     // Create pipeline with MBO features for more sensitive state testing
     let mut config = PipelineConfig::default();
@@ -209,7 +215,7 @@ fn test_multi_day_state_isolation() {
 #[test]
 fn test_feature_value_validity() {
     let (files, source) = get_test_files_with_source();
-    
+
     if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
@@ -296,7 +302,7 @@ fn test_feature_value_validity() {
 #[test]
 fn test_lob_numerical_precision() {
     let (files, source) = get_test_files_with_source();
-    
+
     if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
@@ -421,7 +427,7 @@ fn test_lob_numerical_precision() {
 #[test]
 fn test_sequence_timestamp_ordering() {
     let (files, source) = get_test_files_with_source();
-    
+
     if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
@@ -448,10 +454,7 @@ fn test_sequence_timestamp_ordering() {
     let mut pipeline = Pipeline::from_config(config).expect("Failed to create pipeline");
     let output = pipeline.process(test_file).expect("Failed to process");
 
-    println!(
-        "   Generated {} sequences",
-        output.sequences_generated
-    );
+    println!("   Generated {} sequences", output.sequences_generated);
 
     let mut violations = 0;
     let mut prev_end_ts = 0u64;
@@ -498,7 +501,7 @@ fn test_sequence_timestamp_ordering() {
 #[test]
 fn test_feature_extraction_determinism() {
     let (files, source) = get_test_files_with_source();
-    
+
     if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
@@ -591,7 +594,7 @@ fn test_feature_extraction_determinism() {
 #[test]
 fn test_memory_stability_extended() {
     let (files, source) = get_test_files_with_source();
-    
+
     if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
@@ -623,10 +626,7 @@ fn test_memory_stability_extended() {
     for (i, file) in test_files.iter().enumerate() {
         pipeline.reset(); // Critical: reset between days
 
-        let filename = Path::new(file)
-            .file_name()
-            .unwrap()
-            .to_string_lossy();
+        let filename = Path::new(file).file_name().unwrap().to_string_lossy();
 
         let output = match pipeline.process(file) {
             Ok(o) => o,
@@ -653,14 +653,8 @@ fn test_memory_stability_extended() {
     println!("      Total sequences: {}", total_sequences);
 
     // If we got here without panic/crash, memory is stable
-    assert!(
-        total_messages > 0,
-        "Should have processed some messages"
-    );
-    assert!(
-        total_sequences > 0,
-        "Should have generated some sequences"
-    );
+    assert!(total_messages > 0, "Should have processed some messages");
+    assert!(total_sequences > 0, "Should have generated some sequences");
 
     println!("\n   ✅ Memory stability PASSED (no crashes/panics during extended run)");
 }
@@ -672,7 +666,7 @@ fn test_memory_stability_extended() {
 #[test]
 fn test_zero_allocation_api_correctness() {
     let (files, source) = get_test_files_with_source();
-    
+
     if files.is_empty() {
         eprintln!("⚠️  Skipping: NVIDIA data not available");
         return;
@@ -685,7 +679,7 @@ fn test_zero_allocation_api_correctness() {
     println!("   File: {}\n", test_file);
 
     let loader = DbnLoader::new(test_file).expect("Failed to create loader");
-    
+
     // Create two LOBs: one using old API, one using new zero-allocation API
     let mut lob_old = LobReconstructor::new(10);
     let mut lob_new = LobReconstructor::new(10);
@@ -701,7 +695,7 @@ fn test_zero_allocation_api_correctness() {
 
         // Old API: returns new LobState each call
         let state_old = lob_old.process_message(&msg);
-        
+
         // New API: fills pre-allocated state
         let result_new = lob_new.process_message_into(&msg, &mut reusable_state);
 
@@ -859,8 +853,11 @@ fn test_hot_store_vs_compressed_identical() {
     // Process hot store file
     println!("\n   Processing hot store file...");
     let start_hot = std::time::Instant::now();
-    let mut pipeline_hot = Pipeline::from_config(config.clone()).expect("Failed to create pipeline");
-    let output_hot = pipeline_hot.process(&hot_file).expect("Failed to process hot store file");
+    let mut pipeline_hot =
+        Pipeline::from_config(config.clone()).expect("Failed to create pipeline");
+    let output_hot = pipeline_hot
+        .process(&hot_file)
+        .expect("Failed to process hot store file");
     let time_hot = start_hot.elapsed();
     println!("      ✓ Completed in {:.2}s", time_hot.as_secs_f64());
 
@@ -868,7 +865,9 @@ fn test_hot_store_vs_compressed_identical() {
     println!("   Processing compressed file...");
     let start_compressed = std::time::Instant::now();
     let mut pipeline_compressed = Pipeline::from_config(config).expect("Failed to create pipeline");
-    let output_compressed = pipeline_compressed.process(&compressed_file).expect("Failed to process compressed file");
+    let output_compressed = pipeline_compressed
+        .process(&compressed_file)
+        .expect("Failed to process compressed file");
     let time_compressed = start_compressed.elapsed();
     println!("      ✓ Completed in {:.2}s", time_compressed.as_secs_f64());
 
@@ -893,19 +892,24 @@ fn test_hot_store_vs_compressed_identical() {
 
     // 3. Sequence counts must match exactly
     assert_eq!(
-        output_hot.sequences.len(), output_compressed.sequences.len(),
+        output_hot.sequences.len(),
+        output_compressed.sequences.len(),
         "Sequence count mismatch: hot={} vs compressed={}",
-        output_hot.sequences.len(), output_compressed.sequences.len()
+        output_hot.sequences.len(),
+        output_compressed.sequences.len()
     );
     println!("      ✓ Sequences match: {}", output_hot.sequences.len());
 
     // 4. Mid-prices must be BIT-LEVEL identical
     assert_eq!(
-        output_hot.mid_prices.len(), output_compressed.mid_prices.len(),
+        output_hot.mid_prices.len(),
+        output_compressed.mid_prices.len(),
         "Mid-price count mismatch"
     );
     let mut mid_price_mismatches = 0;
-    for (i, (hot_price, compressed_price)) in output_hot.mid_prices.iter()
+    for (i, (hot_price, compressed_price)) in output_hot
+        .mid_prices
+        .iter()
         .zip(output_compressed.mid_prices.iter())
         .enumerate()
     {
@@ -915,7 +919,10 @@ fn test_hot_store_vs_compressed_identical() {
             if mid_price_mismatches <= 5 {
                 println!(
                     "      ⚠️ Mid-price mismatch at {}: hot={} vs compressed={} (diff={})",
-                    i, hot_price, compressed_price, (hot_price - compressed_price).abs()
+                    i,
+                    hot_price,
+                    compressed_price,
+                    (hot_price - compressed_price).abs()
                 );
             }
         }
@@ -925,29 +932,34 @@ fn test_hot_store_vs_compressed_identical() {
         "Found {} mid-price bit-level mismatches",
         mid_price_mismatches
     );
-    println!("      ✓ Mid-prices bit-level identical: {} values", output_hot.mid_prices.len());
+    println!(
+        "      ✓ Mid-prices bit-level identical: {} values",
+        output_hot.mid_prices.len()
+    );
 
     // 5. Sequence features must be BIT-LEVEL identical
     let mut feature_mismatches = 0;
     let sequences_to_check = output_hot.sequences.len().min(100); // Check first 100 sequences
-    
+
     for seq_idx in 0..sequences_to_check {
         let hot_seq = &output_hot.sequences[seq_idx];
         let compressed_seq = &output_compressed.sequences[seq_idx];
 
         assert_eq!(
-            hot_seq.features.len(), compressed_seq.features.len(),
+            hot_seq.features.len(),
+            compressed_seq.features.len(),
             "Sequence {} feature row count mismatch",
             seq_idx
         );
 
-        for (row_idx, (hot_row, compressed_row)) in hot_seq.features.iter()
+        for (row_idx, (hot_row, compressed_row)) in hot_seq
+            .features
+            .iter()
             .zip(compressed_seq.features.iter())
             .enumerate()
         {
-            for (col_idx, (hot_val, compressed_val)) in hot_row.iter()
-                .zip(compressed_row.iter())
-                .enumerate()
+            for (col_idx, (hot_val, compressed_val)) in
+                hot_row.iter().zip(compressed_row.iter()).enumerate()
             {
                 if hot_val.to_bits() != compressed_val.to_bits() {
                     feature_mismatches += 1;
@@ -966,7 +978,10 @@ fn test_hot_store_vs_compressed_identical() {
         "Found {} feature value bit-level mismatches",
         feature_mismatches
     );
-    println!("      ✓ Features bit-level identical: {} sequences checked", sequences_to_check);
+    println!(
+        "      ✓ Features bit-level identical: {} sequences checked",
+        sequences_to_check
+    );
 
     // Report speedup
     let speedup = time_compressed.as_secs_f64() / time_hot.as_secs_f64();
@@ -978,4 +993,3 @@ fn test_hot_store_vs_compressed_identical() {
     println!("\n   ✅ Hot store vs compressed equivalence PASSED");
     println!("      Data integrity verified - results are BIT-LEVEL identical!");
 }
-

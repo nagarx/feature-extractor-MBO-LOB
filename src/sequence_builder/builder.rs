@@ -754,8 +754,14 @@ mod tests {
         println!("Sequences generated: {}", sequences.len());
         println!("Time: {:?}", duration);
         println!("Throughput: {:.0} sequences/sec", sequences_per_sec);
-        println!("Data NOT cloned (saved): {:.2} MB", total_bytes_saved as f64 / 1_000_000.0);
-        println!("Per-sequence savings: {:.2} KB", bytes_saved_per_seq as f64 / 1000.0);
+        println!(
+            "Data NOT cloned (saved): {:.2} MB",
+            total_bytes_saved as f64 / 1_000_000.0
+        );
+        println!(
+            "Per-sequence savings: {:.2} KB",
+            bytes_saved_per_seq as f64 / 1000.0
+        );
 
         // Verify numerical correctness
         for seq in &sequences {
@@ -1093,10 +1099,37 @@ mod tests {
         // including edge cases like very small, very large, and negative numbers
         let test_values: Vec<Vec<f64>> = vec![
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
-            vec![0.1, 0.01, 0.001, 0.0001, 0.00001, 1e-10, 1e10, -1.0, -0.5, 0.0],
-            vec![100.005, 100.015, 100.025, 100.035, 100.045, 100.055, 100.065, 100.075, 100.085, 100.095],
-            vec![std::f64::consts::PI, std::f64::consts::E, std::f64::consts::SQRT_2, 0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5],
-            vec![1234567890.123456, -9876543210.987654, 0.123456789012345, 1e15, 1e-15, 1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![
+                0.1, 0.01, 0.001, 0.0001, 0.00001, 1e-10, 1e10, -1.0, -0.5, 0.0,
+            ],
+            vec![
+                100.005, 100.015, 100.025, 100.035, 100.045, 100.055, 100.065, 100.075, 100.085,
+                100.095,
+            ],
+            vec![
+                std::f64::consts::PI,
+                std::f64::consts::E,
+                std::f64::consts::SQRT_2,
+                0.0,
+                1.0,
+                -1.0,
+                2.0,
+                -2.0,
+                0.5,
+                -0.5,
+            ],
+            vec![
+                1234567890.123456,
+                -9876543210.987654,
+                0.123456789012345,
+                1e15,
+                1e-15,
+                1.0,
+                2.0,
+                3.0,
+                4.0,
+                5.0,
+            ],
         ];
 
         // Push features
@@ -1194,8 +1227,12 @@ mod tests {
         // Push using Arc directly
         let features = Arc::new(vec![1.0, 2.0, 3.0, 4.0]);
         builder.push_arc(1000, features).unwrap();
-        builder.push_arc(2000, Arc::new(vec![5.0, 6.0, 7.0, 8.0])).unwrap();
-        builder.push_arc(3000, Arc::new(vec![9.0, 10.0, 11.0, 12.0])).unwrap();
+        builder
+            .push_arc(2000, Arc::new(vec![5.0, 6.0, 7.0, 8.0]))
+            .unwrap();
+        builder
+            .push_arc(3000, Arc::new(vec![9.0, 10.0, 11.0, 12.0]))
+            .unwrap();
 
         let seq = builder.try_build_sequence().unwrap();
         assert_eq!(seq.features.len(), 3);
@@ -1225,8 +1262,12 @@ mod tests {
         assert_eq!(features_clone[0], 1.0);
 
         // After pushing more, build sequence
-        builder.push_arc(2000, Arc::new(vec![5.0, 6.0, 7.0, 8.0])).unwrap();
-        builder.push_arc(3000, Arc::new(vec![9.0, 10.0, 11.0, 12.0])).unwrap();
+        builder
+            .push_arc(2000, Arc::new(vec![5.0, 6.0, 7.0, 8.0]))
+            .unwrap();
+        builder
+            .push_arc(3000, Arc::new(vec![9.0, 10.0, 11.0, 12.0]))
+            .unwrap();
 
         let seq = builder.try_build_sequence().unwrap();
 
@@ -1254,19 +1295,27 @@ mod tests {
         assert_eq!(Arc::strong_count(&shared_features), 1);
 
         // Push to fast builder (clone Arc)
-        fast_builder.push_arc(1000, shared_features.clone()).unwrap();
+        fast_builder
+            .push_arc(1000, shared_features.clone())
+            .unwrap();
         assert_eq!(Arc::strong_count(&shared_features), 2);
 
         // Push to slow builder (clone Arc)
-        slow_builder.push_arc(1000, shared_features.clone()).unwrap();
+        slow_builder
+            .push_arc(1000, shared_features.clone())
+            .unwrap();
         assert_eq!(Arc::strong_count(&shared_features), 3);
 
         // Drop original (count was 3, now becomes 2)
         drop(shared_features);
 
         // Add more and build sequences
-        fast_builder.push_arc(2000, Arc::new(vec![101.0, 201.0, 301.0])).unwrap();
-        slow_builder.push_arc(2000, Arc::new(vec![101.0, 201.0, 301.0])).unwrap();
+        fast_builder
+            .push_arc(2000, Arc::new(vec![101.0, 201.0, 301.0]))
+            .unwrap();
+        slow_builder
+            .push_arc(2000, Arc::new(vec![101.0, 201.0, 301.0]))
+            .unwrap();
 
         let fast_seq = fast_builder.try_build_sequence().unwrap();
         let slow_seq = slow_builder.try_build_sequence().unwrap();
@@ -1298,7 +1347,9 @@ mod tests {
 
         // Push using push_arc() (Arc)
         for (i, data) in test_data.iter().enumerate() {
-            builder_arc.push_arc(i as u64 * 1000, Arc::new(data.clone())).unwrap();
+            builder_arc
+                .push_arc(i as u64 * 1000, Arc::new(data.clone()))
+                .unwrap();
         }
 
         // Build sequences
@@ -1307,7 +1358,12 @@ mod tests {
 
         // Must be IDENTICAL
         assert_eq!(seq_vec.features.len(), seq_arc.features.len());
-        for (i, (vec_feat, arc_feat)) in seq_vec.features.iter().zip(seq_arc.features.iter()).enumerate() {
+        for (i, (vec_feat, arc_feat)) in seq_vec
+            .features
+            .iter()
+            .zip(seq_arc.features.iter())
+            .enumerate()
+        {
             for (j, (&v1, &v2)) in vec_feat.iter().zip(arc_feat.iter()).enumerate() {
                 assert_eq!(v1, v2, "Mismatch at [{i}][{j}]: push={v1}, push_arc={v2}");
             }
@@ -1354,7 +1410,9 @@ mod tests {
             std::f64::MIN_POSITIVE,
         ];
 
-        builder.push_arc(1000, Arc::new(edge_values.clone())).unwrap();
+        builder
+            .push_arc(1000, Arc::new(edge_values.clone()))
+            .unwrap();
         builder.push_arc(2000, Arc::new(vec![1.0; 6])).unwrap();
 
         let seq = builder.try_build_sequence().unwrap();

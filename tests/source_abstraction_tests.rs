@@ -5,7 +5,9 @@
 
 use feature_extractor::config::{PipelineConfig, SamplingConfig, SamplingStrategy};
 use feature_extractor::{FeatureConfig, Pipeline, SequenceConfig};
-use mbo_lob_reconstructor::{Action, MarketDataSource, MboMessage, Side, SourceMetadata, VecSource};
+use mbo_lob_reconstructor::{
+    Action, MarketDataSource, MboMessage, Side, SourceMetadata, VecSource,
+};
 
 /// Create test messages representing a realistic order book scenario.
 fn create_test_messages() -> Vec<MboMessage> {
@@ -120,7 +122,10 @@ fn test_pipeline_with_vec_source() {
         output.messages_processed <= message_count,
         "Should not exceed message count"
     );
-    assert!(output.features_extracted > 0, "Should have extracted features");
+    assert!(
+        output.features_extracted > 0,
+        "Should have extracted features"
+    );
 }
 
 #[test]
@@ -293,8 +298,14 @@ fn test_numerical_accuracy_through_source() {
     let messages: Vec<_> = source.messages().expect("Failed to get messages").collect();
 
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].price, exact_price, "Price should be exactly preserved");
-    assert_eq!(messages[0].size, exact_size, "Size should be exactly preserved");
+    assert_eq!(
+        messages[0].price, exact_price,
+        "Price should be exactly preserved"
+    );
+    assert_eq!(
+        messages[0].size, exact_size,
+        "Size should be exactly preserved"
+    );
     assert_eq!(messages[0].order_id, 1);
     assert_eq!(messages[0].action, Action::Add);
     assert_eq!(messages[0].side, Side::Bid);
@@ -393,14 +404,17 @@ mod dbn_source_tests {
 
         // Process using DbnSource
         let source = DbnSource::new(&test_file).expect("Failed to create DbnSource");
-        let mut pipeline1 = Pipeline::from_config(config.clone()).expect("Failed to create pipeline");
+        let mut pipeline1 =
+            Pipeline::from_config(config.clone()).expect("Failed to create pipeline");
         let output1 = pipeline1
             .process_source(source)
             .expect("Failed with DbnSource");
 
         // Process using direct path
         let mut pipeline2 = Pipeline::from_config(config).expect("Failed to create pipeline");
-        let output2 = pipeline2.process(&test_file).expect("Failed with direct path");
+        let output2 = pipeline2
+            .process(&test_file)
+            .expect("Failed with direct path");
 
         // Results should be identical
         assert_eq!(
@@ -423,7 +437,12 @@ mod dbn_source_tests {
             "Mid-price count should match"
         );
 
-        for (i, (p1, p2)) in output1.mid_prices.iter().zip(output2.mid_prices.iter()).enumerate() {
+        for (i, (p1, p2)) in output1
+            .mid_prices
+            .iter()
+            .zip(output2.mid_prices.iter())
+            .enumerate()
+        {
             assert!(
                 (p1 - p2).abs() < 1e-9,
                 "Mid-price {} mismatch: {} vs {}",
@@ -434,4 +453,3 @@ mod dbn_source_tests {
         }
     }
 }
-

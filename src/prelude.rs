@@ -88,8 +88,7 @@ pub use crate::features::{FeatureConfig, FeatureExtractor};
 
 pub use crate::sequence_builder::{
     FeatureVec, HorizonAwareConfig, MultiScaleConfig as MultiScaleSequenceConfig,
-    MultiScaleSequence, MultiScaleWindow, Sequence, SequenceBuilder, SequenceConfig,
-    SequenceError,
+    MultiScaleSequence, MultiScaleWindow, Sequence, SequenceBuilder, SequenceConfig, SequenceError,
 };
 
 // ============================================================================
@@ -134,11 +133,13 @@ pub use crate::schema::{FeatureCategory, FeatureDef, FeatureSchema, Preset, Pres
 // Export
 // ============================================================================
 
+pub use crate::export::tensor_format::{
+    FeatureMapping, TensorFormat, TensorFormatter, TensorOutput,
+};
 pub use crate::export::{
     export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
     NumpyExporter, SplitConfig,
 };
-pub use crate::export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
 
 pub use crate::export_aligned::{
     AlignedBatchExporter, AlignedDayExport, NormalizationParams, NormalizationStrategy,

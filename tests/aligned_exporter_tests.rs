@@ -119,12 +119,13 @@ fn test_tensor_format_hlob() {
 #[test]
 fn test_tensor_format_image() {
     let config = LabelConfig::new(50, 5, 0.002);
-    let exporter = AlignedBatchExporter::new("test_output", config, 100, 10)
-        .with_tensor_format(TensorFormat::Image {
+    let exporter = AlignedBatchExporter::new("test_output", config, 100, 10).with_tensor_format(
+        TensorFormat::Image {
             channels: 1,
             height: 10,
             width: 4,
-        });
+        },
+    );
 
     match exporter.tensor_format() {
         Some(TensorFormat::Image {
@@ -164,8 +165,7 @@ fn test_multi_horizon_tlob_preset() {
 
 #[test]
 fn test_multi_horizon_custom() {
-    let config =
-        MultiHorizonConfig::new(vec![5, 10, 15, 25], 3, ThresholdStrategy::Fixed(0.001));
+    let config = MultiHorizonConfig::new(vec![5, 10, 15, 25], 3, ThresholdStrategy::Fixed(0.001));
 
     assert_eq!(config.horizons(), &[5, 10, 15, 25]);
     assert_eq!(config.smoothing_window, 3);
@@ -326,7 +326,7 @@ fn test_normalization_strategy_display() {
         "global_zscore"
     );
     assert_eq!(NormalizationStrategy::Bilinear.to_string(), "bilinear");
-    
+
     // Serde uses rename_all = "snake_case" which produces slightly different output
     // e.g., MarketStructureZScore -> "market_structure_z_score" in JSON
 }
@@ -347,7 +347,10 @@ fn test_normalization_params_new() {
         10,
     );
 
-    assert_eq!(params.strategy, NormalizationStrategy::MarketStructureZScore);
+    assert_eq!(
+        params.strategy,
+        NormalizationStrategy::MarketStructureZScore
+    );
     assert_eq!(params.price_means.len(), 10);
     assert_eq!(params.price_stds.len(), 10);
     assert_eq!(params.size_means.len(), 20);
@@ -363,7 +366,9 @@ fn test_normalization_params_new() {
 #[test]
 fn test_normalization_params_serialization() {
     let params = NormalizationParams::new(
-        vec![100.0, 100.01, 100.02, 100.03, 100.04, 100.05, 100.06, 100.07, 100.08, 100.09],
+        vec![
+            100.0, 100.01, 100.02, 100.03, 100.04, 100.05, 100.06, 100.07, 100.08, 100.09,
+        ],
         vec![0.1; 10],
         vec![500.0; 20],
         vec![100.0; 20],
@@ -381,12 +386,27 @@ fn test_normalization_params_serialization() {
         "JSON should contain strategy: {}",
         json
     );
-    assert!(json.contains("sample_count"), "JSON should contain sample_count");
-    assert!(json.contains("5000"), "JSON should contain sample count value");
+    assert!(
+        json.contains("sample_count"),
+        "JSON should contain sample_count"
+    );
+    assert!(
+        json.contains("5000"),
+        "JSON should contain sample count value"
+    );
     assert!(json.contains("levels"), "JSON should contain levels");
-    assert!(json.contains("price_means"), "JSON should contain price_means");
-    assert!(json.contains("price_stds"), "JSON should contain price_stds");
-    assert!(json.contains("size_means"), "JSON should contain size_means");
+    assert!(
+        json.contains("price_means"),
+        "JSON should contain price_means"
+    );
+    assert!(
+        json.contains("price_stds"),
+        "JSON should contain price_stds"
+    );
+    assert!(
+        json.contains("size_means"),
+        "JSON should contain size_means"
+    );
     assert!(json.contains("size_stds"), "JSON should contain size_stds");
 
     // Deserialize back
@@ -434,4 +454,3 @@ fn test_normalization_params_save_load() {
     // Cleanup
     std::fs::remove_dir_all(temp_dir).unwrap();
 }
-

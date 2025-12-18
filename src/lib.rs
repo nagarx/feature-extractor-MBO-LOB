@@ -115,11 +115,11 @@ pub use preprocessing::{
 pub use sequence_builder::{FeatureVec, Sequence, SequenceBuilder, SequenceConfig};
 
 // Re-exports - Export
+pub use export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
 pub use export::{
     export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
     NumpyExporter, SplitConfig,
 };
-pub use export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
 pub use export_aligned::{
     AlignedBatchExporter, AlignedDayExport, NormalizationParams, NormalizationStrategy,
 };

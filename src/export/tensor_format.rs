@@ -89,11 +89,12 @@ use serde::{Deserialize, Serialize};
 /// - H = height
 /// - W = width
 /// - Generic format for image-processing architectures
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum TensorFormat {
     /// Flat features: (T, F)
     ///
     /// No reshaping - returns as-is. Most efficient format.
+    #[default]
     Flat,
 
     /// DeepLOB format: (T, 4, L)
@@ -225,12 +226,6 @@ impl TensorFormat {
     /// Create HLOB format with standard 10 levels.
     pub fn hlob() -> Self {
         TensorFormat::HLOB { levels: 10 }
-    }
-}
-
-impl Default for TensorFormat {
-    fn default() -> Self {
-        TensorFormat::Flat
     }
 }
 
@@ -626,12 +621,8 @@ impl TensorFormatter {
 
         match &self.format {
             TensorFormat::Flat => self.format_flat(features, seq_len, n_features),
-            TensorFormat::DeepLOB { levels } => {
-                self.format_deeplob(features, seq_len, *levels)
-            }
-            TensorFormat::HLOB { levels } => {
-                self.format_hlob(features, seq_len, *levels)
-            }
+            TensorFormat::DeepLOB { levels } => self.format_deeplob(features, seq_len, *levels),
+            TensorFormat::HLOB { levels } => self.format_hlob(features, seq_len, *levels),
             TensorFormat::Image {
                 channels,
                 height,
@@ -732,12 +723,10 @@ impl TensorFormatter {
     ) -> Result<TensorOutput> {
         let mut data = vec![0.0f64; seq_len * 4 * levels];
 
-        for t in 0..seq_len {
-            let timestep = &features[t];
-
+        for (t, timestep) in features.iter().enumerate().take(seq_len) {
             for l in 0..levels {
                 let base_idx = t * 4 * levels;
-                
+
                 // Channel 0: ask_price
                 data[base_idx + l] = timestep[self.mapping.ask_price_index(l)];
 
@@ -769,12 +758,10 @@ impl TensorFormatter {
     ) -> Result<TensorOutput> {
         let mut data = vec![0.0f64; seq_len * levels * 4];
 
-        for t in 0..seq_len {
-            let timestep = &features[t];
-
+        for (t, timestep) in features.iter().enumerate().take(seq_len) {
             for l in 0..levels {
                 // Feature 0: ask_price
-                let idx_ask_p = t * levels * 4 + l * 4 + 0;
+                let idx_ask_p = t * levels * 4 + l * 4;
                 data[idx_ask_p] = timestep[self.mapping.ask_price_index(l)];
 
                 // Feature 1: ask_vol
@@ -808,9 +795,7 @@ impl TensorFormatter {
     ) -> Result<TensorOutput> {
         let mut data = vec![0.0f64; seq_len * channels * height * width];
 
-        for t in 0..seq_len {
-            let timestep = &features[t];
-
+        for (t, timestep) in features.iter().enumerate().take(seq_len) {
             // Fill in row-major order: C, H, W
             for c in 0..channels {
                 for h in 0..height {
@@ -845,10 +830,8 @@ impl TensorFormatter {
         match &tensors[0] {
             TensorOutput::Array2(_) => {
                 // Stack 2D arrays into 3D: [N, T, F]
-                let arrays: Vec<&Array2<f64>> = tensors
-                    .iter()
-                    .map(|t| t.as_array2().unwrap())
-                    .collect();
+                let arrays: Vec<&Array2<f64>> =
+                    tensors.iter().map(|t| t.as_array2().unwrap()).collect();
 
                 let n_batch = arrays.len();
                 let (seq_len, n_features) = arrays[0].dim();
@@ -866,10 +849,8 @@ impl TensorFormatter {
 
             TensorOutput::Array3(_) => {
                 // Stack 3D arrays into 4D: [N, T, C, L] or [N, T, L, C]
-                let arrays: Vec<&Array3<f64>> = tensors
-                    .iter()
-                    .map(|t| t.as_array3().unwrap())
-                    .collect();
+                let arrays: Vec<&Array3<f64>> =
+                    tensors.iter().map(|t| t.as_array3().unwrap()).collect();
 
                 let n_batch = arrays.len();
                 let (d0, d1, d2) = arrays[0].dim();
@@ -1221,7 +1202,8 @@ mod tests {
     fn test_formatter_batch_flat() {
         let formatter = TensorFormatter::flat();
 
-        let sequences: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; 40]; 100], vec![vec![1.0; 40]; 100]];
+        let sequences: Vec<Vec<Vec<f64>>> =
+            vec![vec![vec![0.0; 40]; 100], vec![vec![1.0; 40]; 100]];
 
         let output = formatter.format_batch(&sequences).unwrap();
 
@@ -1232,7 +1214,8 @@ mod tests {
     fn test_formatter_batch_deeplob() {
         let formatter = TensorFormatter::deeplob(10);
 
-        let sequences: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; 40]; 100], vec![vec![1.0; 40]; 100]];
+        let sequences: Vec<Vec<Vec<f64>>> =
+            vec![vec![vec![0.0; 40]; 100], vec![vec![1.0; 40]; 100]];
 
         let output = formatter.format_batch(&sequences).unwrap();
 
@@ -1322,4 +1305,3 @@ mod tests {
         assert_eq!(arr1, arr2, "Formatting should be deterministic");
     }
 }
-

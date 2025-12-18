@@ -47,7 +47,7 @@ fn run_benchmark() -> Result<()> {
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
-    
+
     println!("📊 System Configuration:");
     println!("   Available CPUs: {}", num_cpus);
     println!("   Architecture: Apple Silicon M1");
@@ -66,14 +66,17 @@ fn run_benchmark() -> Result<()> {
         .filter(|p| p.extension().map(|e| e == "zst").unwrap_or(false))
         .map(|p| p.to_string_lossy().to_string())
         .collect();
-    
+
     files.sort();
-    
+
     // Use 4 files for the benchmark (enough to show parallelism benefits)
     let test_files: Vec<&str> = files.iter().take(4).map(|s| s.as_str()).collect();
-    
+
     if test_files.len() < 4 {
-        println!("⚠️  Need at least 4 files for benchmark, found {}", test_files.len());
+        println!(
+            "⚠️  Need at least 4 files for benchmark, found {}",
+            test_files.len()
+        );
         return Ok(());
     }
 
@@ -92,7 +95,7 @@ fn run_benchmark() -> Result<()> {
 
     // Thread counts to test: 1, 2, 4, 6, 8
     let thread_counts = vec![1, 2, 4, 6, 8];
-    
+
     println!("═══════════════════════════════════════════════════════════════════");
     println!("                    BENCHMARK RESULTS");
     println!("═══════════════════════════════════════════════════════════════════\n");
@@ -110,7 +113,7 @@ fn run_benchmark() -> Result<()> {
 
     for &threads in &thread_counts {
         println!("🔄 Testing {} thread(s)...", threads);
-        
+
         let batch_config = BatchConfig::new()
             .with_threads(threads)
             .with_error_mode(ErrorMode::FailFast);
@@ -121,11 +124,11 @@ fn run_benchmark() -> Result<()> {
         let start = Instant::now();
         let output = processor.process_files(&test_files)?;
         let elapsed = start.elapsed();
-        
+
         let elapsed_secs = elapsed.as_secs_f64();
         let total_messages = output.total_messages();
         let throughput = total_messages as f64 / elapsed_secs;
-        
+
         // Calculate speedup vs single thread
         let speedup = if let Some(base) = baseline_time {
             base / elapsed_secs
@@ -142,8 +145,10 @@ fn run_benchmark() -> Result<()> {
             speedup,
         });
 
-        println!("   ✅ {} threads: {:.2}s, {:.0} msg/s, {:.2}x speedup",
-            threads, elapsed_secs, throughput, speedup);
+        println!(
+            "   ✅ {} threads: {:.2}s, {:.0} msg/s, {:.2}x speedup",
+            threads, elapsed_secs, throughput, speedup
+        );
     }
 
     // Print summary table
@@ -162,17 +167,21 @@ fn run_benchmark() -> Result<()> {
 
     for r in &results {
         let efficiency = r.speedup / r.threads as f64 * 100.0;
-        
-        println!("│    {:2}   │ {:7.2} │ {:>14} │ {:>10.0}/s │  {:5.2}x │",
-            r.threads, r.elapsed_secs, 
+
+        println!(
+            "│    {:2}   │ {:7.2} │ {:>14} │ {:>10.0}/s │  {:5.2}x │",
+            r.threads,
+            r.elapsed_secs,
             format_number(r.total_messages),
-            r.throughput, r.speedup);
-        
+            r.throughput,
+            r.speedup
+        );
+
         if r.throughput > best_throughput {
             best_throughput = r.throughput;
             best_threads = r.threads;
         }
-        
+
         if efficiency > best_efficiency && r.threads > 1 {
             best_efficiency = efficiency;
             best_efficiency_threads = r.threads;
@@ -194,14 +203,21 @@ fn run_benchmark() -> Result<()> {
         let efficiency = r.speedup / r.threads as f64 * 100.0;
         let bar_len = (efficiency / 2.0).min(25.0) as usize;
         let bar = "█".repeat(bar_len) + &"░".repeat(25 - bar_len);
-        
-        let rating = if efficiency >= 80.0 { "Excellent" }
-            else if efficiency >= 60.0 { "Good" }
-            else if efficiency >= 40.0 { "Fair" }
-            else { "Poor" };
-        
-        println!("│    {:2}   │ {} {:5.1}% │ {:>8} │",
-            r.threads, bar, efficiency, rating);
+
+        let rating = if efficiency >= 80.0 {
+            "Excellent"
+        } else if efficiency >= 60.0 {
+            "Good"
+        } else if efficiency >= 40.0 {
+            "Fair"
+        } else {
+            "Poor"
+        };
+
+        println!(
+            "│    {:2}   │ {} {:5.1}% │ {:>8} │",
+            r.threads, bar, efficiency, rating
+        );
     }
 
     println!("└─────────┴─────────────────────────────────────────────────────┴──────────┘");
@@ -213,11 +229,14 @@ fn run_benchmark() -> Result<()> {
 
     println!("Estimated memory usage per thread: ~10 MB (Pipeline + buffers)");
     println!();
-    
+
     for threads in &[1, 2, 4, 6, 8] {
         let mem_mb = threads * 10;
         let mem_pct = mem_mb as f64 / 16384.0 * 100.0;
-        println!("   {} threads: ~{} MB ({:.1}% of 16 GB)", threads, mem_mb, mem_pct);
+        println!(
+            "   {} threads: ~{} MB ({:.1}% of 16 GB)",
+            threads, mem_mb, mem_pct
+        );
     }
 
     // Recommendations
@@ -226,17 +245,21 @@ fn run_benchmark() -> Result<()> {
     println!("═══════════════════════════════════════════════════════════════════\n");
 
     println!("📌 For Mac M1 (8-core, 16 GB):\n");
-    
-    println!("   🏆 Best Throughput: {} threads ({:.0} msg/s)", 
-        best_threads, best_throughput);
-    println!("   ⚡ Best Efficiency: {} threads ({:.1}% efficiency)", 
-        best_efficiency_threads, best_efficiency);
-    
+
+    println!(
+        "   🏆 Best Throughput: {} threads ({:.0} msg/s)",
+        best_threads, best_throughput
+    );
+    println!(
+        "   ⚡ Best Efficiency: {} threads ({:.1}% efficiency)",
+        best_efficiency_threads, best_efficiency
+    );
+
     println!("\n   Recommended configurations:");
     println!("   • Batch processing (max speed): 4-6 threads");
     println!("   • Background processing (with other apps): 2-4 threads");
     println!("   • Development/testing: 2 threads");
-    
+
     println!("\n   Memory is NOT a bottleneck - you have plenty of headroom.");
     println!("   The limiting factor is likely I/O and decompression overhead.");
 
@@ -259,4 +282,3 @@ fn format_number(n: usize) -> String {
     }
     result.chars().rev().collect()
 }
-

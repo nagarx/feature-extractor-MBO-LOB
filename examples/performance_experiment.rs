@@ -25,7 +25,9 @@ fn main() {
     #[cfg(not(feature = "parallel"))]
     {
         eprintln!("This experiment requires the 'parallel' feature.");
-        eprintln!("Run with: cargo run --release --features parallel --example performance_experiment");
+        eprintln!(
+            "Run with: cargo run --release --features parallel --example performance_experiment"
+        );
         std::process::exit(1);
     }
 
@@ -49,7 +51,7 @@ mod experiment {
     const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-01_to_2025-09-30";
     const HOT_STORE_DIR: &str = "../data/hot_store";
     const NUM_TEST_FILES: usize = 4;
-    const NUM_PARALLEL_FILES: usize = 16;  // For true parallel scaling tests
+    const NUM_PARALLEL_FILES: usize = 16; // For true parallel scaling tests
     const THREAD_COUNTS: &[usize] = &[1, 2, 4, 6, 8];
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,7 +59,7 @@ mod experiment {
         Compressed,
         Decompressed,
         Compare,
-        Parallel,  // True parallel scaling with 16 files
+        Parallel, // True parallel scaling with 16 files
     }
 
     impl Mode {
@@ -83,7 +85,7 @@ mod experiment {
 
     pub fn parse_args() -> Mode {
         let args: Vec<String> = std::env::args().collect();
-        
+
         for i in 0..args.len() {
             if args[i] == "--mode" || args[i] == "-m" {
                 if let Some(mode_str) = args.get(i + 1) {
@@ -93,7 +95,7 @@ mod experiment {
                 }
             }
         }
-        
+
         // Default: show help
         println!("Usage: performance_experiment --mode <compressed|decompressed|compare|parallel>");
         println!();
@@ -108,9 +110,10 @@ mod experiment {
     pub fn find_compressed_files() -> Result<Vec<PathBuf>> {
         let dir = Path::new(COMPRESSED_DIR);
         if !dir.exists() {
-            return Err(mbo_lob_reconstructor::TlobError::generic(
-                format!("Compressed data directory not found: {}", COMPRESSED_DIR)
-            ));
+            return Err(mbo_lob_reconstructor::TlobError::generic(format!(
+                "Compressed data directory not found: {}",
+                COMPRESSED_DIR
+            )));
         }
 
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
@@ -118,7 +121,7 @@ mod experiment {
             .map(|e| e.path())
             .filter(|p| p.extension().map(|e| e == "zst").unwrap_or(false))
             .collect();
-        
+
         files.sort();
         Ok(files.into_iter().take(NUM_TEST_FILES).collect())
     }
@@ -130,9 +133,10 @@ mod experiment {
     pub fn find_decompressed_files_n(count: usize) -> Result<Vec<PathBuf>> {
         let dir = Path::new(HOT_STORE_DIR);
         if !dir.exists() {
-            return Err(mbo_lob_reconstructor::TlobError::generic(
-                format!("Hot store directory not found: {}. Run decompression first.", HOT_STORE_DIR)
-            ));
+            return Err(mbo_lob_reconstructor::TlobError::generic(format!(
+                "Hot store directory not found: {}. Run decompression first.",
+                HOT_STORE_DIR
+            )));
         }
 
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
@@ -143,21 +147,25 @@ mod experiment {
                     && !p.to_string_lossy().ends_with(".dbn.zst")
             })
             .collect();
-        
+
         files.sort();
-        
+
         if files.is_empty() {
             return Err(mbo_lob_reconstructor::TlobError::generic(
-                "No decompressed .dbn files found in hot store"
+                "No decompressed .dbn files found in hot store",
             ));
         }
-        
+
         Ok(files.into_iter().take(count).collect())
     }
 
     pub fn run_benchmark(files: &[PathBuf], label: &str) -> Result<Vec<BenchResult>> {
         println!("\n═══════════════════════════════════════════════════════════════════");
-        println!("  BENCHMARK: {} ({} files)", label.to_uppercase(), files.len());
+        println!(
+            "  BENCHMARK: {} ({} files)",
+            label.to_uppercase(),
+            files.len()
+        );
         println!("═══════════════════════════════════════════════════════════════════\n");
 
         println!("📂 Files:");
@@ -165,7 +173,11 @@ mod experiment {
             let size_mb = std::fs::metadata(f)
                 .map(|m| m.len() as f64 / 1024.0 / 1024.0)
                 .unwrap_or(0.0);
-            println!("   • {} ({:.1} MB)", f.file_name().unwrap().to_string_lossy(), size_mb);
+            println!(
+                "   • {} ({:.1} MB)",
+                f.file_name().unwrap().to_string_lossy(),
+                size_mb
+            );
         }
         println!();
 
@@ -175,7 +187,8 @@ mod experiment {
             .window(100, 10)
             .build_config()?;
 
-        let file_strs: Vec<String> = files.iter()
+        let file_strs: Vec<String> = files
+            .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect();
         let file_refs: Vec<&str> = file_strs.iter().map(|s| s.as_str()).collect();
@@ -216,7 +229,10 @@ mod experiment {
                 speedup_vs_single: speedup,
             });
 
-            println!("✓ {:.2}s ({:.0} msg/s, {:.2}x)", elapsed_secs, throughput, speedup);
+            println!(
+                "✓ {:.2}s ({:.0} msg/s, {:.2}x)",
+                elapsed_secs, throughput, speedup
+            );
         }
 
         Ok(results)
@@ -256,32 +272,47 @@ mod experiment {
             let speedup = d.throughput_msg_per_sec / c.throughput_msg_per_sec;
             println!(
                 "│    {:2}   │ {:>15.0}    │ {:>15.0}    │   {:5.2}x    │",
-                c.threads,
-                c.throughput_msg_per_sec,
-                d.throughput_msg_per_sec,
-                speedup
+                c.threads, c.throughput_msg_per_sec, d.throughput_msg_per_sec, speedup
             );
         }
 
         println!("└─────────┴─────────────────────┴─────────────────────┴─────────────┘");
 
         // Summary statistics
-        let best_compressed = compressed.iter()
-            .max_by(|a, b| a.throughput_msg_per_sec.partial_cmp(&b.throughput_msg_per_sec).unwrap())
+        let best_compressed = compressed
+            .iter()
+            .max_by(|a, b| {
+                a.throughput_msg_per_sec
+                    .partial_cmp(&b.throughput_msg_per_sec)
+                    .unwrap()
+            })
             .unwrap();
-        let best_decompressed = decompressed.iter()
-            .max_by(|a, b| a.throughput_msg_per_sec.partial_cmp(&b.throughput_msg_per_sec).unwrap())
+        let best_decompressed = decompressed
+            .iter()
+            .max_by(|a, b| {
+                a.throughput_msg_per_sec
+                    .partial_cmp(&b.throughput_msg_per_sec)
+                    .unwrap()
+            })
             .unwrap();
 
-        let overall_speedup = best_decompressed.throughput_msg_per_sec / best_compressed.throughput_msg_per_sec;
+        let overall_speedup =
+            best_decompressed.throughput_msg_per_sec / best_compressed.throughput_msg_per_sec;
 
         println!("\n📊 Summary:");
-        println!("   Best Compressed:   {:>10.0} msg/s @ {} threads",
-            best_compressed.throughput_msg_per_sec, best_compressed.threads);
-        println!("   Best Decompressed: {:>10.0} msg/s @ {} threads",
-            best_decompressed.throughput_msg_per_sec, best_decompressed.threads);
+        println!(
+            "   Best Compressed:   {:>10.0} msg/s @ {} threads",
+            best_compressed.throughput_msg_per_sec, best_compressed.threads
+        );
+        println!(
+            "   Best Decompressed: {:>10.0} msg/s @ {} threads",
+            best_decompressed.throughput_msg_per_sec, best_decompressed.threads
+        );
         println!("   ────────────────────────────────────────────");
-        println!("   🚀 Overall Speedup: {:.2}x faster with hot store", overall_speedup);
+        println!(
+            "   🚀 Overall Speedup: {:.2}x faster with hot store",
+            overall_speedup
+        );
     }
 
     pub fn format_number(n: usize) -> String {
@@ -301,10 +332,13 @@ mod experiment {
         use feature_extractor::batch::{BatchConfig, BatchProcessor, ErrorMode};
 
         let files = find_decompressed_files_n(NUM_PARALLEL_FILES)?;
-        
+
         if files.len() < NUM_PARALLEL_FILES {
-            println!("⚠️  Only {} files available in hot store, need {} for full scaling test", 
-                files.len(), NUM_PARALLEL_FILES);
+            println!(
+                "⚠️  Only {} files available in hot store, need {} for full scaling test",
+                files.len(),
+                NUM_PARALLEL_FILES
+            );
             println!("   Run: decompress_to_hot_store -i ../data/NVDA... -o ../data/hot_store");
             println!("   to decompress more files.\n");
         }
@@ -313,7 +347,8 @@ mod experiment {
         println!("  TRUE PARALLEL SCALING BENCHMARK ({} files)", files.len());
         println!("═══════════════════════════════════════════════════════════════════\n");
 
-        let total_size_mb: f64 = files.iter()
+        let total_size_mb: f64 = files
+            .iter()
             .filter_map(|f| std::fs::metadata(f).ok())
             .map(|m| m.len() as f64 / 1024.0 / 1024.0)
             .sum();
@@ -329,7 +364,8 @@ mod experiment {
             .window(100, 10)
             .build_config()?;
 
-        let file_strs: Vec<String> = files.iter()
+        let file_strs: Vec<String> = files
+            .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect();
         let file_refs: Vec<&str> = file_strs.iter().map(|s| s.as_str()).collect();
@@ -338,7 +374,11 @@ mod experiment {
         let mut baseline_time: Option<f64> = None;
 
         for &threads in THREAD_COUNTS {
-            print!("   Testing {} thread(s) on {} files... ", threads, files.len());
+            print!(
+                "   Testing {} thread(s) on {} files... ",
+                threads,
+                files.len()
+            );
             std::io::Write::flush(&mut std::io::stdout()).ok();
 
             let batch_config = BatchConfig::new()
@@ -370,8 +410,10 @@ mod experiment {
                 speedup_vs_single: speedup,
             });
 
-            println!("✓ {:.2}s ({:.0} msg/s, {:.2}x speedup)", 
-                elapsed_secs, throughput, speedup);
+            println!(
+                "✓ {:.2}s ({:.0} msg/s, {:.2}x speedup)",
+                elapsed_secs, throughput, speedup
+            );
         }
 
         // Results table
@@ -397,27 +439,38 @@ mod experiment {
         println!("└─────────┴──────────┴────────────────┴───────────────┴─────────┴─────────┘");
 
         // Analysis
-        let best = results.iter()
-            .max_by(|a, b| a.throughput_msg_per_sec.partial_cmp(&b.throughput_msg_per_sec).unwrap())
-            .unwrap();
-        
-        let single_thread = &results[0];
-        let best_efficiency_result = results.iter()
-            .filter(|r| r.threads > 1)
+        let best = results
+            .iter()
             .max_by(|a, b| {
-                let eff_a = a.speedup_vs_single / a.threads as f64;
-                let eff_b = b.speedup_vs_single / b.threads as f64;
-                eff_a.partial_cmp(&eff_b).unwrap()
-            });
+                a.throughput_msg_per_sec
+                    .partial_cmp(&b.throughput_msg_per_sec)
+                    .unwrap()
+            })
+            .unwrap();
+
+        let single_thread = &results[0];
+        let best_efficiency_result = results.iter().filter(|r| r.threads > 1).max_by(|a, b| {
+            let eff_a = a.speedup_vs_single / a.threads as f64;
+            let eff_b = b.speedup_vs_single / b.threads as f64;
+            eff_a.partial_cmp(&eff_b).unwrap()
+        });
 
         println!("\n📊 Analysis:");
-        println!("   Single-thread baseline: {:>10.0} msg/s", single_thread.throughput_msg_per_sec);
-        println!("   Best throughput:        {:>10.0} msg/s @ {} threads ({:.2}x speedup)", 
-            best.throughput_msg_per_sec, best.threads, best.speedup_vs_single);
-        
+        println!(
+            "   Single-thread baseline: {:>10.0} msg/s",
+            single_thread.throughput_msg_per_sec
+        );
+        println!(
+            "   Best throughput:        {:>10.0} msg/s @ {} threads ({:.2}x speedup)",
+            best.throughput_msg_per_sec, best.threads, best.speedup_vs_single
+        );
+
         if let Some(eff) = best_efficiency_result {
             let efficiency = (eff.speedup_vs_single / eff.threads as f64) * 100.0;
-            println!("   Best efficiency:        {:>10.1}% @ {} threads", efficiency, eff.threads);
+            println!(
+                "   Best efficiency:        {:>10.1}% @ {} threads",
+                efficiency, eff.threads
+            );
         }
 
         // Scaling assessment
@@ -450,8 +503,11 @@ fn run_experiment() -> mbo_lob_reconstructor::Result<()> {
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
-    
-    println!("📊 System: Apple Silicon M1 Pro, {} cores, 16 GB RAM\n", num_cpus);
+
+    println!(
+        "📊 System: Apple Silicon M1 Pro, {} cores, 16 GB RAM\n",
+        num_cpus
+    );
 
     let mode = parse_args();
 
@@ -460,7 +516,7 @@ fn run_experiment() -> mbo_lob_reconstructor::Result<()> {
             let files = find_compressed_files()?;
             let results = run_benchmark(&files, "Compressed (.dbn.zst)")?;
             print_results_table(&results, "Compressed");
-            
+
             println!("\n💡 Next step: Decompress dataset to hot store, then run with --mode decompressed");
         }
 
@@ -468,19 +524,19 @@ fn run_experiment() -> mbo_lob_reconstructor::Result<()> {
             let files = find_decompressed_files()?;
             let results = run_benchmark(&files, "Decompressed (.dbn)")?;
             print_results_table(&results, "Decompressed");
-            
+
             println!("\n💡 To see comparison: Run with --mode compare");
         }
 
         Mode::Compare => {
             println!("Running full comparison...\n");
-            
+
             let compressed_files = find_compressed_files()?;
             let decompressed_files = find_decompressed_files()?;
-            
+
             let compressed_results = run_benchmark(&compressed_files, "Compressed (.dbn.zst)")?;
             let decompressed_results = run_benchmark(&decompressed_files, "Decompressed (.dbn)")?;
-            
+
             print_results_table(&compressed_results, "Compressed");
             print_results_table(&decompressed_results, "Decompressed");
             print_comparison(&compressed_results, &decompressed_results);
@@ -498,4 +554,3 @@ fn run_experiment() -> mbo_lob_reconstructor::Result<()> {
 
     Ok(())
 }
-

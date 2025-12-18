@@ -86,7 +86,10 @@ fn main() -> Result<()> {
 
     let processor = BatchProcessor::new(pipeline_config.clone(), batch_config);
 
-    println!("🔄 Processing with {} threads...", processor.batch_config().effective_threads());
+    println!(
+        "🔄 Processing with {} threads...",
+        processor.batch_config().effective_threads()
+    );
 
     let output = processor.process_files(&files)?;
 
@@ -94,7 +97,10 @@ fn main() -> Result<()> {
     println!("   Successful: {}", output.successful_count());
     println!("   Failed: {}", output.failed_count());
     println!("   Elapsed: {:?}", output.elapsed);
-    println!("   Throughput: {:.2} msg/sec", output.throughput_msg_per_sec());
+    println!(
+        "   Throughput: {:.2} msg/sec",
+        output.throughput_msg_per_sec()
+    );
 
     for result in output.iter() {
         println!(
@@ -214,4 +220,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-

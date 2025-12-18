@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 /// Normalization strategy used for feature export.
 ///
 /// This is included in metadata so consumers know how data was normalized.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum NormalizationStrategy {
     /// No normalization applied (raw values)
@@ -48,17 +48,12 @@ pub enum NormalizationStrategy {
     /// Market-structure preserving z-score:
     /// - Prices: shared mean/std per level (ask_L and bid_L)
     /// - Sizes: independent mean/std
+    #[default]
     MarketStructureZScore,
     /// Global z-score: all features share same mean/std
     GlobalZScore,
     /// Bilinear: (price - mid_price) / (k * tick_size)
     Bilinear,
-}
-
-impl Default for NormalizationStrategy {
-    fn default() -> Self {
-        Self::MarketStructureZScore
-    }
 }
 
 impl std::fmt::Display for NormalizationStrategy {
@@ -91,29 +86,29 @@ impl std::fmt::Display for NormalizationStrategy {
 pub struct NormalizationParams {
     /// Normalization strategy applied
     pub strategy: NormalizationStrategy,
-    
+
     /// Mean values for price features (per-level, shared ask/bid)
     /// Length: 10 (one per LOB level)
     pub price_means: Vec<f64>,
-    
+
     /// Std values for price features (per-level, shared ask/bid)
     /// Length: 10 (one per LOB level)
     pub price_stds: Vec<f64>,
-    
+
     /// Mean values for size features (independent per feature)
     /// Length: 20 (10 ask sizes + 10 bid sizes)
     pub size_means: Vec<f64>,
-    
+
     /// Std values for size features (independent per feature)
     /// Length: 20 (10 ask sizes + 10 bid sizes)
     pub size_stds: Vec<f64>,
-    
+
     /// Number of samples used to compute statistics
     pub sample_count: usize,
-    
+
     /// Feature layout description for validation
     pub feature_layout: String,
-    
+
     /// Number of LOB levels
     pub levels: usize,
 }
@@ -142,20 +137,22 @@ impl NormalizationParams {
             levels,
         }
     }
-    
+
     /// Save normalization params to JSON file
     pub fn save_json<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let file = File::create(path.as_ref())?;
-        serde_json::to_writer_pretty(file, self)
-            .map_err(|e| std::io::Error::other(format!("Failed to write normalization params: {e}")))?;
+        serde_json::to_writer_pretty(file, self).map_err(|e| {
+            std::io::Error::other(format!("Failed to write normalization params: {e}"))
+        })?;
         Ok(())
     }
-    
+
     /// Load normalization params from JSON file
     pub fn load_json<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(path.as_ref())?;
-        let params: Self = serde_json::from_reader(file)
-            .map_err(|e| std::io::Error::other(format!("Failed to read normalization params: {e}")))?;
+        let params: Self = serde_json::from_reader(file).map_err(|e| {
+            std::io::Error::other(format!("Failed to read normalization params: {e}"))
+        })?;
         Ok(params)
     }
 }
@@ -461,7 +458,9 @@ impl AlignedBatchExporter {
         self.export_labels(&aligned_labels, &labels_path)?;
 
         // Step 5.5: Export normalization params (enables Python-side denormalization)
-        let norm_params_path = self.output_dir.join(format!("{day_name}_normalization.json"));
+        let norm_params_path = self
+            .output_dir
+            .join(format!("{day_name}_normalization.json"));
         norm_params.save_json(&norm_params_path)?;
         println!("  📊 Exported normalization params: {:?}", norm_params_path);
 
@@ -571,12 +570,11 @@ impl AlignedBatchExporter {
 
         // Step 3: Extract aligned sequences
         println!("  🔗 Aligning sequences with multi-horizon labels...");
-        let (aligned_sequences, aligned_label_matrix) = self
-            .align_sequences_with_multi_labels(
-                &output.sequences,
-                &label_indices,
-                &label_matrix,
-            )?;
+        let (aligned_sequences, aligned_label_matrix) = self.align_sequences_with_multi_labels(
+            &output.sequences,
+            &label_indices,
+            &label_matrix,
+        )?;
 
         let sequences_dropped = sequences_generated.saturating_sub(aligned_sequences.len());
 
@@ -617,7 +615,9 @@ impl AlignedBatchExporter {
         self.export_multi_horizon_labels(&aligned_label_matrix, &labels_path)?;
 
         // Step 8.5: Export normalization params
-        let norm_params_path = self.output_dir.join(format!("{day_name}_normalization.json"));
+        let norm_params_path = self
+            .output_dir
+            .join(format!("{day_name}_normalization.json"));
         norm_params.save_json(&norm_params_path)?;
         println!("  📊 Exported normalization params: {:?}", norm_params_path);
 
@@ -757,14 +757,12 @@ impl AlignedBatchExporter {
         let mut valid_indices: Option<BTreeSet<usize>> = None;
 
         for horizon in horizons {
-            let labels = multi_labels
-                .labels_for_horizon(*horizon)
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("No labels for horizon {}", horizon),
-                    )
-                })?;
+            let labels = multi_labels.labels_for_horizon(*horizon).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("No labels for horizon {}", horizon),
+                )
+            })?;
 
             let horizon_indices: BTreeSet<usize> = labels.iter().map(|(idx, _, _)| *idx).collect();
 
@@ -932,7 +930,10 @@ impl AlignedBatchExporter {
         let n_horizons = label_matrix.first().map(|r| r.len()).unwrap_or(0);
 
         // Flatten to 1D vec in row-major order
-        let flat: Vec<i8> = label_matrix.iter().flat_map(|row| row.iter().copied()).collect();
+        let flat: Vec<i8> = label_matrix
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect();
 
         // Create 2D array
         let array = Array2::from_shape_vec((n_seq, n_horizons), flat)
@@ -1485,7 +1486,7 @@ impl AlignedBatchExporter {
         for seq in sequences {
             for timestep in seq {
                 total_samples += 1;
-                
+
                 // Collect ask prices (0-9) and bid prices (20-29) together per level
                 for level in 0..levels {
                     let ask_price = timestep[level];
@@ -1598,10 +1599,7 @@ impl AlignedBatchExporter {
         }
 
         println!("    ✓ Market-structure preserved (ask > bid maintained)");
-        println!(
-            "    📊 Stats: {} samples, {} levels",
-            total_samples, levels
-        );
+        println!("    📊 Stats: {} samples, {} levels", total_samples, levels);
 
         Ok((normalized, norm_params))
     }

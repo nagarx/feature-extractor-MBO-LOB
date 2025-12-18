@@ -152,12 +152,8 @@ impl ThresholdStrategy {
                 multiplier,
                 fallback,
                 ..
-            } => rolling_value
-                .map(|s| s * multiplier)
-                .unwrap_or(*fallback),
-            ThresholdStrategy::Quantile { fallback, .. } => {
-                rolling_value.unwrap_or(*fallback)
-            }
+            } => rolling_value.map(|s| s * multiplier).unwrap_or(*fallback),
+            ThresholdStrategy::Quantile { fallback, .. } => rolling_value.unwrap_or(*fallback),
         }
     }
 
@@ -334,7 +330,11 @@ impl MultiHorizonConfig {
     /// Smoothing: 5 (standard)
     /// Threshold: 0.002 (0.2%)
     pub fn tlob() -> Self {
-        Self::new(vec![1, 3, 5, 10, 30, 50], 5, ThresholdStrategy::Fixed(0.002))
+        Self::new(
+            vec![1, 3, 5, 10, 30, 50],
+            5,
+            ThresholdStrategy::Fixed(0.002),
+        )
     }
 
     /// HFT (High-Frequency Trading) configuration.
@@ -597,6 +597,8 @@ pub struct MultiHorizonLabelGenerator {
     spread_history: Vec<f64>,
 
     /// Rolling percentage change tracker (for Quantile threshold)
+    /// Note: Currently unused - reserved for future Quantile strategy implementation
+    #[allow(dead_code)]
     pct_change_history: Vec<f64>,
 }
 
@@ -688,7 +690,8 @@ impl MultiHorizonLabelGenerator {
 
     /// Compute rolling spread average (for RollingSpread threshold).
     fn compute_rolling_spread(&self) -> Option<f64> {
-        if let ThresholdStrategy::RollingSpread { window_size, .. } = &self.config.threshold_strategy
+        if let ThresholdStrategy::RollingSpread { window_size, .. } =
+            &self.config.threshold_strategy
         {
             if self.spread_history.len() >= *window_size {
                 let start = self.spread_history.len() - window_size;
@@ -731,10 +734,7 @@ impl MultiHorizonLabelGenerator {
 
             // Take the most recent window
             let start = pct_changes.len().saturating_sub(*window_size);
-            let mut abs_changes: Vec<f64> = pct_changes[start..]
-                .iter()
-                .map(|x| x.abs())
-                .collect();
+            let mut abs_changes: Vec<f64> = pct_changes[start..].iter().map(|x| x.abs()).collect();
 
             // Sort for quantile computation
             abs_changes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -748,8 +748,7 @@ impl MultiHorizonLabelGenerator {
             let frac = quantile_pos - lower_idx as f64;
 
             // Linear interpolation between adjacent values
-            let threshold =
-                abs_changes[lower_idx] * (1.0 - frac) + abs_changes[upper_idx] * frac;
+            let threshold = abs_changes[lower_idx] * (1.0 - frac) + abs_changes[upper_idx] * frac;
 
             return Some(threshold);
         }
@@ -1040,8 +1039,7 @@ mod tests {
     #[test]
     fn test_config_min_prices_required() {
         // min_prices = 2*k + max_h + 1
-        let config =
-            MultiHorizonConfig::new(vec![10, 100], 5, ThresholdStrategy::Fixed(0.002));
+        let config = MultiHorizonConfig::new(vec![10, 100], 5, ThresholdStrategy::Fixed(0.002));
         // 2*5 + 100 + 1 = 111
         assert_eq!(config.min_prices_required(), 111);
     }
@@ -1163,7 +1161,10 @@ mod tests {
             let labels = result.labels_for_horizon(horizon).unwrap();
             assert!(!labels.is_empty());
 
-            let up_count = labels.iter().filter(|(_, l, _)| *l == TrendLabel::Up).count();
+            let up_count = labels
+                .iter()
+                .filter(|(_, l, _)| *l == TrendLabel::Up)
+                .count();
             assert!(
                 up_count > labels.len() / 2,
                 "Horizon {} should have majority Up labels",
@@ -1293,12 +1294,7 @@ mod tests {
         for horizon in result.horizons() {
             let labels = result.labels_for_horizon(*horizon).unwrap();
             for (idx, _, _) in labels {
-                assert!(
-                    *idx < gen.len(),
-                    "Index {} should be < {}",
-                    idx,
-                    gen.len()
-                );
+                assert!(*idx < gen.len(), "Index {} should be < {}", idx, gen.len());
             }
         }
     }
@@ -1324,7 +1320,9 @@ mod tests {
         // Test label_sequence()
         let seq = result.label_sequence(5).unwrap();
         assert!(!seq.is_empty());
-        assert!(seq.iter().all(|l| matches!(l, TrendLabel::Up | TrendLabel::Down | TrendLabel::Stable)));
+        assert!(seq
+            .iter()
+            .all(|l| matches!(l, TrendLabel::Up | TrendLabel::Down | TrendLabel::Stable)));
 
         // Test class_indices()
         let indices = result.class_indices(5).unwrap();
@@ -1334,7 +1332,10 @@ mod tests {
         // Test stats_for_horizon()
         let stats = result.stats_for_horizon(5).unwrap();
         assert_eq!(stats.total, seq.len());
-        assert_eq!(stats.up_count + stats.down_count + stats.stable_count, stats.total);
+        assert_eq!(
+            stats.up_count + stats.down_count + stats.stable_count,
+            stats.total
+        );
     }
 
     #[test]
@@ -1390,8 +1391,11 @@ mod tests {
         let threshold = 0.002;
 
         // Multi-horizon config with single horizon
-        let multi_config =
-            MultiHorizonConfig::new(vec![horizon], smoothing, ThresholdStrategy::Fixed(threshold));
+        let multi_config = MultiHorizonConfig::new(
+            vec![horizon],
+            smoothing,
+            ThresholdStrategy::Fixed(threshold),
+        );
 
         // Single TLOB config
         let tlob_config = LabelConfig {
@@ -1485,11 +1489,7 @@ mod tests {
 
         // Verify all horizons have labels
         for h in [1, 2, 3, 4, 5, 10, 15, 20, 25, 30] {
-            assert!(
-                result.has_horizon(h),
-                "Should have horizon {}",
-                h
-            );
+            assert!(result.has_horizon(h), "Should have horizon {}", h);
             let labels = result.labels_for_horizon(h).unwrap();
             assert!(!labels.is_empty(), "Horizon {} should have labels", h);
         }
@@ -1497,8 +1497,7 @@ mod tests {
 
     #[test]
     fn test_edge_case_very_small_threshold() {
-        let config =
-            MultiHorizonConfig::new(vec![5], 2, ThresholdStrategy::Fixed(0.00001)); // 0.001%
+        let config = MultiHorizonConfig::new(vec![5], 2, ThresholdStrategy::Fixed(0.00001)); // 0.001%
         let mut gen = MultiHorizonLabelGenerator::new(config);
 
         // Even tiny price movements should be classified as Up/Down
@@ -1509,7 +1508,10 @@ mod tests {
         let labels = result.labels_for_horizon(5).unwrap();
 
         // With tiny threshold and increasing prices, should see Up labels
-        let up_count = labels.iter().filter(|(_, l, _)| *l == TrendLabel::Up).count();
+        let up_count = labels
+            .iter()
+            .filter(|(_, l, _)| *l == TrendLabel::Up)
+            .count();
         assert!(up_count > 0, "Should have Up labels with tiny threshold");
     }
 
@@ -1536,4 +1538,3 @@ mod tests {
         );
     }
 }
-

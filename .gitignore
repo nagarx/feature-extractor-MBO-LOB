@@ -37,3 +37,7 @@ Thumbs.db
 .env
 .env.local
 
+# Local cargo config (for path dependency overrides)
+# Create .cargo/config.toml locally to override git deps to local paths
+.cargo/
+

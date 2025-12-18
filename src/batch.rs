@@ -474,17 +474,26 @@ impl BatchOutput {
 
     /// Get total messages processed across all successful files.
     pub fn total_messages(&self) -> usize {
-        self.results.iter().map(|r| r.output.messages_processed).sum()
+        self.results
+            .iter()
+            .map(|r| r.output.messages_processed)
+            .sum()
     }
 
     /// Get total sequences generated across all successful files.
     pub fn total_sequences(&self) -> usize {
-        self.results.iter().map(|r| r.output.sequences_generated).sum()
+        self.results
+            .iter()
+            .map(|r| r.output.sequences_generated)
+            .sum()
     }
 
     /// Get total features extracted across all successful files.
     pub fn total_features(&self) -> usize {
-        self.results.iter().map(|r| r.output.features_extracted).sum()
+        self.results
+            .iter()
+            .map(|r| r.output.features_extracted)
+            .sum()
     }
 
     /// Get overall throughput (messages per second).
@@ -656,7 +665,10 @@ impl ProgressCallback for ConsoleProgress {
         println!("  Total messages:  {}", output.total_messages());
         println!("  Total sequences: {}", output.total_sequences());
         println!("  Total time:      {:?}", output.elapsed);
-        println!("  Throughput:      {:.2} msg/sec", output.throughput_msg_per_sec());
+        println!(
+            "  Throughput:      {:.2} msg/sec",
+            output.throughput_msg_per_sec()
+        );
         println!("  Speedup:         {:.2}x", output.speedup_factor());
         println!("═══════════════════════════════════════════════════════════════");
     }
@@ -732,9 +744,10 @@ impl BatchProcessor {
     /// created to resolve file paths through the hot store.
     pub fn new(pipeline_config: PipelineConfig, batch_config: BatchConfig) -> Self {
         // Auto-create HotStoreManager from config if hot_store_dir is set
-        let hot_store_manager = batch_config.hot_store_dir.as_ref().map(|dir| {
-            Arc::new(HotStoreManager::for_dbn(dir))
-        });
+        let hot_store_manager = batch_config
+            .hot_store_dir
+            .as_ref()
+            .map(|dir| Arc::new(HotStoreManager::for_dbn(dir)));
 
         Self {
             pipeline_config: Arc::new(pipeline_config),
@@ -899,8 +912,10 @@ impl BatchProcessor {
         let skipped = AtomicUsize::new(0);
 
         // Internal result type to handle cancellation
+        // Note: DayResult is boxed because it's significantly larger than other variants
+        // (312 bytes vs 72 bytes), which would waste memory when passing around the enum.
         enum ProcessResult {
-            Success(DayResult),
+            Success(Box<DayResult>),
             Error(FileError),
             Skipped,
         }
@@ -909,11 +924,11 @@ impl BatchProcessor {
         // Note: build_global() only works once per process, so we use a local pool
         // to allow different BatchProcessor instances to use different thread counts.
         let mut pool_builder = rayon::ThreadPoolBuilder::new().num_threads(threads_used);
-        
+
         if let Some(stack_size) = self.batch_config.stack_size {
             pool_builder = pool_builder.stack_size(stack_size);
         }
-        
+
         let pool = pool_builder.build().map_err(|e| {
             mbo_lob_reconstructor::TlobError::generic(format!(
                 "Failed to create thread pool: {}",
@@ -924,47 +939,47 @@ impl BatchProcessor {
         // Process files in parallel using the local thread pool
         let results: Vec<ProcessResult> = pool.install(|| {
             files
-            .par_iter()
-            .enumerate()
-            .map(|(index, file)| {
-                let file_path = file.as_ref().to_string_lossy().to_string();
-                let day = extract_day_from_path(&file_path);
+                .par_iter()
+                .enumerate()
+                .map(|(index, file)| {
+                    let file_path = file.as_ref().to_string_lossy().to_string();
+                    let day = extract_day_from_path(&file_path);
 
-                // Check for cancellation BEFORE starting work
-                if self.cancellation_token.is_cancelled() {
-                    skipped.fetch_add(1, Ordering::Relaxed);
-                    return ProcessResult::Skipped;
-                }
-
-                // Report progress if callback is set
-                if let Some(ref callback) = self.progress_callback {
-                    let info = ProgressInfo {
-                        current_file: file_path.clone(),
-                        current_index: index,
-                        total_files,
-                        completed: completed.load(Ordering::Relaxed),
-                        failed: failed.load(Ordering::Relaxed),
-                        elapsed: start.elapsed(),
-                    };
-                    callback.on_progress(&info);
-                }
-
-                // Process the file
-                let result = self.process_single_file(file, &day, &file_path);
-
-                // Update counters
-                match &result {
-                    Ok(day_result) => {
-                        completed.fetch_add(1, Ordering::Relaxed);
-                        ProcessResult::Success(day_result.clone())
+                    // Check for cancellation BEFORE starting work
+                    if self.cancellation_token.is_cancelled() {
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                        return ProcessResult::Skipped;
                     }
-                    Err(err) => {
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        ProcessResult::Error(err.clone())
+
+                    // Report progress if callback is set
+                    if let Some(ref callback) = self.progress_callback {
+                        let info = ProgressInfo {
+                            current_file: file_path.clone(),
+                            current_index: index,
+                            total_files,
+                            completed: completed.load(Ordering::Relaxed),
+                            failed: failed.load(Ordering::Relaxed),
+                            elapsed: start.elapsed(),
+                        };
+                        callback.on_progress(&info);
                     }
-                }
-            })
-            .collect()
+
+                    // Process the file
+                    let result = self.process_single_file(file, &day, &file_path);
+
+                    // Update counters
+                    match &result {
+                        Ok(day_result) => {
+                            completed.fetch_add(1, Ordering::Relaxed);
+                            ProcessResult::Success(Box::new(day_result.clone()))
+                        }
+                        Err(err) => {
+                            failed.fetch_add(1, Ordering::Relaxed);
+                            ProcessResult::Error(err.clone())
+                        }
+                    }
+                })
+                .collect()
         }); // End of pool.install()
 
         // Partition results
@@ -974,7 +989,7 @@ impl BatchProcessor {
 
         for result in results {
             match result {
-                ProcessResult::Success(day_result) => successful.push(day_result),
+                ProcessResult::Success(day_result) => successful.push(*day_result),
                 ProcessResult::Error(file_error) => {
                     if self.batch_config.error_mode == ErrorMode::FailFast {
                         return Err(mbo_lob_reconstructor::TlobError::generic(format!(
@@ -1025,13 +1040,12 @@ impl BatchProcessor {
         };
 
         // Create a NEW Pipeline for this thread
-        let mut pipeline = Pipeline::from_config((*self.pipeline_config).clone()).map_err(|e| {
-            FileError {
+        let mut pipeline =
+            Pipeline::from_config((*self.pipeline_config).clone()).map_err(|e| FileError {
                 day: day.to_string(),
                 file_path: file_path.to_string(),
                 error: format!("Failed to create pipeline: {}", e),
-            }
-        })?;
+            })?;
 
         // Process the resolved file path
         let output = pipeline.process(&resolved_path).map_err(|e| FileError {
@@ -1048,7 +1062,6 @@ impl BatchProcessor {
             thread_id: rayon::current_thread_index().unwrap_or(0),
         })
     }
-
 }
 
 // ============================================================================
@@ -1065,10 +1078,10 @@ fn extract_day_from_path(path: &str) -> String {
     // Try to find an 8-digit date pattern (YYYYMMDD)
     // Common patterns
     for pattern in &[
-        r"(\d{4})-(\d{2})-(\d{2})",     // 2025-02-03
-        r"(\d{8})",                       // 20250203
-        r"_(\d{8})",                      // _20250203
-        r"-(\d{8})",                      // -20250203
+        r"(\d{4})-(\d{2})-(\d{2})", // 2025-02-03
+        r"(\d{8})",                 // 20250203
+        r"_(\d{8})",                // _20250203
+        r"-(\d{8})",                // -20250203
     ] {
         if let Some(caps) = regex_lite_find(path, pattern) {
             return caps;
@@ -1263,4 +1276,3 @@ mod tests {
         assert_eq!(mode, ErrorMode::FailFast);
     }
 }
-

@@ -3,8 +3,8 @@
 //! These tests verify the pipeline works correctly with realistic data and edge cases.
 
 use feature_extractor::{
-    config::ExperimentMetadata, FeatureConfig, FeatureVec, Pipeline, PipelineConfig, PipelineOutput,
-    SamplingConfig, SamplingStrategy, Sequence, SequenceConfig,
+    config::ExperimentMetadata, FeatureConfig, FeatureVec, Pipeline, PipelineConfig,
+    PipelineOutput, SamplingConfig, SamplingStrategy, Sequence, SequenceConfig,
 };
 use std::sync::Arc;
 
@@ -92,10 +92,7 @@ fn test_pipeline_output_to_flat_features() {
     // Create mock sequences (using Arc for zero-copy)
     let sequences = vec![
         Sequence {
-            features: vec![
-                Arc::new(vec![1.0, 2.0, 3.0]),
-                Arc::new(vec![4.0, 5.0, 6.0]),
-            ],
+            features: vec![Arc::new(vec![1.0, 2.0, 3.0]), Arc::new(vec![4.0, 5.0, 6.0])],
             start_timestamp: 100,
             end_timestamp: 200,
             duration_ns: 100,
@@ -353,9 +350,7 @@ fn test_large_sequence_handling() {
     let mut sequences = Vec::new();
     for i in 0..1000 {
         // Create feature vectors wrapped in Arc
-        let features: Vec<FeatureVec> = (0..100)
-            .map(|_| Arc::new(vec![i as f64; 48]))
-            .collect();
+        let features: Vec<FeatureVec> = (0..100).map(|_| Arc::new(vec![i as f64; 48])).collect();
         sequences.push(Sequence {
             features,
             start_timestamp: i * 100,
@@ -543,10 +538,7 @@ fn test_pipeline_feature_count_validation() {
     config.features.include_derived = false;
     config.features.include_mbo = false;
     config.sequence.feature_count = 40; // 10 × 4 = 40
-    assert!(
-        config.validate().is_ok(),
-        "LOB-only config should validate"
-    );
+    assert!(config.validate().is_ok(), "LOB-only config should validate");
 
     // LOB + derived
     config.features.include_derived = true;
@@ -634,10 +626,7 @@ fn test_sequence_arc_feature_storage() {
 fn test_pipeline_output_flat_features_with_arc() {
     // Create mock sequences with Arc features
     let seq1 = Sequence {
-        features: vec![
-            Arc::new(vec![1.0, 2.0]),
-            Arc::new(vec![3.0, 4.0]),
-        ],
+        features: vec![Arc::new(vec![1.0, 2.0]), Arc::new(vec![3.0, 4.0])],
         start_timestamp: 0,
         end_timestamp: 1000,
         duration_ns: 1000,

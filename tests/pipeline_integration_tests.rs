@@ -84,11 +84,7 @@ fn create_test_output(n_sequences: usize, window_size: usize, lob_levels: usize)
 }
 
 /// Create output with a specific price trend for label testing.
-fn create_trending_output(
-    n_prices: usize,
-    trend: &str,
-    magnitude: f64,
-) -> PipelineOutput {
+fn create_trending_output(n_prices: usize, trend: &str, magnitude: f64) -> PipelineOutput {
     let mut mid_prices = Vec::with_capacity(n_prices);
     let base_price = 100.0;
 
@@ -103,9 +99,7 @@ fn create_trending_output(
     }
 
     // Create minimal sequences (not testing sequences here, just labels)
-    let features: Vec<FeatureVec> = (0..10)
-        .map(|_| Arc::new(vec![0.0; 40]))
-        .collect();
+    let features: Vec<FeatureVec> = (0..10).map(|_| Arc::new(vec![0.0; 40])).collect();
 
     let sequences = vec![Sequence {
         features,
@@ -235,8 +229,8 @@ fn test_format_deeplob_channel_ordering() {
     // bid_prices: 21.0, 22.0, ..., 30.0
     // bid_sizes:  31.0, 32.0, ..., 40.0
     for i in 0..n_levels {
-        feature_vec[i] = (i + 1) as f64;              // ask_price
-        feature_vec[n_levels + i] = (i + 11) as f64;   // ask_size
+        feature_vec[i] = (i + 1) as f64; // ask_price
+        feature_vec[n_levels + i] = (i + 11) as f64; // ask_size
         feature_vec[2 * n_levels + i] = (i + 21) as f64; // bid_price
         feature_vec[3 * n_levels + i] = (i + 31) as f64; // bid_size
     }
@@ -341,7 +335,10 @@ fn test_generate_multi_horizon_labels_upward_trend() {
     // With strong upward trend, most labels should be Up
     // labels_for_horizon returns Option<&[(usize, TrendLabel, f64)]>
     let h10_labels = labels.labels_for_horizon(10).unwrap();
-    let up_count = h10_labels.iter().filter(|(_, label, _)| *label == TrendLabel::Up).count();
+    let up_count = h10_labels
+        .iter()
+        .filter(|(_, label, _)| *label == TrendLabel::Up)
+        .count();
     let total = h10_labels.len();
 
     assert!(
@@ -360,7 +357,10 @@ fn test_generate_multi_horizon_labels_downward_trend() {
 
     // With strong downward trend, most labels should be Down
     let h10_labels = labels.labels_for_horizon(10).unwrap();
-    let down_count = h10_labels.iter().filter(|(_, label, _)| *label == TrendLabel::Down).count();
+    let down_count = h10_labels
+        .iter()
+        .filter(|(_, label, _)| *label == TrendLabel::Down)
+        .count();
     let total = h10_labels.len();
 
     assert!(
@@ -379,7 +379,10 @@ fn test_generate_multi_horizon_labels_stable() {
 
     // With stable prices, most labels should be Stable
     let h10_labels = labels.labels_for_horizon(10).unwrap();
-    let stable_count = h10_labels.iter().filter(|(_, label, _)| *label == TrendLabel::Stable).count();
+    let stable_count = h10_labels
+        .iter()
+        .filter(|(_, label, _)| *label == TrendLabel::Stable)
+        .count();
     let total = h10_labels.len();
 
     assert!(
@@ -397,7 +400,10 @@ fn test_generate_multi_horizon_labels_insufficient_data() {
     let config = MultiHorizonConfig::fi2010(); // Requires h=100
     let result = output.generate_multi_horizon_labels(config);
 
-    assert!(result.is_err(), "Should error with insufficient data for large horizon");
+    assert!(
+        result.is_err(),
+        "Should error with insufficient data for large horizon"
+    );
 }
 
 #[test]
@@ -514,4 +520,3 @@ fn test_label_generation_deterministic() {
         }
     }
 }
-

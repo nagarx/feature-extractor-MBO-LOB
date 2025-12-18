@@ -30,8 +30,11 @@ fn test_multi_horizon_matches_single_horizon_tlob() {
         .collect();
 
     // Multi-horizon
-    let multi_config =
-        MultiHorizonConfig::new(horizons.clone(), smoothing, ThresholdStrategy::Fixed(threshold));
+    let multi_config = MultiHorizonConfig::new(
+        horizons.clone(),
+        smoothing,
+        ThresholdStrategy::Fixed(threshold),
+    );
     let mut multi_gen = MultiHorizonLabelGenerator::new(multi_config);
     multi_gen.add_prices(&prices);
     let multi_result = multi_gen.generate_labels().unwrap();
@@ -95,7 +98,10 @@ fn test_upward_trend_detection_all_horizons() {
 
     for horizon in [5, 10, 20] {
         let labels = result.labels_for_horizon(horizon).unwrap();
-        let up_count = labels.iter().filter(|(_, l, _)| *l == TrendLabel::Up).count();
+        let up_count = labels
+            .iter()
+            .filter(|(_, l, _)| *l == TrendLabel::Up)
+            .count();
         let up_pct = up_count as f64 / labels.len() as f64;
 
         assert!(
@@ -179,7 +185,10 @@ fn test_minimum_required_prices() {
     // Test with one less than minimum
     let prices_insufficient: Vec<f64> = (0..min_required - 1).map(|i| 100.0 + i as f64).collect();
     gen.add_prices(&prices_insufficient);
-    assert!(gen.generate_labels().is_err(), "Should fail with insufficient prices");
+    assert!(
+        gen.generate_labels().is_err(),
+        "Should fail with insufficient prices"
+    );
 
     // Test with exact minimum
     gen.clear();
@@ -226,7 +235,9 @@ fn test_label_indices_within_bounds() {
     let config = MultiHorizonConfig::fi2010();
     let mut gen = MultiHorizonLabelGenerator::new(config.clone());
 
-    let prices: Vec<f64> = (0..500).map(|i| 100.0 + (i as f64 * 0.05).sin() * 5.0).collect();
+    let prices: Vec<f64> = (0..500)
+        .map(|i| 100.0 + (i as f64 * 0.05).sin() * 5.0)
+        .collect();
     gen.add_prices(&prices);
 
     let result = gen.generate_labels().unwrap();
@@ -365,11 +376,20 @@ fn test_deterministic_output() {
         for result in results.iter().skip(1) {
             let labels_i = result.labels_for_horizon(*horizon).unwrap();
 
-            assert_eq!(labels_0.len(), labels_i.len(), "Horizon {}: count mismatch", horizon);
+            assert_eq!(
+                labels_0.len(),
+                labels_i.len(),
+                "Horizon {}: count mismatch",
+                horizon
+            );
 
             for (l0, li) in labels_0.iter().zip(labels_i.iter()) {
                 assert_eq!(l0.0, li.0, "Horizon {}: index mismatch", horizon);
-                assert_eq!(l0.1, li.1, "Horizon {}: label mismatch at {}", horizon, l0.0);
+                assert_eq!(
+                    l0.1, li.1,
+                    "Horizon {}: label mismatch at {}",
+                    horizon, l0.0
+                );
                 assert!(
                     (l0.2 - li.2).abs() < 1e-15,
                     "Horizon {}: change mismatch at {}",
@@ -459,7 +479,9 @@ fn test_statistics_computation() {
     let mut gen = MultiHorizonLabelGenerator::new(config);
 
     // Generate data with known distribution
-    let prices: Vec<f64> = (0..100).map(|i| 100.0 + (i as f64 * 0.1).sin() * 5.0).collect();
+    let prices: Vec<f64> = (0..100)
+        .map(|i| 100.0 + (i as f64 * 0.1).sin() * 5.0)
+        .collect();
     gen.add_prices(&prices);
 
     let result = gen.generate_labels().unwrap();
@@ -495,10 +517,7 @@ fn test_class_balance_detection() {
         up_pct > 0.5,
         "Strong upward trend should have imbalanced Up class"
     );
-    assert!(
-        !stats.is_balanced(),
-        "Strong trend should not be balanced"
-    );
+    assert!(!stats.is_balanced(), "Strong trend should not be balanced");
 }
 
 // ============================================================================
@@ -573,11 +592,7 @@ fn test_quantile_balanced_classes_oscillating() {
         .map(|i| 100.0 + (i as f64 * 0.05).sin() * 0.5)
         .collect();
 
-    let config = MultiHorizonConfig::new(
-        vec![10],
-        5,
-        ThresholdStrategy::quantile(0.3, 500, 0.002),
-    );
+    let config = MultiHorizonConfig::new(vec![10], 5, ThresholdStrategy::quantile(0.3, 500, 0.002));
 
     let mut gen = MultiHorizonLabelGenerator::new(config);
     gen.add_prices(&prices);
@@ -628,11 +643,8 @@ fn test_quantile_vs_fixed_comparison() {
     let fixed_stats = fixed_result.stats_for_horizon(10).unwrap();
 
     // Quantile threshold - adapts to actual price movements
-    let quantile_config = MultiHorizonConfig::new(
-        vec![10],
-        5,
-        ThresholdStrategy::quantile(0.3, 200, 0.002),
-    );
+    let quantile_config =
+        MultiHorizonConfig::new(vec![10], 5, ThresholdStrategy::quantile(0.3, 200, 0.002));
 
     let mut quantile_gen = MultiHorizonLabelGenerator::new(quantile_config);
     quantile_gen.add_prices(&prices);
@@ -668,11 +680,7 @@ fn test_quantile_with_trending_prices() {
     // Strong upward trend
     let prices: Vec<f64> = (0..1000).map(|i| 100.0 + i as f64 * 0.1).collect();
 
-    let config = MultiHorizonConfig::new(
-        vec![10],
-        5,
-        ThresholdStrategy::quantile(0.3, 200, 0.002),
-    );
+    let config = MultiHorizonConfig::new(vec![10], 5, ThresholdStrategy::quantile(0.3, 200, 0.002));
 
     let mut gen = MultiHorizonLabelGenerator::new(config);
     gen.add_prices(&prices);
@@ -718,22 +726,16 @@ fn test_quantile_different_proportions() {
         .collect();
 
     // Test with 20% target (more stable)
-    let config_20 = MultiHorizonConfig::new(
-        vec![10],
-        5,
-        ThresholdStrategy::quantile(0.2, 500, 0.002),
-    );
+    let config_20 =
+        MultiHorizonConfig::new(vec![10], 5, ThresholdStrategy::quantile(0.2, 500, 0.002));
     let mut gen_20 = MultiHorizonLabelGenerator::new(config_20);
     gen_20.add_prices(&prices);
     let result_20 = gen_20.generate_labels().unwrap();
     let stats_20 = result_20.stats_for_horizon(10).unwrap();
 
     // Test with 40% target (less stable)
-    let config_40 = MultiHorizonConfig::new(
-        vec![10],
-        5,
-        ThresholdStrategy::quantile(0.4, 500, 0.002),
-    );
+    let config_40 =
+        MultiHorizonConfig::new(vec![10], 5, ThresholdStrategy::quantile(0.4, 500, 0.002));
     let mut gen_40 = MultiHorizonLabelGenerator::new(config_40);
     gen_40.add_prices(&prices);
     let result_40 = gen_40.generate_labels().unwrap();
@@ -755,4 +757,3 @@ fn test_quantile_different_proportions() {
         "20% target should produce more stable labels than 40% target"
     );
 }
-

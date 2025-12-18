@@ -1203,12 +1203,7 @@ mod tests {
 
         // Verify no NaN or Inf values
         for (i, &value) in buffer.iter().enumerate() {
-            assert!(
-                value.is_finite(),
-                "Feature {} is not finite: {}",
-                i,
-                value
-            );
+            assert!(value.is_finite(), "Feature {} is not finite: {}", i, value);
         }
 
         // Verify prices are in reasonable range (test state has $100 prices)

@@ -590,10 +590,8 @@ impl Pipeline {
                     ms_window.push_arc(ts, features);
                 } else if let Err(e) = self.sequence_builder.push_arc(ts, features) {
                     log::error!("Sequence builder push failed: {}", e);
-                } else {
-                    if let Some(seq) = self.sequence_builder.try_build_sequence() {
-                        accumulated_sequences.push(seq);
-                    }
+                } else if let Some(seq) = self.sequence_builder.try_build_sequence() {
+                    accumulated_sequences.push(seq);
                 }
 
                 if let Some(mid) = lob_state.mid_price() {

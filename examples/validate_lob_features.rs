@@ -28,11 +28,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize components
     let loader = DbnLoader::new(dbn_path)?.skip_invalid(true);
     let mut lob = LobReconstructor::new(10);
-    
+
     // Enable derived features so we can validate mid-price, spread, etc.
     let config = feature_extractor::FeatureConfig::default()
-        .with_derived(true)  // Enable derived features (mid-price, spread, imbalance, etc.)
-        .with_mbo(false);    // Don't require MBO features for this test
+        .with_derived(true) // Enable derived features (mid-price, spread, imbalance, etc.)
+        .with_mbo(false); // Don't require MBO features for this test
     let extractor = FeatureExtractor::with_config(config);
 
     println!(

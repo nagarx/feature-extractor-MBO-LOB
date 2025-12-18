@@ -900,9 +900,9 @@ mod tests {
         use std::sync::Arc;
 
         let config = MultiScaleConfig::new(
-            ScaleConfig::new(5, 1, 1),  // Fast: 5 window
-            ScaleConfig::new(5, 2, 1),  // Medium: 2× decimation
-            ScaleConfig::new(5, 4, 1),  // Slow: 4× decimation
+            ScaleConfig::new(5, 1, 1), // Fast: 5 window
+            ScaleConfig::new(5, 2, 1), // Medium: 2× decimation
+            ScaleConfig::new(5, 4, 1), // Slow: 4× decimation
         );
 
         let mut window = MultiScaleWindow::new(config, 4);
@@ -914,9 +914,9 @@ mod tests {
         }
 
         let (fast, medium, slow) = window.buffer_counts();
-        assert_eq!(fast, 20);   // All 20 events
+        assert_eq!(fast, 20); // All 20 events
         assert_eq!(medium, 10); // Every 2nd
-        assert_eq!(slow, 5);    // Every 4th
+        assert_eq!(slow, 5); // Every 4th
     }
 
     #[test]
@@ -958,9 +958,9 @@ mod tests {
 
         // Create config where all scales sample the same event
         let config = MultiScaleConfig::new(
-            ScaleConfig::new(3, 1, 1),   // Fast: every event
-            ScaleConfig::new(3, 1, 1),   // Medium: every event
-            ScaleConfig::new(3, 1, 1),   // Slow: every event
+            ScaleConfig::new(3, 1, 1), // Fast: every event
+            ScaleConfig::new(3, 1, 1), // Medium: every event
+            ScaleConfig::new(3, 1, 1), // Slow: every event
         );
 
         let mut window = MultiScaleWindow::new(config, 4);
@@ -1004,12 +1004,7 @@ mod tests {
         let mut window = MultiScaleWindow::new(config, 4);
 
         // Test edge values
-        let edge_values = Arc::new(vec![
-            std::f64::consts::PI,
-            std::f64::consts::E,
-            1e-15,
-            1e15,
-        ]);
+        let edge_values = Arc::new(vec![std::f64::consts::PI, std::f64::consts::E, 1e-15, 1e15]);
 
         window.push_arc(1000, edge_values.clone());
         window.push_arc(2000, Arc::new(vec![1.0; 4]));
@@ -1045,9 +1040,9 @@ mod tests {
 
         // Different decimation rates
         let config = MultiScaleConfig::new(
-            ScaleConfig::new(3, 1, 1),   // Fast: every event
-            ScaleConfig::new(3, 2, 1),   // Medium: every 2nd
-            ScaleConfig::new(3, 4, 1),   // Slow: every 4th
+            ScaleConfig::new(3, 1, 1), // Fast: every event
+            ScaleConfig::new(3, 2, 1), // Medium: every 2nd
+            ScaleConfig::new(3, 4, 1), // Slow: every 4th
         );
 
         let mut window = MultiScaleWindow::new(config, 3);
@@ -1058,9 +1053,9 @@ mod tests {
         }
 
         let (fast, medium, slow) = window.buffer_counts();
-        assert_eq!(fast, 12);  // All 12
+        assert_eq!(fast, 12); // All 12
         assert_eq!(medium, 6); // 12/2 = 6
-        assert_eq!(slow, 3);   // 12/4 = 3
+        assert_eq!(slow, 3); // 12/4 = 3
 
         // Build and verify
         let ms = window.try_build_all().unwrap();
