@@ -89,10 +89,23 @@ pub use tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOut
 #[cfg(test)]
 use crate::sequence_builder::FeatureVec;
 
+/// Feature indices that should NOT be normalized (categorical/binary/constant).
+///
+/// These features have semantic meaning that would be destroyed by Z-score:
+/// - BOOK_VALID (92): Binary safety gate (1=valid, 0=invalid)
+/// - TIME_REGIME (93): Categorical market session (0-4)
+/// - MBO_READY (94): Binary warmup flag (1=ready, 0=warming)
+/// - INVALIDITY_DELTA (96): Count of feed problems (preserve for filtering)
+/// - SCHEMA_VERSION (97): Constant version identifier
+const SKIP_NORMALIZE_INDICES: &[usize] = &[92, 93, 94, 96, 97];
+
 /// Apply z-score normalization to features for neural network training.
 ///
 /// Normalizes each feature column to have mean ≈ 0 and std ≈ 1.
 /// This is critical for numerical stability in deep learning.
+///
+/// **Important**: Categorical and binary features are EXCLUDED from normalization
+/// to preserve their semantic meaning. See `SKIP_NORMALIZE_INDICES`.
 ///
 /// # Arguments
 ///
@@ -100,11 +113,11 @@ use crate::sequence_builder::FeatureVec;
 ///
 /// # Returns
 ///
-/// Normalized features with same shape
+/// Normalized features with same shape. Excluded indices are copied unchanged.
 ///
 /// # Mathematical Details
 ///
-/// For each feature column j:
+/// For each feature column j (where j ∉ SKIP_NORMALIZE_INDICES):
 /// ```text
 /// normalized[i,j] = (features[i,j] - mean[j]) / std[j]
 /// ```
@@ -121,12 +134,19 @@ fn z_score_normalize_batch(features: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let n_samples = features.len();
     let n_features = features[0].len();
 
+    // Build set of indices to skip
+    use std::collections::HashSet;
+    let skip_indices: HashSet<usize> = SKIP_NORMALIZE_INDICES.iter().copied().collect();
+
     // Compute mean and std for each feature column
     let mut means = vec![0.0; n_features];
     let mut stds = vec![0.0; n_features];
 
-    // Compute means
+    // Compute means (skip excluded indices)
     for feat_idx in 0..n_features {
+        if skip_indices.contains(&feat_idx) {
+            continue;
+        }
         let mut sum = 0.0;
         for sample in features.iter() {
             sum += sample[feat_idx];
@@ -134,8 +154,12 @@ fn z_score_normalize_batch(features: &[Vec<f64>]) -> Vec<Vec<f64>> {
         means[feat_idx] = sum / n_samples as f64;
     }
 
-    // Compute standard deviations
+    // Compute standard deviations (skip excluded indices)
     for feat_idx in 0..n_features {
+        if skip_indices.contains(&feat_idx) {
+            stds[feat_idx] = 1.0; // Won't be used, but avoid NaN
+            continue;
+        }
         let mut sum_sq_diff = 0.0;
         for sample in features.iter() {
             let diff = sample[feat_idx] - means[feat_idx];
@@ -150,12 +174,18 @@ fn z_score_normalize_batch(features: &[Vec<f64>]) -> Vec<Vec<f64>> {
         }
     }
 
-    // Normalize all features
+    // Normalize features (excluding skip indices)
     let mut normalized = Vec::with_capacity(n_samples);
     for sample in features.iter() {
         let mut norm_sample = Vec::with_capacity(n_features);
         for feat_idx in 0..n_features {
-            let norm_val = (sample[feat_idx] - means[feat_idx]) / stds[feat_idx];
+            let norm_val = if skip_indices.contains(&feat_idx) {
+                // Preserve original value for categorical/binary features
+                sample[feat_idx]
+            } else {
+                // Z-score normalize continuous features
+                (sample[feat_idx] - means[feat_idx]) / stds[feat_idx]
+            };
             norm_sample.push(norm_val);
         }
         normalized.push(norm_sample);
@@ -986,6 +1016,84 @@ mod tests {
         assert_eq!(
             metadata2.n_sequences, 5,
             "BatchExporter should preserve sequence count"
+        );
+    }
+
+    #[test]
+    fn test_z_score_preserves_categorical_features() {
+        // Test that categorical/binary features are NOT normalized
+        // These indices must be preserved: 92 (BOOK_VALID), 93 (TIME_REGIME),
+        // 94 (MBO_READY), 96 (INVALIDITY_DELTA), 97 (SCHEMA_VERSION)
+
+        // Create test data with 98 features including signals
+        let n_samples = 100;
+        let n_features = 98;
+
+        let mut features: Vec<Vec<f64>> = Vec::with_capacity(n_samples);
+        for i in 0..n_samples {
+            let mut sample = vec![0.0; n_features];
+            // Fill with varying values for continuous features
+            for j in 0..92 {
+                sample[j] = (i as f64) * 0.1 + (j as f64);
+            }
+            // Set categorical features with specific values
+            sample[92] = 1.0; // BOOK_VALID: all valid
+            sample[93] = (i % 5) as f64; // TIME_REGIME: 0-4
+            sample[94] = 1.0; // MBO_READY: all ready
+            sample[95] = 0.01 * i as f64; // DT_SECONDS: varies (should normalize)
+            sample[96] = 0.0; // INVALIDITY_DELTA: all clean
+            sample[97] = 2.0; // SCHEMA_VERSION: constant
+            features.push(sample);
+        }
+
+        let normalized = z_score_normalize_batch(&features);
+
+        // Verify categorical features are preserved
+        for (i, norm_sample) in normalized.iter().enumerate() {
+            // BOOK_VALID (92): Should still be 1.0
+            assert!(
+                (norm_sample[92] - 1.0).abs() < 1e-10,
+                "BOOK_VALID should be preserved at 1.0, got {}",
+                norm_sample[92]
+            );
+
+            // TIME_REGIME (93): Should still be original value
+            let expected_regime = (i % 5) as f64;
+            assert!(
+                (norm_sample[93] - expected_regime).abs() < 1e-10,
+                "TIME_REGIME should be preserved at {}, got {}",
+                expected_regime,
+                norm_sample[93]
+            );
+
+            // MBO_READY (94): Should still be 1.0
+            assert!(
+                (norm_sample[94] - 1.0).abs() < 1e-10,
+                "MBO_READY should be preserved at 1.0, got {}",
+                norm_sample[94]
+            );
+
+            // INVALIDITY_DELTA (96): Should still be 0.0
+            assert!(
+                norm_sample[96].abs() < 1e-10,
+                "INVALIDITY_DELTA should be preserved at 0.0, got {}",
+                norm_sample[96]
+            );
+
+            // SCHEMA_VERSION (97): Should still be 2.0
+            assert!(
+                (norm_sample[97] - 2.0).abs() < 1e-10,
+                "SCHEMA_VERSION should be preserved at 2.0, got {}",
+                norm_sample[97]
+            );
+        }
+
+        // Verify DT_SECONDS (95) IS normalized (not in skip list)
+        let dt_mean: f64 = normalized.iter().map(|s| s[95]).sum::<f64>() / n_samples as f64;
+        assert!(
+            dt_mean.abs() < 0.1,
+            "DT_SECONDS should be normalized (mean ≈ 0), got mean={}",
+            dt_mean
         );
     }
 }
