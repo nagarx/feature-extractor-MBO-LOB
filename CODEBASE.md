@@ -15,15 +15,16 @@
 7. [Normalization System](#7-normalization-system)
 8. [Label Generation](#8-label-generation)
 9. [Export Pipeline](#9-export-pipeline)
-10. [Parallel Batch Processing](#10-parallel-batch-processing) *(feature-gated)*
-11. [Configuration System](#11-configuration-system)
-12. [Validation](#12-validation)
-13. [Zero-Allocation APIs](#13-zero-allocation-apis)
-14. [Testing Patterns](#14-testing-patterns)
-15. [Performance Considerations](#15-performance-considerations)
-16. [Integration with MBO-LOB-Reconstructor](#16-integration-with-mbo-lob-reconstructor)
-17. [Common Patterns and Idioms](#17-common-patterns-and-idioms)
-18. [Known Limitations](#18-known-limitations)
+10. [Dataset Configuration System](#10-dataset-configuration-system)
+11. [Parallel Batch Processing](#11-parallel-batch-processing) *(feature-gated)*
+12. [Configuration System](#12-configuration-system)
+13. [Validation](#13-validation)
+14. [Zero-Allocation APIs](#14-zero-allocation-apis)
+15. [Testing Patterns](#15-testing-patterns)
+16. [Performance Considerations](#16-performance-considerations)
+17. [Integration with MBO-LOB-Reconstructor](#17-integration-with-mbo-lob-reconstructor)
+18. [Common Patterns and Idioms](#18-common-patterns-and-idioms)
+19. [Known Limitations](#19-known-limitations)
 
 ---
 
@@ -103,9 +104,18 @@ src/
 │   └── feature_def.rs        # Feature definitions
 │
 ├── export/                   # Export module (directory)
-│   ├── mod.rs                # NumpyExporter, BatchExporter, re-exports
-│   └── tensor_format.rs      # TensorFormat, TensorFormatter, TensorOutput
-└── export_aligned.rs         # Aligned feature/label export
+│   ├── mod.rs                # NumpyExporter, BatchExporter, DatasetConfig re-exports
+│   ├── tensor_format.rs      # TensorFormat, TensorFormatter, TensorOutput
+│   └── dataset_config.rs     # DatasetConfig, SymbolConfig, FeatureSetConfig, etc.
+├── export_aligned.rs         # Aligned feature/label export
+│
+├── tools/                    # CLI tools (binaries)
+│   └── export_dataset.rs     # Configuration-driven export CLI
+│
+└── configs/                  # Sample configuration files
+    ├── nvda_98feat.toml      # 98-feature NVIDIA export configuration
+    ├── nvda_84feat_baseline.toml # 84-feature baseline configuration
+    └── template_multi_symbol.toml # Multi-symbol export template
 ```
 
 ---
@@ -973,7 +983,137 @@ def denormalize_prices(normalized, means, stds, levels=10):
 
 ---
 
-## 10. Parallel Batch Processing
+## 10. Dataset Configuration System
+
+The pipeline provides a configuration-driven, symbol-agnostic export system via `DatasetConfig`.
+
+### Purpose
+
+- **Model-agnostic**: Exports features, not trading decisions
+- **Symbol-agnostic**: Works for any instrument (NVDA, AAPL, etc.)
+- **Configuration-driven**: All parameters via TOML/JSON, no hard-coding
+- **Flexible feature sets**: Support 40, 48, 76, 84, or 98 features
+- **Reproducible**: Serializable configurations for experiment tracking
+
+### DatasetConfig Structure
+
+```rust
+pub struct DatasetConfig {
+    pub symbol: SymbolConfig,          // Symbol name, exchange, filename pattern
+    pub data: DataPathConfig,          // Input/output directories, hot store
+    pub dates: DateRangeConfig,        // Date range with weekend exclusion
+    pub features: FeatureSetConfig,    // Feature selection (derived, MBO, signals)
+    pub sampling: ExportSamplingConfig, // Event-based or volume-based sampling
+    pub sequence: ExportSequenceConfig, // Window size, stride, buffer
+    pub labels: ExportLabelConfig,     // Horizon, smoothing, threshold
+    pub split: SplitConfig,            // Train/val/test ratios
+    pub processing: ProcessingConfig,  // Threads, error mode
+}
+```
+
+### Configuration Components
+
+| Component | Purpose | Key Fields |
+|-----------|---------|------------|
+| `SymbolConfig` | Symbol definition | `name`, `exchange`, `filename_pattern` |
+| `DataPathConfig` | Data locations | `input_dir`, `output_dir`, `hot_store_dir` |
+| `DateRangeConfig` | Date selection | `start_date`, `end_date`, `exclude_weekends` |
+| `FeatureSetConfig` | Feature flags | `include_derived`, `include_mbo`, `include_signals` |
+| `ExportSamplingConfig` | Sampling strategy | `strategy`, `target_volume` or `event_count` |
+| `ExportSequenceConfig` | Sequence building | `window_size`, `stride`, `max_buffer` |
+| `ExportLabelConfig` | Label generation | `horizon`, `smoothing_window`, `threshold` |
+| `SplitConfig` | Data splits | `train_ratio`, `val_ratio`, `test_ratio` |
+| `ProcessingConfig` | Parallelism | `num_threads`, `error_mode` |
+
+### Feature Count Configurations
+
+| Configuration | Count | FeatureSetConfig |
+|---------------|-------|------------------|
+| Raw LOB only | 40 | `include_derived: false, include_mbo: false, include_signals: false` |
+| + Derived | 48 | `include_derived: true` |
+| + MBO | 76 | `include_mbo: true` |
+| + Derived + MBO | 84 | `include_derived: true, include_mbo: true` |
+| + Signals | 98 | `include_derived: true, include_mbo: true, include_signals: true` |
+
+### TOML Configuration Example
+
+```toml
+# configs/nvda_98feat.toml
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+
+[data]
+input_dir = "../data/databento/NVDA"
+output_dir = "../data/exports/nvda_98feat"
+hot_store_dir = "../data/hot_store/NVDA"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2025-02-28"
+exclude_weekends = true
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+
+[sampling]
+strategy = "VolumeBased"
+target_volume = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+
+[labels]
+horizon = 50
+smoothing_window = 10
+threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+num_threads = 8
+error_mode = "CollectErrors"
+```
+
+### CLI Export Tool
+
+```bash
+# Generate a template configuration
+cargo run --release --bin export_dataset -- --generate-config configs/my_dataset.toml
+
+# Execute export using configuration
+cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_98feat.toml
+```
+
+### Programmatic Usage
+
+```rust
+use feature_extractor::export::DatasetConfig;
+
+// Load and validate configuration
+let config = DatasetConfig::load_toml("configs/nvda_98feat.toml")?;
+config.validate()?;
+
+// Convert to PipelineConfig (feature counts auto-synchronized)
+let pipeline_config = config.to_pipeline_config()?;
+
+// Use with BatchProcessor
+let batch_config = config.processing.to_batch_config(&config.data.hot_store_dir);
+let processor = BatchProcessor::new(pipeline_config, batch_config);
+```
+
+---
+
+## 11. Parallel Batch Processing
 
 > **Feature Gate**: Requires `--features parallel` to enable.
 
@@ -1171,7 +1311,7 @@ let output = process_files_with_threads(&config, &files, 8)?;
 
 ---
 
-## 11. Configuration System
+## 12. Configuration System
 
 ### PipelineConfig
 
@@ -1234,7 +1374,7 @@ let pipeline = PipelineBuilder::new()
 
 ---
 
-## 12. Validation
+## 13. Validation
 
 ### FeatureValidator
 
@@ -1263,7 +1403,7 @@ impl FeatureValidator {
 
 ---
 
-## 13. Zero-Allocation APIs
+## 14. Zero-Allocation APIs
 
 The library provides zero-allocation APIs for high-performance hot paths.
 
@@ -1360,7 +1500,7 @@ pub fn process<P: AsRef<Path>>(&mut self, path: P) -> Result<PipelineOutput> {
 
 ---
 
-## 14. Testing Patterns
+## 15. Testing Patterns
 
 ### Unit Test Structure
 
@@ -1416,7 +1556,7 @@ fn test_full_pipeline() {
 
 ---
 
-## 15. Performance Considerations
+## 16. Performance Considerations
 
 ### Hot Paths
 
@@ -1445,7 +1585,7 @@ fn test_full_pipeline() {
 
 ---
 
-## 16. Integration with MBO-LOB-Reconstructor
+## 17. Integration with MBO-LOB-Reconstructor
 
 ### Dependency Setup
 
@@ -1586,7 +1726,7 @@ fn process_custom_messages(messages: impl Iterator<Item = MboMessage>) -> Result
 
 ---
 
-## 17. Common Patterns and Idioms
+## 18. Common Patterns and Idioms
 
 ### Feature Count Synchronization
 
@@ -1645,7 +1785,7 @@ builder.reset();             // Clears buffer and counters
 
 ---
 
-## 18. Known Limitations
+## 19. Known Limitations
 
 ### 1. MBO Features Initial NaN
 

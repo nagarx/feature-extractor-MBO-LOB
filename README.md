@@ -12,6 +12,8 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 ### Key Features
 
 - **Fluent Builder API**: Simple, readable pipeline configuration
+- **Configuration-Driven Exports**: TOML/JSON configs for reproducible experiments
+- **Symbol-Agnostic**: Works for any instrument (NVDA, AAPL, etc.)
 - **Paper-Aligned Presets**: DeepLOB, TLOB, FI-2010, TransLOB, LiT configurations
 - **Auto-Computed Feature Count**: No manual calculation required
 - **Comprehensive Feature Set**: Up to 98 features across multiple categories
@@ -25,6 +27,7 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 - **Parallel Processing**: Multi-threaded batch processing with Rayon (optional)
 - **Graceful Cancellation**: Cancel long-running jobs from any thread
 - **Hot Store Support**: Pre-decompress data for ~30% faster processing
+- **CLI Export Tool**: `export_dataset` binary for command-line exports
 
 ## Quick Start
 
@@ -369,14 +372,87 @@ let tensor = output.format_as(TensorFormat::Flat, FeatureMapping::standard_lob(1
 
 ## Export to NumPy
 
-### Single Day Export
+### Configuration-Driven Export (Recommended)
+
+Use the `export_dataset` CLI tool with TOML configuration:
+
+```bash
+# Generate a template configuration
+cargo run --release --bin export_dataset -- --generate-config configs/my_dataset.toml
+
+# Edit the configuration file, then export
+cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_98feat.toml
+```
+
+Sample configuration (`configs/nvda_98feat.toml`):
+
+```toml
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+
+[data]
+input_dir = "../data/databento/NVDA"
+output_dir = "../data/exports/nvda_98feat"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2025-02-28"
+exclude_weekends = true
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true  # Full 98-feature set
+
+[sampling]
+strategy = "VolumeBased"
+target_volume = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+
+[labels]
+horizon = 50
+smoothing_window = 10
+threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+num_threads = 8
+error_mode = "CollectErrors"
+```
+
+### Programmatic Export
+
+```rust
+use feature_extractor::export::DatasetConfig;
+
+// Load and validate configuration
+let config = DatasetConfig::load_toml("configs/nvda_98feat.toml")?;
+config.validate()?;
+
+// Convert to PipelineConfig
+let pipeline_config = config.to_pipeline_config()?;
+
+// Process files...
+```
+
+### Single Day Export (Legacy)
 
 ```rust
 let exporter = NumpyExporter::new("output/");
 exporter.export_day("2025-02-03", &output)?;
 ```
 
-### Batch Export with Labels
+### Batch Export with Labels (Legacy)
 
 ```rust
 let label_config = LabelConfig::short_term();

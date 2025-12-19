@@ -61,9 +61,18 @@ feature_extractor/
 │   │
 │   ├── validation.rs             # Feature validation (crossed quotes, NaN checks)
 │   ├── export/                   # Export module
-│   │   ├── mod.rs               # NumpyExporter, BatchExporter
-│   │   └── tensor_format.rs     # TensorFormatter, TensorFormat, TensorOutput
+│   │   ├── mod.rs               # NumpyExporter, BatchExporter, DatasetConfig re-exports
+│   │   ├── tensor_format.rs     # TensorFormatter, TensorFormat, TensorOutput
+│   │   └── dataset_config.rs    # DatasetConfig, SymbolConfig, FeatureSetConfig, etc.
 │   └── export_aligned.rs         # Aligned batch export
+│
+├── tools/                        # CLI tools
+│   └── export_dataset.rs        # Configuration-driven export CLI
+│
+├── configs/                      # Sample configuration files
+│   ├── nvda_98feat.toml         # 98-feature NVIDIA export config
+│   ├── nvda_84feat_baseline.toml # 84-feature baseline config
+│   └── template_multi_symbol.toml # Multi-symbol template
 │
 ├── benches/
 │   └── feature_extraction.rs     # Criterion benchmarks
@@ -255,6 +264,9 @@ pub enum Preset {
 - [x] **TimeRegime** (UTC→ET conversion with DST handling)
 - [x] **Safety Gates** (book_valid, mbo_ready)
 - [x] **Comprehensive Signal Validation** (1.7M+ samples, NVIDIA real data)
+- [x] **DatasetConfig Export System** (symbol-agnostic, configuration-driven exports)
+- [x] **Export CLI Tool** (`export_dataset` binary for TOML-driven exports)
+- [x] **Sample Configurations** (NVDA 98-feat, 84-feat baseline, multi-symbol templates)
 
 ### Pending
 - [ ] crates.io publication
