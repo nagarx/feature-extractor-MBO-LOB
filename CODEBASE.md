@@ -1334,72 +1334,138 @@ fn test_full_pipeline() {
 
 ```toml
 [dependencies]
-mbo-lob-reconstructor = { git = "https://github.com/...", branch = "main" }
+mbo-lob-reconstructor = { git = "https://github.com/nagarx/MBO-LOB-reconstructor.git" }
 ```
 
-### Typical Integration Pattern
+### Simplest Integration (Recommended)
+
+The `Pipeline` handles all complexity internally - LOB reconstruction, sampling, feature extraction,
+and sequence building are all managed automatically:
 
 ```rust
-use mbo_lob_reconstructor::{LobReconstructor, DbnLoader, MboMessage};
 use feature_extractor::prelude::*;
 
 fn process_file(path: &str) -> Result<PipelineOutput> {
-    // 1. Create reconstructor (handles system message filtering)
-    let mut reconstructor = LobReconstructor::new(10);
-    
-    // 2. Create pipeline
+    // Build pipeline with desired configuration
     let mut pipeline = PipelineBuilder::new()
-        .with_lob_levels(10)
-        .with_derived_features(true)
-        .with_volume_sampling(1000, 1)
+        .lob_levels(10)
+        .with_derived_features()      // +8 features (48 total)
+        .with_mbo_features()          // +36 features (84 total)
+        .window(100, 10)              // 100 snapshots, stride 10
+        .volume_sampling(1000)        // Sample every 1000 shares
         .build()?;
+
+    // Process entire file - returns complete output
+    let output = pipeline.process(path)?;
+
+    println!("Processed {} messages", output.messages_processed);
+    println!("Generated {} sequences", output.sequences_generated);
     
-    // 3. Load and process messages
-    let loader = DbnLoader::from_file(path)?;
-    for msg in loader.messages()? {
-        // Reconstructor filters system messages automatically
-        let lob_state = reconstructor.process_message(&msg)?;
-        
-        // Process MBO event for aggregation (if MBO features enabled)
-        if pipeline.has_mbo_features() {
-            pipeline.process_mbo_event(MboEvent::from_mbo_message(&msg));
-        }
-        
-        // Extract features and build sequences
-        pipeline.process(&msg, &lob_state);
-    }
-    
-    // 4. Finalize and return
-    Ok(pipeline.finalize())
+    Ok(output)
+}
+```
+
+### With Hot Store (Faster)
+
+For ~30% faster processing, use pre-decompressed files:
+
+```rust
+use feature_extractor::prelude::*;
+use mbo_lob_reconstructor::{DbnSource, HotStoreManager};
+
+fn process_with_hot_store(path: &str, hot_store_dir: &str) -> Result<PipelineOutput> {
+    let mut pipeline = PipelineBuilder::new()
+        .with_derived_features()
+        .volume_sampling(1000)
+        .build()?;
+
+    // Create source that prefers decompressed files
+    let hot_store = HotStoreManager::new(hot_store_dir)?;
+    let source = DbnSource::with_hot_store(path, &hot_store)?;
+
+    // Process through hot store
+    pipeline.process_source(source)
 }
 ```
 
 ### Multi-Day Processing
 
 ```rust
+use feature_extractor::prelude::*;
+
 fn process_multiple_days(paths: &[&str]) -> Result<()> {
-    let mut reconstructor = LobReconstructor::new(10);
-    let mut pipeline = PipelineBuilder::new().build()?;
-    let exporter = BatchExporter::new("output/", Some(LabelConfig::default()));
-    
+    let mut pipeline = PipelineBuilder::new()
+        .with_derived_features()
+        .volume_sampling(1000)
+        .build()?;
+
+    let exporter = BatchExporter::new("output/", Some(LabelConfig::short_term()));
+
     for (i, path) in paths.iter().enumerate() {
-        // IMPORTANT: Full reset between days
-        reconstructor.full_reset();  // Clears state AND stats
-        pipeline.reset();            // Clears all pipeline state
-        
-        let loader = DbnLoader::from_file(path)?;
-        for msg in loader.messages()? {
-            let lob_state = reconstructor.process_message(&msg)?;
-            pipeline.process(&msg, &lob_state);
-        }
-        
-        let output = pipeline.finalize();
+        // IMPORTANT: Reset between days to prevent state leakage
+        pipeline.reset();
+
+        // Process the day
+        let output = pipeline.process(path)?;
+
+        // Export with labels
         exporter.export_day(&format!("day_{}", i), &output)?;
     }
-    
+
     Ok(())
 }
 ```
+
+### Parallel Batch Processing
+
+For multi-day processing on multi-core machines (requires `parallel` feature):
+
+```rust
+use feature_extractor::prelude::*;
+use feature_extractor::batch::{BatchProcessor, BatchConfig, ErrorMode};
+
+fn process_parallel(paths: &[&str]) -> Result<BatchOutput> {
+    // Configure pipeline
+    let pipeline_config = PipelineBuilder::new()
+        .lob_levels(10)
+        .with_derived_features()
+        .volume_sampling(1000)
+        .build_config()?;
+
+    // Configure batch processing
+    let batch_config = BatchConfig::new()
+        .with_threads(8)                          // 8 parallel workers
+        .with_error_mode(ErrorMode::CollectErrors) // Continue on errors
+        .with_hot_store_dir("data/hot_store/");   // ~30% faster
+
+    // Process all files in parallel
+    let processor = BatchProcessor::new(pipeline_config, batch_config);
+    let output = processor.process_files(paths)?;
+
+    println!("Processed {} days in {:?}", output.successful_count(), output.elapsed);
+    println!("Throughput: {:.2} msg/sec", output.throughput_msg_per_sec());
+
+    Ok(output)
+}
+```
+
+### Custom Message Processing
+
+For advanced use cases where you need control over the message stream:
+
+```rust
+use feature_extractor::prelude::*;
+use mbo_lob_reconstructor::MboMessage;
+
+fn process_custom_messages(messages: impl Iterator<Item = MboMessage>) -> Result<PipelineOutput> {
+    let mut pipeline = PipelineBuilder::new()
+        .with_derived_features()
+        .volume_sampling(1000)
+        .build()?;
+
+    // Process custom iterator
+    pipeline.process_messages(messages)
+}
 
 ---
 
@@ -1425,19 +1491,20 @@ config.features.include_derived = true;
 
 ### Streaming vs Batch Sequence Generation
 
-**Streaming** (Recommended):
+**Streaming** (Recommended - used by Pipeline internally):
 ```rust
-// Sequences accumulated during processing
-for msg in messages {
-    pipeline.process(&msg, &lob_state);
-    // Sequences built internally via try_build_sequence()
-}
-let output = pipeline.finalize();  // Contains all sequences
+// Pipeline.process() uses streaming mode internally:
+// - After each feature push, try_build_sequence() is called
+// - Complete sequences are immediately accumulated
+// - No data loss due to buffer eviction
+let output = pipeline.process("data.dbn.zst")?;
+// output.sequences contains all generated sequences
 ```
 
-**Batch** (Limited buffer):
+**Batch** (Direct SequenceBuilder use - limited buffer):
 ```rust
 // WARNING: Only generates sequences from buffer (max 1000 snapshots)
+// If you use SequenceBuilder directly (not via Pipeline):
 let sequences = sequence_builder.generate_all_sequences();
 // May lose data if more than buffer_size snapshots were pushed!
 ```
@@ -1538,17 +1605,26 @@ Sequence builder has fixed buffer; old data evicted:
 ### Import Patterns
 
 ```rust
-// Minimal
-use feature_extractor::{Pipeline, PipelineConfig};
-
-// Full prelude
+// Recommended: Full prelude (includes all common types)
 use feature_extractor::prelude::*;
+
+// Minimal (just for processing)
+use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig};
 
 // Specific components
 use feature_extractor::{
     features::{FeatureConfig, FeatureExtractor},
-    sequence_builder::{SequenceBuilder, SequenceConfig},
+    sequence_builder::{SequenceBuilder, SequenceConfig, FeatureVec},
     preprocessing::{VolumeBasedSampler, Normalizer},
-    labeling::{LabelConfig, TlobLabelGenerator},
+    labeling::{LabelConfig, TlobLabelGenerator, MultiHorizonConfig},
+    export::{NumpyExporter, BatchExporter},
 };
+
+// Parallel processing (requires "parallel" feature)
+#[cfg(feature = "parallel")]
+use feature_extractor::batch::{BatchProcessor, BatchConfig, CancellationToken};
 ```
+
+---
+
+*Last updated: December 2024*
