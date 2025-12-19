@@ -16,7 +16,7 @@
 
 use feature_extractor::batch::{BatchConfig, BatchProcessor};
 use feature_extractor::builder::PipelineBuilder;
-use feature_extractor::features::signals::{self, TimeRegime};
+use feature_extractor::features::signals;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -704,7 +704,7 @@ fn test_08_asymmetry_signals() {
         ("cancel_asymmetry", &cancel_asymmetry),
         ("depth_asymmetry", &depth_asymmetry),
     ] {
-        let (min, max, mean, std_dev, n) = compute_stats(values);
+        let (min, max, mean, std_dev, _n) = compute_stats(values);
 
         println!("{}:", name);
         println!("  Range:  [{:.4}, {:.4}]", min, max);
