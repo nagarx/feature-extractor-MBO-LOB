@@ -14,7 +14,8 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 - **Fluent Builder API**: Simple, readable pipeline configuration
 - **Paper-Aligned Presets**: DeepLOB, TLOB, FI-2010, TransLOB, LiT configurations
 - **Auto-Computed Feature Count**: No manual calculation required
-- **Comprehensive Feature Set**: 200+ features across multiple categories
+- **Comprehensive Feature Set**: Up to 98 features across multiple categories
+- **Trading Signals**: 14 research-backed signals (OFI, microprice, time regime)
 - **Label Generation**: TLOB and DeepLOB labeling methods for supervised learning
 - **Multi-Horizon Labels**: Generate labels for multiple prediction horizons (FI-2010, DeepLOB presets)
 - **TensorFormatter**: Model-specific tensor shapes (DeepLOB, HLOB, Flat, Image formats)
@@ -128,21 +129,85 @@ let pipeline = PipelineBuilder::new()
     .with_derived_features()
     .with_mbo_features()
     .build()?;
+
+// 98 features (40 raw + 8 derived + 36 MBO + 14 signals)
+let pipeline = PipelineBuilder::new()
+    .with_derived_features()
+    .with_mbo_features()
+    .with_trading_signals()
+    .build()?;
 ```
 
 ## Feature Categories
 
+| Category | Count | Indices | Description |
+|----------|-------|---------|-------------|
+| Raw LOB | 40 | 0-39 | Prices and volumes at 10 levels |
+| Derived | 8 | 40-47 | Mid-price, spread, imbalance, etc. |
+| MBO Features | 36 | 48-83 | Order flow dynamics |
+| Trading Signals | 14 | 84-97 | OFI, microprice, time regime, safety gates |
+| **Total** | **98** | 0-97 | Full feature set with all options enabled |
+
+### Additional Feature Sets (standalone usage)
+
 | Category | Count | Description |
 |----------|-------|-------------|
-| Raw LOB | 40 | Prices and volumes at 10 levels |
-| Derived | 8 | Mid-price, spread, imbalance, etc. |
-| MBO Features | 36 | Order flow dynamics |
 | Order Flow | 8 | OFI, queue imbalance, trade flow |
 | Multi-Level OFI | 10 | OFI at each LOB level |
 | FI-2010 Time-Insensitive | 20 | Spread, mid-price, price diffs |
 | FI-2010 Time-Sensitive | 20 | Derivatives, intensity measures |
 | FI-2010 Depth | 40 | Accumulated volumes and diffs |
 | Market Impact | 8 | Slippage, execution quality |
+
+## Trading Signals (14 Features)
+
+Enable research-backed trading signals for direction, confirmation, and safety:
+
+```rust
+let pipeline = PipelineBuilder::new()
+    .lob_levels(10)
+    .with_derived_features()  // Required
+    .with_mbo_features()      // Required
+    .with_trading_signals()   // +14 signals (indices 84-97)
+    .build()?;
+
+assert_eq!(pipeline.config().features.feature_count(), 98);
+```
+
+### Signal Categories
+
+| Category | Signals | Purpose |
+|----------|---------|---------|
+| Safety Gates | `book_valid`, `mbo_ready` | Must pass before trading |
+| Direction | `true_ofi`, `depth_norm_ofi`, `executed_pressure` | Predict price movement |
+| Confirmation | `trade_asymmetry`, `cancel_asymmetry` | Validate direction |
+| Impact | `fragility_score`, `depth_asymmetry` | Market stability |
+| Timing | `signed_mp_delta_bps`, `time_regime` | When to trade |
+| Meta | `dt_seconds`, `invalidity_delta`, `schema_version` | Data quality |
+
+### Research Foundation
+
+| Signal | Research Paper |
+|--------|----------------|
+| `true_ofi` | Cont et al. (2014) "The Price Impact of Order Book Events" |
+| `depth_norm_ofi` | Cont et al. (2014) - OFI normalized by average depth |
+| `signed_mp_delta_bps` | Stoikov (2018) "The Micro-Price" |
+| `time_regime` | Cont et al. §3.3 - Intraday price impact patterns |
+
+### Time Regime
+
+Automatic UTC → Eastern Time conversion with DST handling:
+
+```rust
+use feature_extractor::features::signals::TimeRegime;
+
+// TimeRegime values:
+// 0 = Open (9:30-9:45 ET) - Highest volatility
+// 1 = Early (9:45-10:30 ET) - Settling period
+// 2 = Midday (10:30-15:30 ET) - Most stable
+// 3 = Close (15:30-16:00 ET) - Position squaring
+// 4 = Closed - Outside market hours
+```
 
 ## Sampling Strategies
 
@@ -476,7 +541,8 @@ This library implements features from:
 - FI-2010: Benchmark Dataset for Mid-Price Forecasting
 - LOBench: Representation Learning of Limit Order Book
 - ViT-LOB: Vision Transformer for Stock Price Trend Prediction
-- Price Impact: The Price Impact of Order Book Events (Cont et al.)
+- **Price Impact: The Price Impact of Order Book Events (Cont et al. 2014)** - OFI signals
+- **Micro-Price: A High Frequency Estimator of Future Prices (Stoikov 2018)** - Microprice delta
 - Queue Imbalance: Queue Imbalance as a One-Tick-Ahead Price Predictor
 
 ## License

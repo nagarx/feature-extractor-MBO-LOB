@@ -32,12 +32,13 @@ feature_extractor/
 │   │
 │   ├── features/                 # Feature extraction (raw computation only)
 │   │   ├── mod.rs               # FeatureExtractor, extract_into(), extract_arc()
-│   │   ├── lob_features.rs      # Raw LOB features (prices, volumes)
-│   │   ├── derived_features.rs  # Derived analytics (spread, microprice, etc.)
+│   │   ├── lob_features.rs      # Raw LOB features (prices, volumes) - 40 features
+│   │   ├── derived_features.rs  # Derived analytics (spread, microprice, etc.) - 8 features
+│   │   ├── mbo_features.rs      # MBO-specific features - 36 features
+│   │   ├── signals.rs           # Trading signals (OFI, TimeRegime, etc.) - 14 features
 │   │   ├── order_flow.rs        # OFI, queue imbalance, trade flow
 │   │   ├── fi2010.rs            # FI-2010 handcrafted features (80)
-│   │   ├── market_impact.rs     # Market impact estimation (slippage, VWAP)
-│   │   └── mbo_features.rs      # MBO-specific features
+│   │   └── market_impact.rs     # Market impact estimation (slippage, VWAP)
 │   │
 │   ├── labeling/                 # Label generation for supervised learning
 │   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats
@@ -108,7 +109,8 @@ Feature count is automatically computed:
 | Raw LOB only | 40 | 10 levels × 4 |
 | + Derived | 48 | 40 + 8 |
 | + MBO | 76 | 40 + 36 |
-| + Both | 84 | 40 + 8 + 36 |
+| + Derived + MBO | 84 | 40 + 8 + 36 |
+| + Derived + MBO + Signals | 98 | 40 + 8 + 36 + 14 |
 
 ### 3. Streaming Sequence Generation
 
@@ -138,19 +140,27 @@ use feature_extractor::prelude::*;
 // - TensorFormatter, TensorFormat, TensorOutput, FeatureMapping
 // - All normalizers
 // - All mbo-lob-reconstructor types (LobReconstructor, DbnLoader, etc.)
+// - Trading signals: OfiComputer, OfiSample, TimeRegime, compute_signals
 ```
 
 ## Feature Categories
 
+| Category | Count | Indices | Source | Description |
+|----------|-------|---------|--------|-------------|
+| Raw LOB | 40 | 0-39 | All papers | (P_ask, V_ask, P_bid, V_bid) × 10 levels |
+| Derived | 8 | 40-47 | TLOB, DeepLOB | Microprice, spread, imbalance |
+| MBO Features | 36 | 48-83 | MBO Paper | Order lifecycle patterns |
+| Trading Signals | 14 | 84-97 | Cont et al., Stoikov | OFI, microprice, time regime, safety gates |
+| **Total (full)** | **98** | 0-97 | - | All features enabled |
+
+### Additional Feature Sets (standalone modules)
+
 | Category | Count | Source | Description |
 |----------|-------|--------|-------------|
-| Raw LOB | 40 | All papers | (P_ask, V_ask, P_bid, V_bid) × 10 levels |
-| Derived | 8 | TLOB, DeepLOB | Microprice, spread, imbalance |
 | Order Flow | 8 | Cont et al. | OFI, queue imbalance, trade flow |
 | Multi-Level OFI | 10 | LOB-feature-analysis | OFI at each LOB level |
 | FI-2010 | 80 | FI-2010 benchmark | Handcrafted features |
 | Market Impact | 8 | OrderBook-rs | Slippage, VWAP |
-| MBO Features | 36 | MBO Paper | Order lifecycle patterns |
 
 ## Normalization Strategies
 
@@ -240,8 +250,13 @@ pub enum Preset {
 - [x] **TensorFormatter** (DeepLOB, HLOB, Flat, Image formats)
 - [x] **Pipeline Integration** (format_sequences, generate_multi_horizon_labels)
 - [x] **Hot Store Integration** (decompressed file caching, ~30% faster)
+- [x] **Trading Signals Module** (14 signals: OFI, microprice, time regime)
+- [x] **OfiComputer** (streaming OFI with warmup tracking per Cont et al.)
+- [x] **TimeRegime** (UTC→ET conversion with DST handling)
+- [x] **Safety Gates** (book_valid, mbo_ready)
+- [x] **Comprehensive Signal Validation** (1.7M+ samples, NVIDIA real data)
 
 ### Pending
 - [ ] crates.io publication
-- [ ] Statistical validation tests (OFI vs ΔP correlation)
 - [ ] Additional paper presets (ViT-LOB)
+- [ ] Weighted MLOFI (depth-aware OFI scalar per Xu et al.)

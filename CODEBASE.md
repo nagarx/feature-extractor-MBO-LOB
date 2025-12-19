@@ -73,6 +73,7 @@ src/
 │   ├── lob_features.rs       # Raw LOB features (40 features)
 │   ├── derived_features.rs   # Derived metrics (8 features)
 │   ├── mbo_features.rs       # MBO aggregated (36 features)
+│   ├── signals.rs            # Trading signals (14 features): OfiComputer, TimeRegime
 │   ├── order_flow.rs         # Order flow imbalance
 │   ├── fi2010.rs             # FI-2010 benchmark features
 │   └── market_impact.rs      # Market impact estimation
@@ -228,6 +229,7 @@ The total feature count depends on configuration:
 | LOB + Derived | `levels × 4 + 8` | 48 |
 | LOB + MBO | `levels × 4 + 36` | 76 |
 | LOB + Derived + MBO | `levels × 4 + 8 + 36` | 84 |
+| LOB + Derived + MBO + Signals | `levels × 4 + 8 + 36 + 14` | 98 |
 
 ### FeatureConfig
 
@@ -238,19 +240,27 @@ pub struct FeatureConfig {
     pub include_derived: bool,    // Default: false
     pub include_mbo: bool,        // Default: false
     pub mbo_window_size: usize,   // Default: 1000
+    pub include_signals: bool,    // Default: false (14 trading signals)
 }
 
 impl FeatureConfig {
     pub const DERIVED_FEATURE_COUNT: usize = 8;
     pub const MBO_FEATURE_COUNT: usize = 36;
+    pub const SIGNAL_FEATURE_COUNT: usize = 14;
     
     // AUTHORITATIVE feature count calculation
     pub fn feature_count(&self) -> usize {
         let base = self.lob_levels * 4;
         let derived = if self.include_derived { 8 } else { 0 };
         let mbo = if self.include_mbo { 36 } else { 0 };
-        base + derived + mbo
+        let signals = if self.include_signals { 14 } else { 0 };
+        base + derived + mbo + signals
     }
+    
+    // Builder methods
+    pub fn with_derived(self, enabled: bool) -> Self;
+    pub fn with_mbo(self, enabled: bool) -> Self;
+    pub fn with_signals(self, enabled: bool) -> Self;
 }
 ```
 
@@ -320,6 +330,113 @@ Extracted in `mbo_features.rs` using multi-timescale windows:
 | 30-35 | Core MBO | 6 | Lifecycle metrics |
 
 **MboAggregator Memory**: ~8 MB per symbol
+
+### Trading Signals (14 for indices 84-97)
+
+Computed in `signals.rs` using streaming OFI and base features:
+
+**Implementation**:
+
+| File | Module |
+|------|--------|
+| `src/features/signals.rs` | `OfiComputer`, `compute_signals()`, `TimeRegime` |
+
+**Research Foundation**:
+- OFI: Cont, Kukanov & Stoikov (2014) "The Price Impact of Order Book Events"
+- Microprice: Stoikov (2018) "The Micro-Price"
+- Time regimes: Cont et al. §3.3 (intraday price impact patterns)
+
+**OfiComputer (Streaming OFI)**:
+
+```rust
+pub struct OfiComputer {
+    // State tracking for OFI calculation
+    prev_best_bid: Option<i64>,
+    prev_best_ask: Option<i64>,
+    prev_best_bid_size: u32,
+    prev_best_ask_size: u32,
+    
+    // OFI accumulators (since last sample)
+    ofi_bid: i64,           // Σ bid_size_change
+    ofi_ask: i64,           // Σ ask_size_change
+    depth_sum: u64,         // For average depth
+    depth_count: u64,
+    
+    // Warmup tracking
+    state_changes_since_reset: u64,  // Must reach 100
+    last_sample_timestamp: i64,
+}
+
+impl OfiComputer {
+    /// Update on EVERY LOB state transition (critical for accuracy)
+    pub fn update(&mut self, lob_state: &LobState);
+    
+    /// Sample OFI and reset accumulators (at sampling points)
+    pub fn sample_and_reset(&mut self, timestamp: i64) -> OfiSample;
+    
+    /// Check if warmup complete (≥100 state changes)
+    pub fn is_warm(&self) -> bool;
+    
+    /// Reset on Action::Clear or day boundary
+    pub fn reset_on_clear(&mut self);
+}
+```
+
+**Signal Index Mapping**:
+
+| Index | Signal | Description | Range |
+|-------|--------|-------------|-------|
+| 84 | `true_ofi` | Raw OFI per Cont et al. | unbounded |
+| 85 | `depth_norm_ofi` | OFI / avg_depth | unbounded |
+| 86 | `executed_pressure` | trade_rate_ask - trade_rate_bid | unbounded |
+| 87 | `signed_mp_delta_bps` | Microprice delta in basis points | ~[-100, 100] |
+| 88 | `trade_asymmetry` | Normalized trade imbalance | [-1, 1] |
+| 89 | `cancel_asymmetry` | Normalized cancel imbalance | [-1, 1] |
+| 90 | `fragility_score` | Book fragility indicator | [0, 1] |
+| 91 | `depth_asymmetry` | Volume imbalance | [-1, 1] |
+| 92 | `book_valid` | Valid book flag | {0, 1} |
+| 93 | `time_regime` | Market session | {0, 1, 2, 3, 4} |
+| 94 | `mbo_ready` | Warmup status | {0, 1} |
+| 95 | `dt_seconds` | Time since last sample | [0, ∞) |
+| 96 | `invalidity_delta` | Quote anomalies since last sample | [0, ∞) |
+| 97 | `schema_version` | Always 2.0 | {2.0} |
+
+**TimeRegime Enum**:
+
+```rust
+pub enum TimeRegime {
+    Open   = 0,  // 9:30-9:45 ET - Highest volatility
+    Early  = 1,  // 9:45-10:30 ET - Settling period
+    Midday = 2,  // 10:30-15:30 ET - Most stable
+    Close  = 3,  // 15:30-16:00 ET - Position squaring
+    Closed = 4,  // Outside market hours
+}
+```
+
+**Signal Categories**:
+
+| Category | Signals | Purpose |
+|----------|---------|---------|
+| Safety Gates | `book_valid`, `mbo_ready` | Must pass before trading |
+| Direction | `true_ofi`, `depth_norm_ofi`, `executed_pressure` | Predict price movement |
+| Confirmation | `trade_asymmetry`, `cancel_asymmetry` | Validate direction |
+| Impact | `fragility_score`, `depth_asymmetry` | Market stability |
+| Timing | `signed_mp_delta_bps`, `time_regime` | When to trade |
+| Meta | `dt_seconds`, `invalidity_delta`, `schema_version` | Data quality |
+
+**Usage**:
+
+```rust
+// Enable signals in pipeline
+let pipeline = PipelineBuilder::new()
+    .lob_levels(10)
+    .with_derived_features()  // Required for signals
+    .with_mbo_features()      // Required for signals
+    .with_trading_signals()   // Adds 14 signals (indices 84-97)
+    .build()?;
+
+assert_eq!(pipeline.config().features.feature_count(), 98);
+```
 
 ---
 
@@ -1588,7 +1705,8 @@ Sequence builder has fixed buffer; old data evicted:
 | Default | 40 | 10 levels × 4 |
 | +Derived | 48 | 40 + 8 |
 | +MBO | 76 | 40 + 36 |
-| Full | 84 | 40 + 8 + 36 |
+| +Derived +MBO | 84 | 40 + 8 + 36 |
+| +Derived +MBO +Signals | 98 | 40 + 8 + 36 + 14 |
 
 ### Key Defaults
 
@@ -1614,6 +1732,7 @@ use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig};
 // Specific components
 use feature_extractor::{
     features::{FeatureConfig, FeatureExtractor},
+    features::signals::{OfiComputer, OfiSample, TimeRegime, compute_signals, SIGNAL_COUNT},
     sequence_builder::{SequenceBuilder, SequenceConfig, FeatureVec},
     preprocessing::{VolumeBasedSampler, Normalizer},
     labeling::{LabelConfig, TlobLabelGenerator, MultiHorizonConfig},
@@ -1627,4 +1746,4 @@ use feature_extractor::batch::{BatchProcessor, BatchConfig, CancellationToken};
 
 ---
 
-*Last updated: December 2024*
+*Last updated: December 19, 2025*
