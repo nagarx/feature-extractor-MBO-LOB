@@ -249,6 +249,22 @@ impl PipelineBuilder {
         self
     }
 
+    /// Enable trading signals (14 additional features, indices 84-97).
+    ///
+    /// Trading signals include OFI-based signals, microprice delta, asymmetries,
+    /// and safety gates. See `features::signals` module for details.
+    ///
+    /// **Note**: This automatically enables derived and MBO features as they are required.
+    ///
+    /// After enabling, total features = 40 raw + 8 derived + 36 MBO + 14 signals = **98**.
+    pub fn with_trading_signals(mut self) -> Self {
+        // Signals require both derived and MBO
+        self.features.include_derived = true;
+        self.features.include_mbo = true;
+        self.features.include_signals = true;
+        self
+    }
+
     /// Set the MBO aggregation window size.
     ///
     /// Default: 1000 messages.

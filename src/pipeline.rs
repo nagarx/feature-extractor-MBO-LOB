@@ -340,6 +340,10 @@ pub struct Pipeline {
 
     // Phase 1: Multi-scale windowing (opt-in)
     multiscale_window: Option<MultiScaleWindow>,
+
+    // Trading signals (opt-in via with_trading_signals)
+    // Computes OFI and derived signals per Cont et al. (2014)
+    ofi_computer: Option<crate::features::signals::OfiComputer>,
 }
 
 impl Pipeline {
@@ -406,12 +410,20 @@ impl Pipeline {
             None
         };
 
+        // Initialize OFI computer if trading signals are enabled
+        let ofi_computer = if config.features.include_signals {
+            Some(crate::features::signals::OfiComputer::new())
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             feature_extractor,
             sequence_builder,
             adaptive_threshold,
             multiscale_window,
+            ofi_computer,
         })
     }
 
@@ -527,6 +539,10 @@ impl Pipeline {
         let mut mid_prices = Vec::new();
         let mut accumulated_sequences: Vec<Sequence> = Vec::new();
 
+        // Trading signals: invalidity tracking
+        let mut last_crossed_count: u64 = 0;
+        let mut last_locked_count: u64 = 0;
+
         // Process messages
         for msg in messages {
             messages_processed += 1;
@@ -538,6 +554,14 @@ impl Pipeline {
 
             // ✅ PERF: Update LOB and fill pre-allocated state (zero-allocation)
             lob.process_message_into(&msg, &mut lob_state)?;
+
+            // ========================================================================
+            // Trading Signals: Update OFI on EVERY LOB state transition
+            // Per Cont et al. (2014): "OFI is accumulated on every event"
+            // ========================================================================
+            if let Some(ref mut ofi) = self.ofi_computer {
+                ofi.update(&lob_state);
+            }
 
             // Process MBO event for MBO feature aggregation
             if self.feature_extractor.has_mbo() {
@@ -581,6 +605,46 @@ impl Pipeline {
 
                 self.feature_extractor
                     .extract_into(&lob_state, &mut feature_buffer)?;
+
+                // ========================================================================
+                // Trading Signals: Sample OFI and compute 14 derived signals
+                // ========================================================================
+                if let Some(ref mut ofi) = self.ofi_computer {
+                    use crate::features::signals::{
+                        compute_signals_with_book_valid, is_book_valid_from_lob,
+                    };
+
+                    let timestamp_ns = msg.timestamp.unwrap_or(0);
+
+                    // Sample OFI and reset accumulators
+                    let ofi_sample = ofi.sample_and_reset(timestamp_ns);
+
+                    // Compute invalidity delta (crossed/locked events since last sample)
+                    let stats = lob.stats();
+                    let current_crossed = stats.crossed_quotes;
+                    let current_locked = stats.locked_quotes;
+                    let invalidity_delta =
+                        (current_crossed.saturating_sub(last_crossed_count) as u32)
+                            + (current_locked.saturating_sub(last_locked_count) as u32);
+                    last_crossed_count = current_crossed;
+                    last_locked_count = current_locked;
+
+                    // Check book validity from LOB state
+                    let book_valid = is_book_valid_from_lob(&lob_state);
+
+                    // Compute all 14 signals
+                    let signals = compute_signals_with_book_valid(
+                        &feature_buffer,
+                        &ofi_sample,
+                        timestamp_ns,
+                        invalidity_delta,
+                        book_valid,
+                    );
+
+                    // Append signals to feature buffer
+                    feature_buffer.extend(signals.to_vec());
+                }
+
                 features_extracted += 1;
 
                 let features: FeatureVec = Arc::new(std::mem::take(&mut feature_buffer));
@@ -690,6 +754,11 @@ impl Pipeline {
         if let Some(ref mut ms_window) = self.multiscale_window {
             ms_window.reset();
         }
+
+        // Reset OFI computer (trading signals)
+        if let Some(ref mut ofi) = self.ofi_computer {
+            ofi.reset_on_clear();
+        }
     }
 
     // Helper: Create sampler from config
@@ -737,4 +806,186 @@ impl Pipeline {
 enum SamplerType {
     Volume(VolumeBasedSampler),
     Event(EventBasedSampler),
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builder::PipelineBuilder;
+
+    #[test]
+    fn test_pipeline_without_signals() {
+        // Default pipeline should not have signals
+        let pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .build()
+            .expect("Failed to build pipeline");
+
+        assert!(
+            pipeline.ofi_computer.is_none(),
+            "OfiComputer should be None when signals disabled"
+        );
+        assert_eq!(pipeline.feature_extractor.feature_count(), 40); // Raw LOB only
+    }
+
+    #[test]
+    fn test_pipeline_with_derived_only() {
+        let pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_derived_features()
+            .build()
+            .expect("Failed to build pipeline");
+
+        assert!(
+            pipeline.ofi_computer.is_none(),
+            "OfiComputer should be None when signals disabled"
+        );
+        assert_eq!(pipeline.feature_extractor.feature_count(), 48); // 40 + 8 derived
+    }
+
+    #[test]
+    fn test_pipeline_with_mbo_only() {
+        let pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_mbo_features()
+            .build()
+            .expect("Failed to build pipeline");
+
+        assert!(
+            pipeline.ofi_computer.is_none(),
+            "OfiComputer should be None when signals disabled"
+        );
+        assert_eq!(pipeline.feature_extractor.feature_count(), 76); // 40 + 36 MBO
+    }
+
+    #[test]
+    fn test_pipeline_with_trading_signals() {
+        // This should enable derived + MBO + signals
+        let pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_trading_signals()
+            .build()
+            .expect("Failed to build pipeline");
+
+        assert!(
+            pipeline.ofi_computer.is_some(),
+            "OfiComputer should be initialized when signals enabled"
+        );
+        // 40 raw + 8 derived + 36 MBO + 14 signals = 98
+        assert_eq!(pipeline.feature_extractor.feature_count(), 98);
+    }
+
+    #[test]
+    fn test_feature_count_with_signals() {
+        use crate::features::FeatureConfig;
+
+        let config = FeatureConfig {
+            lob_levels: 10,
+            tick_size: 0.01,
+            include_derived: true,
+            include_mbo: true,
+            mbo_window_size: 1000,
+            include_signals: true,
+        };
+
+        // 40 + 8 + 36 + 14 = 98
+        assert_eq!(config.feature_count(), 98);
+    }
+
+    #[test]
+    fn test_signal_config_validation_requires_derived() {
+        use crate::features::FeatureConfig;
+
+        let config = FeatureConfig {
+            lob_levels: 10,
+            tick_size: 0.01,
+            include_derived: false, // Missing!
+            include_mbo: true,
+            mbo_window_size: 1000,
+            include_signals: true,
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("include_signals requires include_derived"));
+    }
+
+    #[test]
+    fn test_signal_config_validation_requires_mbo() {
+        use crate::features::FeatureConfig;
+
+        let config = FeatureConfig {
+            lob_levels: 10,
+            tick_size: 0.01,
+            include_derived: true,
+            include_mbo: false, // Missing!
+            mbo_window_size: 1000,
+            include_signals: true,
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("include_signals requires include_mbo"));
+    }
+
+    #[test]
+    fn test_pipeline_reset_clears_ofi() {
+        let mut pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_trading_signals()
+            .build()
+            .expect("Failed to build pipeline");
+
+        // Verify OfiComputer exists
+        assert!(pipeline.ofi_computer.is_some());
+
+        // Get initial state change count
+        let initial_changes = pipeline
+            .ofi_computer
+            .as_ref()
+            .unwrap()
+            .state_changes_since_reset();
+        assert_eq!(initial_changes, 0);
+
+        // Manually update OFI to simulate processing
+        if let Some(ref mut ofi) = pipeline.ofi_computer {
+            let mut lob = LobState::new(10);
+            lob.best_bid = Some(100_000_000);
+            lob.best_ask = Some(100_010_000);
+            lob.bid_sizes[0] = 100;
+            lob.ask_sizes[0] = 100;
+            ofi.update(&lob);
+
+            // Change state
+            lob.bid_sizes[0] = 150;
+            ofi.update(&lob);
+        }
+
+        // Verify state changed
+        let after_update = pipeline
+            .ofi_computer
+            .as_ref()
+            .unwrap()
+            .state_changes_since_reset();
+        assert!(after_update > 0, "State changes should be tracked");
+
+        // Reset pipeline
+        pipeline.reset();
+
+        // Verify OFI was reset
+        let after_reset = pipeline
+            .ofi_computer
+            .as_ref()
+            .unwrap()
+            .state_changes_since_reset();
+        assert_eq!(after_reset, 0, "Reset should clear state changes");
+    }
 }

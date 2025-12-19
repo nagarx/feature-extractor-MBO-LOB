@@ -88,6 +88,12 @@ pub struct FeatureConfig {
 
     /// MBO window size (number of messages to track)
     pub mbo_window_size: usize,
+
+    /// Whether to include trading signals (14 additional features, indices 84-97)
+    ///
+    /// Requires `include_derived` and `include_mbo` to be enabled.
+    /// Adds signals: true_ofi, depth_norm_ofi, executed_pressure, etc.
+    pub include_signals: bool,
 }
 
 impl FeatureConfig {
@@ -96,6 +102,9 @@ impl FeatureConfig {
 
     /// Number of MBO features when enabled.
     pub const MBO_FEATURE_COUNT: usize = 36;
+
+    /// Number of trading signal features when enabled (indices 84-97).
+    pub const SIGNAL_FEATURE_COUNT: usize = 14;
 
     /// Create a new feature configuration with default values.
     pub fn new(lob_levels: usize) -> Self {
@@ -135,6 +144,19 @@ impl FeatureConfig {
         self
     }
 
+    /// Enable or disable trading signals (14 additional features).
+    ///
+    /// Trading signals include: true_ofi, depth_norm_ofi, executed_pressure,
+    /// signed_mp_delta_bps, trade_asymmetry, cancel_asymmetry, fragility_score,
+    /// depth_asymmetry, book_valid, time_regime, mbo_ready, dt_seconds,
+    /// invalidity_delta, schema_version.
+    ///
+    /// **Note**: Signals require both `include_derived` and `include_mbo` to be enabled.
+    pub fn with_signals(mut self, enabled: bool) -> Self {
+        self.include_signals = enabled;
+        self
+    }
+
     /// Compute the total number of features based on configuration.
     ///
     /// This is the authoritative source for feature count calculation.
@@ -159,7 +181,12 @@ impl FeatureConfig {
         } else {
             0
         };
-        base + derived + mbo
+        let signals = if self.include_signals {
+            Self::SIGNAL_FEATURE_COUNT
+        } else {
+            0
+        };
+        base + derived + mbo + signals
     }
 
     /// Get the number of raw LOB features.
@@ -182,6 +209,14 @@ impl FeatureConfig {
         if self.include_mbo && self.mbo_window_size == 0 {
             return Err("mbo_window_size must be > 0 when MBO is enabled".to_string());
         }
+        if self.include_signals && !self.include_derived {
+            return Err(
+                "include_signals requires include_derived to be enabled".to_string(),
+            );
+        }
+        if self.include_signals && !self.include_mbo {
+            return Err("include_signals requires include_mbo to be enabled".to_string());
+        }
         Ok(())
     }
 }
@@ -194,6 +229,7 @@ impl Default for FeatureConfig {
             include_derived: false,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         }
     }
 }
@@ -236,10 +272,13 @@ impl FeatureExtractor {
 
     /// Get the total number of features that will be extracted.
     pub fn feature_count(&self) -> usize {
-        let lob_features = self.config.lob_levels * 4; // ask_price, ask_size, bid_price, bid_size
-        let derived_features = if self.config.include_derived { 8 } else { 0 };
-        let mbo_features = if self.config.include_mbo { 36 } else { 0 };
-        lob_features + derived_features + mbo_features
+        self.config.feature_count()
+    }
+
+    /// Check if signals are enabled.
+    #[inline]
+    pub fn has_signals(&self) -> bool {
+        self.config.include_signals
     }
 
     /// Extract features from a LOB state.
@@ -540,6 +579,7 @@ mod tests {
             include_derived: false,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let extractor = FeatureExtractor::with_config(config);
         assert_eq!(extractor.feature_count(), 40); // 40 raw only
@@ -559,6 +599,7 @@ mod tests {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let extractor = FeatureExtractor::with_config(config);
         assert_eq!(extractor.feature_count(), 48); // 40 raw + 8 derived
@@ -572,6 +613,7 @@ mod tests {
             include_derived: true,
             include_mbo: true,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let extractor = FeatureExtractor::with_config(config);
         assert_eq!(extractor.feature_count(), 84); // 40 raw + 8 derived + 36 MBO
@@ -585,6 +627,7 @@ mod tests {
             include_derived: false,
             include_mbo: true,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let extractor = FeatureExtractor::with_config(config);
         assert_eq!(extractor.feature_count(), 76); // 40 raw + 36 MBO
@@ -616,6 +659,7 @@ mod tests {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -637,6 +681,7 @@ mod tests {
             include_derived: true,
             include_mbo: true,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -659,6 +704,7 @@ mod tests {
             include_derived: false,
             include_mbo: true,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -681,6 +727,7 @@ mod tests {
             include_derived: true,
             include_mbo: false, // No MBO - those can have NaN when empty
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -706,6 +753,7 @@ mod tests {
             include_derived: false,
             include_mbo: true,
             mbo_window_size: 100,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -773,6 +821,7 @@ mod tests {
             include_derived: false,
             include_mbo: false, // MBO disabled
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
 
@@ -797,6 +846,7 @@ mod tests {
             include_derived: false,
             include_mbo: true, // MBO enabled
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -831,6 +881,7 @@ mod tests {
             include_derived: false,
             include_mbo: true,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -874,6 +925,7 @@ mod tests {
             include_derived: true,
             include_mbo: false, // MBO disabled
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
 
@@ -894,6 +946,7 @@ mod tests {
             include_derived: false,
             include_mbo: true,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let config_without_mbo = FeatureConfig {
             lob_levels: 10,
@@ -901,6 +954,7 @@ mod tests {
             include_derived: false,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         };
 
         let extractor_with = FeatureExtractor::with_config(config_with_mbo);
@@ -918,6 +972,7 @@ mod tests {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let config_without_derived = FeatureConfig {
             lob_levels: 10,
@@ -925,6 +980,7 @@ mod tests {
             include_derived: false,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         };
 
         let extractor_with = FeatureExtractor::with_config(config_with_derived);
@@ -961,6 +1017,7 @@ mod tests {
             include_derived: true,
             include_mbo: false, // Exclude MBO for determinism test
             mbo_window_size: 1000,
+            include_signals: false,
         };
         let extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -983,6 +1040,7 @@ mod tests {
             include_derived: true,
             include_mbo: true,
             mbo_window_size: 100,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1066,6 +1124,7 @@ mod tests {
             include_derived: true,
             include_mbo: true,
             mbo_window_size: 100,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1115,6 +1174,7 @@ mod tests {
             include_derived: true,
             include_mbo: true,
             mbo_window_size: 100,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1169,6 +1229,7 @@ mod tests {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 100,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1195,6 +1256,7 @@ mod tests {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 100,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1231,6 +1293,7 @@ mod tests {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 100,
+            include_signals: false,
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
