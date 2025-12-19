@@ -28,6 +28,7 @@ fn main() -> Result<()> {
         include_derived: true, // +8 derived features
         include_mbo: true,     // +36 MBO features
         mbo_window_size: 1000, // Medium window size
+        include_signals: false, // No trading signals
     };
 
     // Label generation config

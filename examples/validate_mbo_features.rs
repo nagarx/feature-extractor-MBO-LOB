@@ -38,6 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_derived: true,
         include_mbo: true,
         mbo_window_size: 1000, // 1000 messages ~20s
+        include_signals: false,
     };
 
     println!("⚙️  Configuration:");

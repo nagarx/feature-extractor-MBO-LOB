@@ -362,6 +362,7 @@ fn test_derived_features_accuracy() {
         include_derived: true,
         include_mbo: false,
         mbo_window_size: 1000,
+        include_signals: false,
     };
     let extractor = FeatureExtractor::with_config(config);
 

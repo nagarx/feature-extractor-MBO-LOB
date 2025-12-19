@@ -2,6 +2,10 @@
 //!
 //! This test validates the complete signal layer (14 signals, indices 84-97)
 //! using real market data through the batch processing pipeline.
+//!
+//! Run with: cargo test --features "parallel,databento" --test signal_layer_integration --release -- --ignored
+
+#![cfg(feature = "parallel")]
 
 use feature_extractor::batch::{BatchConfig, BatchProcessor};
 use feature_extractor::builder::PipelineBuilder;

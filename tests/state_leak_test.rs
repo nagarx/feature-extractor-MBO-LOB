@@ -70,6 +70,7 @@ fn test_feature_extractor_reset_clears_mbo_state() {
         include_derived: false,
         include_mbo: true,
         mbo_window_size: 100,
+        include_signals: false,
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -114,6 +115,7 @@ fn test_feature_extractor_multiple_days_no_leak() {
         include_derived: true,
         include_mbo: true,
         mbo_window_size: 100,
+        include_signals: false,
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -279,6 +281,7 @@ fn test_pipeline_reset_clears_all_state() {
             include_derived: false,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         },
         sequence: SequenceConfig::new(10, 1)
             .with_feature_count(40)
@@ -317,6 +320,7 @@ fn test_no_unbounded_growth_across_days() {
         include_derived: false,
         include_mbo: true,
         mbo_window_size: 100, // Small window
+        include_signals: false,
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -372,6 +376,7 @@ fn test_reset_on_empty_state() {
         include_derived: true,
         include_mbo: true,
         mbo_window_size: 1000,
+        include_signals: false,
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -393,6 +398,7 @@ fn test_reset_mid_day() {
         include_derived: false,
         include_mbo: true,
         mbo_window_size: 100,
+        include_signals: false,
     };
 
     let mut extractor = FeatureExtractor::with_config(config);

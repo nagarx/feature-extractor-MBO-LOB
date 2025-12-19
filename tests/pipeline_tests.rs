@@ -194,6 +194,7 @@ fn test_pipeline_config_serialization_round_trip() {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 1000,
+            include_signals: false,
         },
         sequence: SequenceConfig {
             window_size: 200,
@@ -386,6 +387,7 @@ fn test_pipeline_feature_count_consistency() {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 0,
+            include_signals: false,
         },
         sequence: SequenceConfig {
             window_size: 100,

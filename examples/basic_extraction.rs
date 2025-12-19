@@ -56,6 +56,7 @@ fn main() {
             include_derived: true,
             include_mbo: true, // Enable MBO features
             mbo_window_size: 1000,
+            include_signals: false,
         })
         .with_sequence(
             SequenceConfig::new(100, 1)
