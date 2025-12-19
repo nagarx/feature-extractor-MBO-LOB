@@ -161,7 +161,11 @@ let pipeline = PipelineBuilder::new()
 
 ## Trading Signals (14 Features)
 
-Enable research-backed trading signals for direction, confirmation, and safety:
+Enable research-backed trading signals as **input features for ML models**:
+
+> **Design Philosophy**: These signals are **model-agnostic features**, not a trading system.
+> They provide high-frequency market microstructure information that models can learn to use.
+> Entry/exit thresholds are NOT hard-coded—let your model learn what works.
 
 ```rust
 let pipeline = PipelineBuilder::new()
@@ -174,16 +178,25 @@ let pipeline = PipelineBuilder::new()
 assert_eq!(pipeline.config().features.feature_count(), 98);
 ```
 
+### Use Cases
+
+| Use Case | Recommended Approach |
+|----------|----------------------|
+| **ML Training** | Use all 98 features; let model learn signal importance |
+| **Experimentation** | Compare different feature subsets |
+| **Data Quality** | Use `book_valid`, `mbo_ready` as input features for the model |
+| **Rule-Based** | Optional—see plan docs for threshold examples (may overfit) |
+
 ### Signal Categories
 
 | Category | Signals | Purpose |
 |----------|---------|---------|
-| Safety Gates | `book_valid`, `mbo_ready` | Must pass before trading |
-| Direction | `true_ofi`, `depth_norm_ofi`, `executed_pressure` | Predict price movement |
-| Confirmation | `trade_asymmetry`, `cancel_asymmetry` | Validate direction |
+| Safety/Quality | `book_valid`, `mbo_ready`, `invalidity_delta` | Data quality indicators |
+| Direction | `true_ofi`, `depth_norm_ofi`, `executed_pressure` | Order flow imbalance |
+| Conviction | `trade_asymmetry`, `cancel_asymmetry` | Flow confirmation |
 | Impact | `fragility_score`, `depth_asymmetry` | Market stability |
-| Timing | `signed_mp_delta_bps`, `time_regime` | When to trade |
-| Meta | `dt_seconds`, `invalidity_delta`, `schema_version` | Data quality |
+| Timing | `signed_mp_delta_bps`, `time_regime` | Microstructure context |
+| Meta | `dt_seconds`, `schema_version` | Sample metadata |
 
 ### Research Foundation
 
