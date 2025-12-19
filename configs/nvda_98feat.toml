@@ -23,17 +23,19 @@ tick_size = 0.01
 
 [data]
 # MODIFY THESE PATHS for your environment
-input_dir = "data/NVDA_2025-02-01_to_2025-09-30"
-output_dir = "data/exports/nvda_98feat"
+# Using relative paths from feature-extractor-MBO-LOB directory
+input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "../data/exports/nvda_98feat"
 
 # Optional: Hot store for decompressed files (~30% faster processing)
-# hot_store_dir = "data/hot_store/NVDA"
+hot_store_dir = "../data/hot_store"
 
 [dates]
 # Date range to process (format: YYYY-MM-DD)
 # Weekends are automatically excluded
+# Note: Hot store contains Feb 03-25, processing will be ~30% faster for those dates
 start_date = "2025-02-03"
-end_date = "2025-09-29"
+end_date = "2025-02-25"
 
 # Optional: Exclude specific dates (holidays, etc.)
 # exclude_dates = ["2025-07-04", "2025-12-25"]
