@@ -1,0 +1,89 @@
+# NVDA 98-Feature Dataset Configuration
+# 
+# This is a sample configuration for exporting NVDA datasets with the full
+# 98-feature set (LOB + Derived + MBO + Signals).
+#
+# Usage:
+#   cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_98feat.toml
+#
+# Modify paths and dates before running.
+
+[experiment]
+name = "NVDA 98-Feature Dataset"
+description = "Full feature set for ML experimentation: LOB + Derived + MBO + Signals"
+version = "1.0.0"
+tags = ["nvda", "98-features", "full", "signals"]
+
+[symbol]
+# Symbol configuration - modify for other instruments
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+# MODIFY THESE PATHS for your environment
+input_dir = "data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "data/exports/nvda_98feat"
+
+# Optional: Hot store for decompressed files (~30% faster processing)
+# hot_store_dir = "data/hot_store/NVDA"
+
+[dates]
+# Date range to process (format: YYYY-MM-DD)
+# Weekends are automatically excluded
+start_date = "2025-02-03"
+end_date = "2025-09-29"
+
+# Optional: Exclude specific dates (holidays, etc.)
+# exclude_dates = ["2025-07-04", "2025-12-25"]
+
+# Alternative: Explicit list of dates (overrides start/end)
+# explicit_dates = ["2025-02-03", "2025-02-04", "2025-02-05"]
+
+[features]
+# LOB configuration
+lob_levels = 10  # 10 levels × 4 = 40 base features
+
+# Feature toggles - all enabled for 98 features
+include_derived = true   # +8 features (mid-price, spread, imbalance, etc.)
+include_mbo = true       # +36 MBO microstructure features
+include_signals = true   # +14 trading signals (OFI, microprice, etc.)
+
+# MBO window size (for rolling statistics)
+mbo_window_size = 1000
+
+[sampling]
+# Sampling strategy: "event_based" or "volume_based"
+strategy = "event_based"
+
+# For event-based sampling
+event_count = 1000
+
+# For volume-based sampling (if strategy = "volume_based")
+# volume_threshold = 1000
+
+[sequence]
+# Sequence building configuration
+window_size = 100        # Snapshots per sequence (TLOB standard)
+stride = 10              # Overlap: every 10th snapshot starts a new sequence
+max_buffer_size = 50000  # Memory limit
+
+[labels]
+# TLOB-style labeling configuration
+horizon = 50             # Look-ahead in samples
+smoothing_window = 10    # Noise reduction
+threshold = 0.0008       # 8 bps movement threshold for up/down
+
+[split]
+# Train/validation/test split (must sum to 1.0)
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+# Parallel processing configuration
+# threads = 12           # Defaults to (num_cpus - 2)
+error_mode = "collect_errors"  # "fail_fast" or "collect_errors"
+verbose = false
+

@@ -5,14 +5,43 @@
 //! # Modules
 //!
 //! - **tensor_format**: Model-specific tensor reshaping (DeepLOB, HLOB, etc.)
+//! - **dataset_config**: Configuration-driven, symbol-agnostic export system
 //! - Core exports: NumPy (.npy) and JSON metadata
 //!
 //! # Supported Formats
 //!
 //! - NumPy (.npy) - For Python/PyTorch integration
 //! - JSON - For metadata and configuration
+//! - TOML - For configuration files
 //!
-//! # Example
+//! # Design Philosophy
+//!
+//! - **Model-agnostic**: Exports features, not trading decisions
+//! - **Symbol-agnostic**: Works for any instrument (NVDA, AAPL, etc.)
+//! - **Configuration-driven**: All parameters via config, no hard-coding
+//! - **Flexible feature sets**: Support 40, 48, 76, 84, or 98 features
+//!
+//! # Example: Configuration-Driven Export
+//!
+//! ```ignore
+//! use feature_extractor::export::{DatasetConfig, SymbolConfig, DataPathConfig, DateRangeConfig};
+//!
+//! // Create configuration
+//! let config = DatasetConfig::new(
+//!     SymbolConfig::nasdaq("NVDA"),
+//!     DataPathConfig::new("data/NVDA", "data/exports"),
+//!     DateRangeConfig::from_range("2025-02-03", "2025-09-29"),
+//! )
+//! .with_full_features(); // Enable 98-feature mode
+//!
+//! // Or load from TOML
+//! let config = DatasetConfig::load_toml("configs/nvda.toml")?;
+//!
+//! // Get pipeline config
+//! let pipeline_config = config.to_pipeline_config();
+//! ```
+//!
+//! # Example: Direct Export (Legacy)
 //!
 //! ```ignore
 //! use feature_extractor::export::{NumpyExporter, BatchExporter};
@@ -31,7 +60,17 @@
 //! let tensor = formatter.format_sequence(&features)?;
 //! ```
 
+pub mod dataset_config;
 pub mod tensor_format;
+
+// Re-export main configuration types for ergonomic API
+// Note: SplitConfig not re-exported to avoid conflict with existing SplitConfig (day counts)
+// Use dataset_config::SplitConfig for ratio-based splits
+pub use dataset_config::{
+    DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo, ExportLabelConfig,
+    ExportSamplingConfig, ExportSequenceConfig, FeatureSetConfig, ProcessingConfig,
+    SamplingStrategyConfig, SymbolConfig,
+};
 
 use crate::labeling::{LabelConfig, TlobLabelGenerator, TrendLabel};
 use crate::pipeline::PipelineOutput;

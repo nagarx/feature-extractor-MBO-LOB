@@ -48,6 +48,13 @@ env_logger = "0.11"
 # Parallel processing (optional)
 rayon = { version = "1.10", optional = true }
 
+# Utilities for export tools
+num_cpus = "1.16"
+md5 = "0.7"
+
+# Timezone support
+chrono-tz = "0.10"
+
 [dev-dependencies]
 tempfile = "3.8"
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -113,12 +120,19 @@ required-features = ["parallel"]
 # Tools - Data processing scripts
 # ============================================================================
 
+# New modular, symbol-agnostic export tool
 [[bin]]
 name = "export_dataset"
+path = "tools/export_dataset.rs"
+required-features = ["parallel"]
+
+# Legacy NVIDIA-specific tools (for reference)
+[[bin]]
+name = "export_nvidia_legacy"
 path = "tools/export_nvidia_dataset.rs"
 
 [[bin]]
-name = "export_aligned"
+name = "export_aligned_legacy"
 path = "tools/export_nvidia_dataset_aligned.rs"
 
 # ============================================================================
