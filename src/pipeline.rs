@@ -418,8 +418,8 @@ impl Pipeline {
     /// Process a single DBN file through the complete pipeline.
     ///
     /// This is a convenience method that loads a DBN file and processes it
-    /// through the pipeline. For more flexibility, use [`process_source()`] or
-    /// [`process_messages()`].
+    /// through the pipeline. For more flexibility, use [`Self::process_source()`] or
+    /// [`Self::process_messages()`].
     ///
     /// # Feature Extraction
     ///
@@ -444,9 +444,9 @@ impl Pipeline {
     ///
     /// # Implementation Note
     ///
-    /// This method delegates to [`process_messages()`], ensuring a single code
+    /// This method delegates to [`Self::process_messages()`], ensuring a single code
     /// path for all processing methods. For hot store support, use
-    /// [`process_source()`] with [`DbnSource::with_hot_store()`].
+    /// [`Self::process_source()`] with `DbnSource::with_hot_store()`.
     pub fn process<P: AsRef<Path>>(&mut self, input_path: P) -> Result<PipelineOutput> {
         let loader = DbnLoader::new(input_path)?;
         self.process_messages(loader.iter_messages()?)

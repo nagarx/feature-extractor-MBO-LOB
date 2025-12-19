@@ -583,7 +583,7 @@ impl TensorFormatter {
     ///
     /// # Arguments
     ///
-    /// * `features` - Sequence of feature vectors: [T][F]
+    /// * `features` - Sequence of feature vectors: \[T\]\[F\]
     ///
     /// # Returns
     ///
@@ -635,7 +635,7 @@ impl TensorFormatter {
     ///
     /// # Arguments
     ///
-    /// * `sequences` - Batch of sequences: [N][T][F]
+    /// * `sequences` - Batch of sequences: \[N\]\[T\]\[F\]
     ///
     /// # Returns
     ///
