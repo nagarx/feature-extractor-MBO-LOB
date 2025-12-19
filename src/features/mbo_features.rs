@@ -752,10 +752,89 @@ impl MboAggregator {
         market_orders as f64 / (total_orders as f64 + 1e-8)
     }
 
+    /// Compute volatility (std dev) of order flow across sub-windows.
+    ///
+    /// Divides the medium window into N_SUBWINDOWS sub-windows, computes
+    /// net_order_flow for each, and returns the standard deviation.
+    ///
+    /// # Returns
+    /// - Standard deviation of net_order_flow across sub-windows
+    /// - Higher values indicate choppy, uncertain flow
+    /// - Lower values indicate stable, directional flow
+    /// - 0.0 if insufficient data for sub-windows
+    ///
+    /// # Implementation
+    /// Uses 10 sub-windows. With medium_window of 1000 events,
+    /// each sub-window contains 100 events.
     fn order_flow_volatility(&self) -> f64 {
-        // Compute std dev of net_order_flow over sub-windows
-        // (Placeholder: implement sub-window logic)
-        0.0
+        const N_SUBWINDOWS: usize = 10;
+        const MIN_EVENTS_PER_SUBWINDOW: usize = 5;
+
+        let w = &self.medium_window;
+        let n_events = w.events.len();
+
+        // Need enough events for meaningful sub-windows
+        if n_events < N_SUBWINDOWS * MIN_EVENTS_PER_SUBWINDOW {
+            return 0.0;
+        }
+
+        let subwindow_size = n_events / N_SUBWINDOWS;
+
+        // Compute net_order_flow for each sub-window
+        let mut subwindow_flows: Vec<f64> = Vec::with_capacity(N_SUBWINDOWS);
+
+        for i in 0..N_SUBWINDOWS {
+            let start = i * subwindow_size;
+            let end = if i == N_SUBWINDOWS - 1 {
+                n_events // Last subwindow gets remainder
+            } else {
+                (i + 1) * subwindow_size
+            };
+
+            // Count adds by side in this sub-window
+            let mut add_bid: usize = 0;
+            let mut add_ask: usize = 0;
+
+            for j in start..end {
+                if let Some(event) = w.events.get(j) {
+                    if matches!(event.action, Action::Add) {
+                        match event.side {
+                            Side::Bid => add_bid += 1,
+                            Side::Ask => add_ask += 1,
+                            Side::None => {}
+                        }
+                    }
+                }
+            }
+
+            // Net flow: (bid - ask) / (bid + ask + eps)
+            let total = (add_bid + add_ask) as f64;
+            let flow = if total > 0.0 {
+                (add_bid as f64 - add_ask as f64) / total
+            } else {
+                0.0
+            };
+
+            subwindow_flows.push(flow);
+        }
+
+        // Compute standard deviation of sub-window flows
+        if subwindow_flows.is_empty() {
+            return 0.0;
+        }
+
+        let n = subwindow_flows.len() as f64;
+        let mean: f64 = subwindow_flows.iter().sum::<f64>() / n;
+        let variance: f64 = subwindow_flows
+            .iter()
+            .map(|&x| {
+                let diff = x - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / n;
+
+        variance.sqrt()
     }
 
     fn flow_regime_indicator(&self) -> f64 {
@@ -788,15 +867,92 @@ impl MboAggregator {
         large_count as f64 / w.len().max(1) as f64
     }
 
-    fn size_skewness(&self) -> f64 {
-        // Placeholder: implement skewness calculation
-        0.0
+    /// Compute skewness of order size distribution.
+    ///
+    /// Skewness = E[(X - μ)³] / σ³ = (1/n) Σ((x_i - μ)/σ)³
+    ///
+    /// # Returns
+    /// - Positive: Right-skewed (many small orders, few large ones - institutional pattern)
+    /// - Negative: Left-skewed (many large orders, few small ones)
+    /// - Zero: Symmetric distribution
+    /// - Returns 0.0 if insufficient data (< 3 samples) or zero variance
+    ///
+    /// # Interpretation
+    /// High positive skewness (> 1.0) often indicates institutional activity,
+    /// as large orders tend to be split into many smaller child orders with
+    /// occasional larger fills.
+    fn size_skewness(&mut self) -> f64 {
+        let w = &mut self.medium_window;
+
+        // Need at least 3 samples for meaningful skewness
+        if w.events.len() < 3 {
+            return 0.0;
+        }
+
+        // Get mean and std (triggers lazy recomputation if dirty)
+        let mean = w.size_mean();
+        let std = w.size_std();
+
+        // Guard against division by zero
+        if std < 1e-10 {
+            return 0.0;
+        }
+
+        // Compute third moment: (1/n) Σ((x_i - μ)/σ)³
+        let n = w.events.len() as f64;
+        let skew: f64 = w
+            .events
+            .iter()
+            .map(|e| {
+                let z = (e.size as f64 - mean) / std;
+                z * z * z // z³
+            })
+            .sum::<f64>()
+            / n;
+
+        skew
     }
 
+    /// Compute Herfindahl-Hirschman Index of order size distribution.
+    ///
+    /// HHI = Σ(share_i)² where share_i = size_i / total_size
+    ///
+    /// # Returns
+    /// - Range: [1/N, 1.0] where N = number of orders in window
+    /// - 1/N = perfectly even sizes (retail-like)
+    /// - 1.0 = single order has all volume (block trade)
+    /// - 0.0 if no orders
+    ///
+    /// # Interpretation
+    /// - Low HHI (< 0.1): Volume spread across many similar-sized orders
+    /// - High HHI (> 0.3): Volume concentrated in few large orders (institutional)
     fn size_concentration(&self) -> f64 {
-        // Herfindahl index of size distribution
-        // (Placeholder: implement)
-        0.0
+        let w = &self.medium_window;
+
+        if w.events.is_empty() {
+            return 0.0;
+        }
+
+        // Compute total size
+        let total_size: u64 = w.events.iter().map(|e| e.size as u64).sum();
+
+        if total_size == 0 {
+            return 0.0;
+        }
+
+        let total_f = total_size as f64;
+
+        // Compute HHI: sum of squared shares
+        let hhi: f64 = w
+            .events
+            .iter()
+            .map(|e| {
+                let share = e.size as f64 / total_f;
+                share * share
+            })
+            .sum();
+
+        hhi
     }
 
     fn average_queue_position(&self, _lob: &LobState) -> f64 {
@@ -816,19 +972,143 @@ impl MboAggregator {
         active_orders as f64 / active_levels.max(1) as f64
     }
 
-    fn level_concentration(&self, _lob: &LobState) -> f64 {
-        // Placeholder: compute volume concentration in top N levels
-        0.0
+    /// Compute volume concentration across LOB levels using Herfindahl-Hirschman Index.
+    ///
+    /// HHI = Σ(share_i)² where share_i = volume_i / total_volume
+    ///
+    /// # Returns
+    /// - Range: [1/N, 1.0] where N = number of active levels
+    /// - 1/N = perfectly even distribution (liquid)
+    /// - 1.0 = all volume concentrated at one level (thin)
+    /// - 0.0 if no volume present
+    ///
+    /// # Interpretation
+    /// - Low HHI (< 0.25): Well-distributed liquidity, easier to execute large orders
+    /// - High HHI (> 0.5): Concentrated liquidity, higher price impact risk
+    fn level_concentration(&self, lob: &LobState) -> f64 {
+        // Compute total volume across both sides
+        let total_bid: u64 = lob.bid_sizes[..lob.levels]
+            .iter()
+            .map(|&s| s as u64)
+            .sum();
+        let total_ask: u64 = lob.ask_sizes[..lob.levels]
+            .iter()
+            .map(|&s| s as u64)
+            .sum();
+        let total = total_bid + total_ask;
+
+        if total == 0 {
+            return 0.0;
+        }
+
+        let total_f = total as f64;
+
+        // Compute HHI: sum of squared shares
+        let mut hhi: f64 = 0.0;
+
+        // Add bid side contributions
+        for &size in &lob.bid_sizes[..lob.levels] {
+            if size > 0 {
+                let share = size as f64 / total_f;
+                hhi += share * share;
+            }
+        }
+
+        // Add ask side contributions
+        for &size in &lob.ask_sizes[..lob.levels] {
+            if size > 0 {
+                let share = size as f64 / total_f;
+                hhi += share * share;
+            }
+        }
+
+        hhi
     }
 
-    fn depth_ticks_bid(&self, _lob: &LobState) -> f64 {
-        // Placeholder: weighted average depth on bid side
-        0.0
+    /// Compute volume-weighted average depth on bid side in ticks.
+    ///
+    /// Depth_ticks = Σ(vol_i × distance_i) / Σ(vol_i)
+    /// where distance_i = (best_bid - bid_price[i]) / tick_size
+    ///
+    /// # Returns
+    /// - Average depth in ticks (0.0 if no volume)
+    /// - Higher values indicate liquidity is further from best price
+    ///
+    /// # Note
+    /// Uses standard US equity tick size of $0.01 (10_000_000 nanodollars).
+    /// For instruments with different tick sizes, this should be adjusted.
+    fn depth_ticks_bid(&self, lob: &LobState) -> f64 {
+        const TICK_SIZE_NANODOLLARS: i64 = 10_000_000; // $0.01
+
+        let best_bid = match lob.best_bid {
+            Some(p) if p > 0 => p,
+            _ => return 0.0,
+        };
+
+        let mut weighted_depth: f64 = 0.0;
+        let mut total_volume: u64 = 0;
+
+        for i in 0..lob.levels {
+            let price = lob.bid_prices[i];
+            let size = lob.bid_sizes[i] as u64;
+
+            if price > 0 && size > 0 {
+                // Distance in ticks: (best_bid - this_price) / tick_size
+                // Bid prices decrease from best (index 0) to deeper levels
+                let distance_ticks = (best_bid - price) / TICK_SIZE_NANODOLLARS;
+                weighted_depth += size as f64 * distance_ticks as f64;
+                total_volume += size;
+            }
+        }
+
+        if total_volume > 0 {
+            weighted_depth / total_volume as f64
+        } else {
+            0.0
+        }
     }
 
-    fn depth_ticks_ask(&self, _lob: &LobState) -> f64 {
-        // Placeholder: weighted average depth on ask side
-        0.0
+    /// Compute volume-weighted average depth on ask side in ticks.
+    ///
+    /// Depth_ticks = Σ(vol_i × distance_i) / Σ(vol_i)
+    /// where distance_i = (ask_price[i] - best_ask) / tick_size
+    ///
+    /// # Returns
+    /// - Average depth in ticks (0.0 if no volume)
+    /// - Higher values indicate liquidity is further from best price
+    ///
+    /// # Note
+    /// Uses standard US equity tick size of $0.01 (10_000_000 nanodollars).
+    /// For instruments with different tick sizes, this should be adjusted.
+    fn depth_ticks_ask(&self, lob: &LobState) -> f64 {
+        const TICK_SIZE_NANODOLLARS: i64 = 10_000_000; // $0.01
+
+        let best_ask = match lob.best_ask {
+            Some(p) if p > 0 => p,
+            _ => return 0.0,
+        };
+
+        let mut weighted_depth: f64 = 0.0;
+        let mut total_volume: u64 = 0;
+
+        for i in 0..lob.levels {
+            let price = lob.ask_prices[i];
+            let size = lob.ask_sizes[i] as u64;
+
+            if price > 0 && size > 0 {
+                // Distance in ticks: (this_price - best_ask) / tick_size
+                // Ask prices increase from best (index 0) to deeper levels
+                let distance_ticks = (price - best_ask) / TICK_SIZE_NANODOLLARS;
+                weighted_depth += size as f64 * distance_ticks as f64;
+                total_volume += size;
+            }
+        }
+
+        if total_volume > 0 {
+            weighted_depth / total_volume as f64
+        } else {
+            0.0
+        }
     }
 
     fn large_order_frequency(&mut self) -> f64 {
@@ -1008,5 +1288,486 @@ mod tests {
         let aggregator = MboAggregator::new();
         assert_eq!(aggregator.message_count, 0);
         assert!(aggregator.order_tracker.is_empty());
+    }
+
+    // =========================================================================
+    // level_concentration tests
+    // =========================================================================
+
+    #[test]
+    fn test_level_concentration_empty_lob() {
+        let aggregator = MboAggregator::new();
+        let lob = LobState::new(10);
+
+        let result = aggregator.level_concentration(&lob);
+        assert_eq!(result, 0.0, "Empty LOB should return 0.0");
+    }
+
+    #[test]
+    fn test_level_concentration_single_level() {
+        // All volume at one level = HHI of 1.0
+        let aggregator = MboAggregator::new();
+        let mut lob = LobState::new(10);
+        lob.bid_sizes[0] = 1000; // All volume here
+
+        let result = aggregator.level_concentration(&lob);
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "Single level concentration should be 1.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_level_concentration_perfectly_even() {
+        // 4 levels with equal volume = HHI of 1/4 = 0.25
+        // Each level has share = 0.25, HHI = 4 × (0.25)² = 4 × 0.0625 = 0.25
+        let aggregator = MboAggregator::new();
+        let mut lob = LobState::new(10);
+        lob.bid_sizes[0] = 100;
+        lob.bid_sizes[1] = 100;
+        lob.ask_sizes[0] = 100;
+        lob.ask_sizes[1] = 100;
+
+        let result = aggregator.level_concentration(&lob);
+        assert!(
+            (result - 0.25).abs() < 1e-10,
+            "4 equal levels should have HHI of 0.25, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_level_concentration_asymmetric() {
+        // 2 levels: one with 90% volume, one with 10%
+        // HHI = (0.9)² + (0.1)² = 0.81 + 0.01 = 0.82
+        let aggregator = MboAggregator::new();
+        let mut lob = LobState::new(10);
+        lob.bid_sizes[0] = 900; // 90%
+        lob.bid_sizes[1] = 100; // 10%
+
+        let result = aggregator.level_concentration(&lob);
+        assert!(
+            (result - 0.82).abs() < 1e-10,
+            "90/10 split should have HHI of 0.82, got {}",
+            result
+        );
+    }
+
+    // =========================================================================
+    // depth_ticks tests
+    // =========================================================================
+
+    #[test]
+    fn test_depth_ticks_bid_no_best() {
+        let aggregator = MboAggregator::new();
+        let lob = LobState::new(10);
+
+        let result = aggregator.depth_ticks_bid(&lob);
+        assert_eq!(result, 0.0, "No best bid should return 0.0");
+    }
+
+    #[test]
+    fn test_depth_ticks_bid_single_level() {
+        // Single level at best price = 0 ticks away
+        let aggregator = MboAggregator::new();
+        let mut lob = LobState::new(10);
+        lob.best_bid = Some(100_000_000_000); // $100.00
+        lob.bid_prices[0] = 100_000_000_000;
+        lob.bid_sizes[0] = 100;
+
+        let result = aggregator.depth_ticks_bid(&lob);
+        assert!(
+            result.abs() < 1e-10,
+            "Single level at best should be 0 ticks, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_depth_ticks_bid_multiple_levels() {
+        // Level 0: $100.00 (best), 100 shares, 0 ticks away
+        // Level 1: $99.99 (1 tick away = $0.01), 100 shares
+        // Weighted avg = (100×0 + 100×1) / 200 = 0.5 ticks
+        let aggregator = MboAggregator::new();
+        let mut lob = LobState::new(10);
+        lob.best_bid = Some(100_000_000_000); // $100.00
+        lob.bid_prices[0] = 100_000_000_000; // $100.00
+        lob.bid_prices[1] = 99_990_000_000; // $99.99
+        lob.bid_sizes[0] = 100;
+        lob.bid_sizes[1] = 100;
+
+        let result = aggregator.depth_ticks_bid(&lob);
+        assert!(
+            (result - 0.5).abs() < 1e-10,
+            "Should be 0.5 ticks weighted avg, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_depth_ticks_ask_multiple_levels() {
+        // Level 0: $100.00 (best), 200 shares, 0 ticks away
+        // Level 1: $100.02 (2 ticks away = $0.02), 100 shares
+        // Weighted avg = (200×0 + 100×2) / 300 = 200/300 = 0.6667 ticks
+        let aggregator = MboAggregator::new();
+        let mut lob = LobState::new(10);
+        lob.best_ask = Some(100_000_000_000); // $100.00
+        lob.ask_prices[0] = 100_000_000_000; // $100.00
+        lob.ask_prices[1] = 100_020_000_000; // $100.02
+        lob.ask_sizes[0] = 200;
+        lob.ask_sizes[1] = 100;
+
+        let result = aggregator.depth_ticks_ask(&lob);
+        let expected = 200.0 / 300.0; // 0.6667
+        assert!(
+            (result - expected).abs() < 1e-6,
+            "Should be ~0.6667 ticks, got {}",
+            result
+        );
+    }
+
+    // =========================================================================
+    // size_skewness tests
+    // =========================================================================
+
+    #[test]
+    fn test_size_skewness_insufficient_data() {
+        let mut aggregator = MboAggregator::new();
+
+        // Only 2 events - need at least 3
+        for i in 0..2 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.size_skewness();
+        assert_eq!(result, 0.0, "Insufficient data should return 0.0");
+    }
+
+    #[test]
+    fn test_size_skewness_symmetric() {
+        // Symmetric distribution: equal amounts above and below mean
+        // Sizes: 80, 100, 100, 100, 120 → mean = 100
+        // Z-scores: -2σ, 0, 0, 0, +2σ should give skewness near 0
+        let mut aggregator = MboAggregator::new();
+
+        // Create symmetric distribution
+        let sizes = [80u32, 100, 100, 100, 120];
+        for (i, &size) in sizes.iter().enumerate() {
+            let event = MboEvent::new(
+                i as u64 * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                size,
+                i as u64,
+            );
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.size_skewness();
+        assert!(
+            result.abs() < 0.1,
+            "Symmetric distribution should have near-zero skewness, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_size_skewness_right_skewed() {
+        // Right-skewed: many small values, few large
+        // This is typical of institutional order splitting
+        // Sizes: 10, 10, 10, 10, 100 → right skewed (positive)
+        let mut aggregator = MboAggregator::new();
+
+        let sizes = [10u32, 10, 10, 10, 100];
+        for (i, &size) in sizes.iter().enumerate() {
+            let event = MboEvent::new(
+                i as u64 * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                size,
+                i as u64,
+            );
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.size_skewness();
+        assert!(
+            result > 0.5,
+            "Right-skewed distribution should have positive skewness, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_size_skewness_left_skewed() {
+        // Left-skewed: many large values, few small
+        // Sizes: 100, 100, 100, 100, 10 → left skewed (negative)
+        let mut aggregator = MboAggregator::new();
+
+        let sizes = [100u32, 100, 100, 100, 10];
+        for (i, &size) in sizes.iter().enumerate() {
+            let event = MboEvent::new(
+                i as u64 * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                size,
+                i as u64,
+            );
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.size_skewness();
+        assert!(
+            result < -0.5,
+            "Left-skewed distribution should have negative skewness, got {}",
+            result
+        );
+    }
+
+    // =========================================================================
+    // size_concentration tests
+    // =========================================================================
+
+    #[test]
+    fn test_size_concentration_empty() {
+        let aggregator = MboAggregator::new();
+        let result = aggregator.size_concentration();
+        assert_eq!(result, 0.0, "Empty window should return 0.0");
+    }
+
+    #[test]
+    fn test_size_concentration_single_order() {
+        // Single order has HHI = 1.0 (100% concentration)
+        let mut aggregator = MboAggregator::new();
+        let event = MboEvent::new(1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(event);
+
+        let result = aggregator.size_concentration();
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "Single order should have HHI of 1.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_size_concentration_equal_sizes() {
+        // 4 orders of equal size = HHI of 1/4 = 0.25
+        let mut aggregator = MboAggregator::new();
+
+        for i in 0..4 {
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100, // All same size
+                i,
+            );
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.size_concentration();
+        assert!(
+            (result - 0.25).abs() < 1e-10,
+            "4 equal orders should have HHI of 0.25, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_size_concentration_concentrated() {
+        // 2 orders: 900 shares and 100 shares
+        // Shares: 0.9 and 0.1
+        // HHI = 0.9² + 0.1² = 0.81 + 0.01 = 0.82
+        let mut aggregator = MboAggregator::new();
+
+        let event1 = MboEvent::new(1_000_000, Action::Add, Side::Bid, 100_000_000_000, 900, 1);
+        let event2 = MboEvent::new(2_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 2);
+        aggregator.process_event(event1);
+        aggregator.process_event(event2);
+
+        let result = aggregator.size_concentration();
+        assert!(
+            (result - 0.82).abs() < 1e-10,
+            "900/100 split should have HHI of 0.82, got {}",
+            result
+        );
+    }
+
+    // =========================================================================
+    // order_flow_volatility tests
+    // =========================================================================
+
+    #[test]
+    fn test_order_flow_volatility_insufficient_data() {
+        let mut aggregator = MboAggregator::new();
+
+        // Need N_SUBWINDOWS × MIN_EVENTS = 10 × 5 = 50 events
+        for i in 0..40 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.order_flow_volatility();
+        assert_eq!(result, 0.0, "Insufficient data should return 0.0");
+    }
+
+    #[test]
+    fn test_order_flow_volatility_constant_flow() {
+        // All bids or all asks = constant flow → low volatility
+        let mut aggregator = MboAggregator::new();
+
+        // 100 events, all bids → net_flow = 1.0 in every subwindow
+        for i in 0..100 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.order_flow_volatility();
+        assert!(
+            result < 0.01,
+            "Constant flow should have near-zero volatility, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_order_flow_volatility_alternating_flow() {
+        // Alternating bid/ask subwindows → high volatility
+        let mut aggregator = MboAggregator::new();
+
+        // 100 events, each subwindow of 10 alternates between all-bid and all-ask
+        for i in 0..100u64 {
+            let subwindow = i / 10;
+            let side = if subwindow % 2 == 0 {
+                Side::Bid
+            } else {
+                Side::Ask
+            };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.order_flow_volatility();
+        // With alternating +1 and -1 flows, std dev should be 1.0
+        assert!(
+            result > 0.5,
+            "Alternating flow should have high volatility, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_order_flow_volatility_balanced_flow() {
+        // 50% bid, 50% ask in each subwindow → flow = 0.0, volatility = 0.0
+        let mut aggregator = MboAggregator::new();
+
+        // 100 events, perfectly alternating bid/ask
+        for i in 0..100u64 {
+            let side = if i % 2 == 0 { Side::Bid } else { Side::Ask };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.order_flow_volatility();
+        assert!(
+            result < 0.1,
+            "Balanced flow should have low volatility, got {}",
+            result
+        );
+    }
+
+    // =========================================================================
+    // Integration test: verify feature extraction produces non-zero values
+    // =========================================================================
+
+    #[test]
+    fn test_extract_features_with_populated_data() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create a realistic LOB state
+        let mut lob = LobState::new(10);
+        lob.best_bid = Some(100_000_000_000); // $100.00
+        lob.best_ask = Some(100_010_000_000); // $100.01
+        lob.bid_prices[0] = 100_000_000_000;
+        lob.bid_prices[1] = 99_990_000_000;
+        lob.bid_sizes[0] = 500;
+        lob.bid_sizes[1] = 300;
+        lob.ask_prices[0] = 100_010_000_000;
+        lob.ask_prices[1] = 100_020_000_000;
+        lob.ask_sizes[0] = 400;
+        lob.ask_sizes[1] = 200;
+
+        // Process enough events for all features
+        for i in 0..200u64 {
+            let side = if i % 3 == 0 { Side::Bid } else { Side::Ask };
+            let size = 50 + ((i * 17) % 200) as u32; // Varied sizes
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, 100_000_000_000, size, i);
+            aggregator.process_event(event);
+        }
+
+        let features = aggregator.extract_features(&lob);
+        assert_eq!(features.len(), 36, "Should have 36 features");
+
+        // Check that the implemented features are non-zero
+        // Feature indices from extract_queue_features (indices 20-25):
+        // [20] average_queue_position (still stub)
+        // [21] queue_size_ahead (still stub)
+        // [22] orders_per_level
+        // [23] level_concentration
+        // [24] depth_ticks_bid
+        // [25] depth_ticks_ask
+
+        let level_conc = features[23];
+        assert!(
+            level_conc > 0.0 && level_conc <= 1.0,
+            "level_concentration should be in (0,1], got {}",
+            level_conc
+        );
+
+        let depth_bid = features[24];
+        assert!(
+            depth_bid >= 0.0,
+            "depth_ticks_bid should be >= 0, got {}",
+            depth_bid
+        );
+
+        let depth_ask = features[25];
+        assert!(
+            depth_ask >= 0.0,
+            "depth_ticks_ask should be >= 0, got {}",
+            depth_ask
+        );
+
+        // Size features (indices 12-19):
+        // [18] size_skewness
+        // [19] size_concentration
+        let size_skew = features[18];
+        assert!(
+            size_skew.is_finite(),
+            "size_skewness should be finite, got {}",
+            size_skew
+        );
+
+        let size_conc = features[19];
+        assert!(
+            size_conc > 0.0 && size_conc <= 1.0,
+            "size_concentration should be in (0,1], got {}",
+            size_conc
+        );
+
+        // Order flow volatility (index 10)
+        let flow_vol = features[10];
+        assert!(
+            flow_vol >= 0.0,
+            "order_flow_volatility should be >= 0, got {}",
+            flow_vol
+        );
     }
 }
