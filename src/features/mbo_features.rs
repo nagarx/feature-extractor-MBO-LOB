@@ -64,7 +64,8 @@
 //! ```
 
 use ahash::AHashMap;
-use mbo_lob_reconstructor::{Action, LobState, Side};
+use mbo_lob_reconstructor::lob::queue_position::{QueuePositionConfig, QueuePositionTracker};
+use mbo_lob_reconstructor::{Action, LobState, MboMessage, Side};
 use std::collections::VecDeque;
 
 // ============================================================================
@@ -138,6 +139,22 @@ impl MboEvent {
             price: msg.price,
             size: msg.size,
             order_id: msg.order_id,
+        }
+    }
+
+    /// Convert to an MboMessage for use with the reconstructor's trackers.
+    ///
+    /// This enables integration with `QueuePositionTracker` and other
+    /// reconstructor components that require `MboMessage` input.
+    #[inline]
+    pub fn to_mbo_message(&self) -> MboMessage {
+        MboMessage {
+            order_id: self.order_id,
+            action: self.action,
+            side: self.side,
+            price: self.price,
+            size: self.size,
+            timestamp: Some(self.timestamp as i64),
         }
     }
 }
@@ -521,7 +538,8 @@ impl OrderInfo {
 /// - Medium window: ~1 MB
 /// - Slow window: ~5 MB
 /// - Order tracker: ~2 MB (for ~22K active orders)
-/// - **Total: ~8 MB per symbol**
+/// - Queue tracker (optional): ~1 MB
+/// - **Total: ~8-9 MB per symbol**
 pub struct MboAggregator {
     /// Fast window for short-term signals (100 messages)
     fast_window: MboWindow,
@@ -535,18 +553,28 @@ pub struct MboAggregator {
     /// Order lifecycle tracker
     order_tracker: AHashMap<u64, OrderInfo>,
 
+    /// Optional queue position tracker for precise queue metrics.
+    ///
+    /// When enabled, provides accurate queue position and volume-ahead
+    /// features using FIFO tracking. Adds ~1 MB memory overhead.
+    queue_tracker: Option<QueuePositionTracker>,
+
     /// Total message count processed
     message_count: u64,
 }
 
 impl MboAggregator {
     /// Create a new MBO aggregator with default window sizes.
+    ///
+    /// Queue position tracking is disabled by default for performance.
+    /// Use `with_queue_tracking()` to enable it.
     pub fn new() -> Self {
         Self {
             fast_window: MboWindow::new(100),
             medium_window: MboWindow::new(1000),
             slow_window: MboWindow::new(5000),
             order_tracker: AHashMap::new(),
+            queue_tracker: None,
             message_count: 0,
         }
     }
@@ -558,14 +586,47 @@ impl MboAggregator {
             medium_window: MboWindow::new(medium_size),
             slow_window: MboWindow::new(slow_size),
             order_tracker: AHashMap::new(),
+            queue_tracker: None,
             message_count: 0,
         }
+    }
+
+    /// Enable queue position tracking for accurate queue metrics.
+    ///
+    /// When enabled, `average_queue_position` and `queue_size_ahead` features
+    /// return accurate FIFO-based values instead of 0.0.
+    ///
+    /// # Performance Impact
+    /// - Adds ~1 MB memory per symbol
+    /// - Adds ~10-20 ns per event for queue tracking
+    ///
+    /// # Example
+    /// ```ignore
+    /// let aggregator = MboAggregator::new().with_queue_tracking();
+    /// ```
+    pub fn with_queue_tracking(mut self) -> Self {
+        self.queue_tracker = Some(QueuePositionTracker::new(QueuePositionConfig::default()));
+        self
+    }
+
+    /// Enable queue position tracking with custom configuration.
+    pub fn with_queue_tracking_config(mut self, config: QueuePositionConfig) -> Self {
+        self.queue_tracker = Some(QueuePositionTracker::new(config));
+        self
+    }
+
+    /// Check if queue tracking is enabled.
+    #[inline]
+    pub fn has_queue_tracking(&self) -> bool {
+        self.queue_tracker.is_some()
     }
 
     /// Process a single MBO event (O(1) amortized).
     ///
     /// Updates all windows and order tracker. This is the main hot path
     /// and must be extremely efficient to maintain throughput.
+    ///
+    /// If queue tracking is enabled, also updates the queue position tracker.
     #[inline]
     pub fn process_event(&mut self, event: MboEvent) {
         // Update all windows
@@ -575,6 +636,12 @@ impl MboAggregator {
 
         // Update order tracker
         self.update_order_tracker(&event);
+
+        // Update queue tracker if enabled
+        if let Some(ref mut tracker) = self.queue_tracker {
+            let msg = event.to_mbo_message();
+            tracker.process_message(&msg);
+        }
 
         self.message_count += 1;
     }
@@ -955,14 +1022,70 @@ impl MboAggregator {
         hhi
     }
 
+    /// Compute average queue position across all tracked orders.
+    ///
+    /// Queue position is the FIFO order within a price level (0 = front, first to fill).
+    ///
+    /// # Returns
+    /// - Average position across all orders (0.0 if no queue tracking or no orders)
+    /// - Lower values indicate orders are closer to execution
+    ///
+    /// # Note
+    /// Requires `with_queue_tracking()` to be enabled. Returns 0.0 otherwise.
     fn average_queue_position(&self, _lob: &LobState) -> f64 {
-        // Placeholder: need to integrate with LOB state
-        0.0
+        match &self.queue_tracker {
+            Some(tracker) => {
+                // Compute weighted average across both sides
+                let bid_avg = tracker.average_queue_position(Side::Bid);
+                let ask_avg = tracker.average_queue_position(Side::Ask);
+
+                match (bid_avg, ask_avg) {
+                    (Some(b), Some(a)) => (b + a) / 2.0,
+                    (Some(b), None) => b,
+                    (None, Some(a)) => a,
+                    (None, None) => 0.0,
+                }
+            }
+            None => 0.0,
+        }
     }
 
+    /// Compute average volume ahead of tracked orders.
+    ///
+    /// Volume ahead is the total shares/contracts that must execute before
+    /// a given order (at the same price level).
+    ///
+    /// # Returns
+    /// - Average volume ahead across all tracked orders (0.0 if no tracking)
+    /// - Higher values indicate more volume must execute before our orders
+    ///
+    /// # Note
+    /// Requires `with_queue_tracking()` to be enabled. Returns 0.0 otherwise.
     fn queue_size_ahead(&self, _lob: &LobState) -> f64 {
-        // Placeholder: need to integrate with LOB state
-        0.0
+        match &self.queue_tracker {
+            Some(tracker) => {
+                // Sum volume ahead for all tracked orders
+                let mut total_volume_ahead: u64 = 0;
+                let mut order_count: usize = 0;
+
+                // We need to iterate through all tracked orders
+                // The tracker's order_locations is private, so we use
+                // the aggregator's order_tracker which has the same order_ids
+                for &order_id in self.order_tracker.keys() {
+                    if let Some(vol) = tracker.volume_ahead(order_id) {
+                        total_volume_ahead += vol;
+                        order_count += 1;
+                    }
+                }
+
+                if order_count > 0 {
+                    total_volume_ahead as f64 / order_count as f64
+                } else {
+                    0.0
+                }
+            }
+            None => 0.0,
+        }
     }
 
     fn orders_per_level(&self, lob: &LobState) -> f64 {
@@ -1768,6 +1891,211 @@ mod tests {
             flow_vol >= 0.0,
             "order_flow_volatility should be >= 0, got {}",
             flow_vol
+        );
+    }
+
+    // =========================================================================
+    // Queue tracking tests
+    // =========================================================================
+
+    #[test]
+    fn test_queue_tracking_disabled_by_default() {
+        let aggregator = MboAggregator::new();
+        assert!(!aggregator.has_queue_tracking());
+    }
+
+    #[test]
+    fn test_queue_tracking_enabled() {
+        let aggregator = MboAggregator::new().with_queue_tracking();
+        assert!(aggregator.has_queue_tracking());
+    }
+
+    #[test]
+    fn test_average_queue_position_no_tracking() {
+        // Without queue tracking, should return 0.0
+        let aggregator = MboAggregator::new();
+        let lob = LobState::new(10);
+
+        let result = aggregator.average_queue_position(&lob);
+        assert_eq!(result, 0.0, "Without tracking should return 0.0");
+    }
+
+    #[test]
+    fn test_queue_size_ahead_no_tracking() {
+        // Without queue tracking, should return 0.0
+        let aggregator = MboAggregator::new();
+        let lob = LobState::new(10);
+
+        let result = aggregator.queue_size_ahead(&lob);
+        assert_eq!(result, 0.0, "Without tracking should return 0.0");
+    }
+
+    #[test]
+    fn test_average_queue_position_single_order() {
+        // Single order at position 0 = avg position 0
+        let mut aggregator = MboAggregator::new().with_queue_tracking();
+
+        let event = MboEvent::new(1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(event);
+
+        let lob = LobState::new(10);
+        let result = aggregator.average_queue_position(&lob);
+
+        // Single order on one side, position 0
+        assert!(
+            result.abs() < 1e-10,
+            "Single order should have avg position 0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_average_queue_position_multiple_orders_same_price() {
+        // 3 orders at same price: positions 0, 1, 2
+        // Average = (0 + 1 + 2) / 3 = 1.0
+        let mut aggregator = MboAggregator::new().with_queue_tracking();
+
+        for i in 1..=3u64 {
+            let event =
+                MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let result = aggregator.average_queue_position(&lob);
+
+        // Average position = (0 + 1 + 2) / 3 = 1.0
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "Average of positions 0,1,2 should be 1.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_queue_size_ahead_fifo_order() {
+        // Order 1: size 100, position 0, volume ahead = 0
+        // Order 2: size 200, position 1, volume ahead = 100
+        // Order 3: size 150, position 2, volume ahead = 300
+        // Average volume ahead = (0 + 100 + 300) / 3 = 133.33
+        let mut aggregator = MboAggregator::new().with_queue_tracking();
+
+        let event1 = MboEvent::new(1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        let event2 = MboEvent::new(2_000_000, Action::Add, Side::Bid, 100_000_000_000, 200, 2);
+        let event3 = MboEvent::new(3_000_000, Action::Add, Side::Bid, 100_000_000_000, 150, 3);
+
+        aggregator.process_event(event1);
+        aggregator.process_event(event2);
+        aggregator.process_event(event3);
+
+        let lob = LobState::new(10);
+        let result = aggregator.queue_size_ahead(&lob);
+
+        let expected = (0.0 + 100.0 + 300.0) / 3.0; // 133.33
+        assert!(
+            (result - expected).abs() < 1.0,
+            "Average volume ahead should be ~133.33, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_queue_position_after_cancel() {
+        // Add 3 orders, then cancel the first one
+        // Remaining orders should have positions 0 and 1
+        let mut aggregator = MboAggregator::new().with_queue_tracking();
+
+        for i in 1..=3u64 {
+            let event =
+                MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        // Cancel order 1
+        let cancel = MboEvent::new(4_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(cancel);
+
+        let lob = LobState::new(10);
+        let result = aggregator.average_queue_position(&lob);
+
+        // Now orders 2 and 3 are at positions 0 and 1
+        // Average = (0 + 1) / 2 = 0.5
+        assert!(
+            (result - 0.5).abs() < 1e-10,
+            "After cancel, avg should be 0.5, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_queue_tracking_both_sides() {
+        // Add orders on both sides and verify averaging works
+        let mut aggregator = MboAggregator::new().with_queue_tracking();
+
+        // 2 bids: positions 0, 1 → avg = 0.5
+        let bid1 = MboEvent::new(1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        let bid2 = MboEvent::new(2_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 2);
+
+        // 2 asks: positions 0, 1 → avg = 0.5
+        let ask1 = MboEvent::new(3_000_000, Action::Add, Side::Ask, 101_000_000_000, 100, 3);
+        let ask2 = MboEvent::new(4_000_000, Action::Add, Side::Ask, 101_000_000_000, 100, 4);
+
+        aggregator.process_event(bid1);
+        aggregator.process_event(bid2);
+        aggregator.process_event(ask1);
+        aggregator.process_event(ask2);
+
+        let lob = LobState::new(10);
+        let result = aggregator.average_queue_position(&lob);
+
+        // Both sides have avg 0.5, so combined avg = (0.5 + 0.5) / 2 = 0.5
+        assert!(
+            (result - 0.5).abs() < 1e-10,
+            "Combined avg should be 0.5, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_extract_features_with_queue_tracking() {
+        let mut aggregator = MboAggregator::new().with_queue_tracking();
+
+        // Create LOB state
+        let mut lob = LobState::new(10);
+        lob.best_bid = Some(100_000_000_000);
+        lob.best_ask = Some(100_010_000_000);
+        lob.bid_prices[0] = 100_000_000_000;
+        lob.bid_sizes[0] = 500;
+        lob.ask_prices[0] = 100_010_000_000;
+        lob.ask_sizes[0] = 400;
+
+        // Process some events
+        for i in 0..50u64 {
+            let side = if i % 2 == 0 { Side::Bid } else { Side::Ask };
+            let price = if side == Side::Bid {
+                100_000_000_000
+            } else {
+                100_010_000_000
+            };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, price, 100, i + 1);
+            aggregator.process_event(event);
+        }
+
+        let features = aggregator.extract_features(&lob);
+
+        // Feature indices 20 and 21 should now be non-zero
+        let avg_pos = features[20];
+        let vol_ahead = features[21];
+
+        assert!(
+            avg_pos > 0.0,
+            "With queue tracking, avg_queue_position should be > 0, got {}",
+            avg_pos
+        );
+        assert!(
+            vol_ahead > 0.0,
+            "With queue tracking, queue_size_ahead should be > 0, got {}",
+            vol_ahead
         );
     }
 }
