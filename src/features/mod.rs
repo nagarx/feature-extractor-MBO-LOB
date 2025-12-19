@@ -32,6 +32,7 @@ pub mod lob_features;
 pub mod market_impact;
 pub mod mbo_features;
 pub mod order_flow;
+pub mod signals;
 
 use mbo_lob_reconstructor::{LobState, Result};
 
