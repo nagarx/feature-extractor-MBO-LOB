@@ -24,7 +24,7 @@
 //!
 //! See `export::DatasetConfig` for full configuration options.
 
-use feature_extractor::batch::{BatchConfig, BatchProcessor, ErrorMode};
+use feature_extractor::batch::{BatchConfig, BatchProcessor, ConsoleProgress, ErrorMode};
 use feature_extractor::export::{
     BatchExporter, DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo,
     ExportLabelConfig, SymbolConfig,
@@ -301,25 +301,58 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
             files.len()
         );
 
-        // Create batch processor
+        // Create batch processor with progress callback
         let processor = BatchProcessor::new((*pipeline_config).clone(), batch_config.clone());
+        let processor = if config.processing.verbose {
+            processor.with_progress_callback(Box::new(ConsoleProgress::new().verbose()))
+        } else {
+            // Always show basic progress (file count updates)
+            processor.with_progress_callback(Box::new(ConsoleProgress::new()))
+        };
 
         // Process files
         let file_refs: Vec<&Path> = existing_files.iter().map(|p| p.as_path()).collect();
         let output = processor.process_files(&file_refs)?;
 
-        // Export results
+        // Verify all files were processed (critical for financial data integrity)
+        let processed_count = output.successful_count();
+        let expected_count = existing_files.len();
+        if processed_count != expected_count {
+            eprintln!(
+                "⚠️  WARNING: Processed {} files but expected {}. {} errors occurred.",
+                processed_count,
+                expected_count,
+                output.failed_count()
+            );
+            for err in output.iter_errors() {
+                eprintln!("    ❌ {}: {}", err.file_path, err.error);
+            }
+        }
+
+        // Export results in chronological order for determinism
         let exporter = BatchExporter::new(&split_output_dir, Some(config.labels.to_label_config()));
 
         let mut split_features = 0;
         let mut split_labels = 0;
+        let mut days_exported = Vec::new();
 
-        for day_result in &output.results {
+        for day_result in output.results_by_day() {
             let day_name = &day_result.day;
             let result = exporter.export_day(day_name, &day_result.output)?;
             split_features += result.n_features;
             split_labels += result.n_labels;
+            days_exported.push(day_name.clone());
             total_days_processed += 1;
+        }
+
+        // Verify exported days match expected (paranoia check for financial accuracy)
+        if days_exported.len() != processed_count {
+            return Err(format!(
+                "Export mismatch: processed {} but exported {}",
+                processed_count,
+                days_exported.len()
+            )
+            .into());
         }
 
         total_features_exported += split_features;

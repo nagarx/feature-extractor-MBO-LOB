@@ -1,0 +1,82 @@
+# NVDA 98-Feature Full Dataset Configuration
+# 
+# Full dataset export covering Feb 2025 to Sept 2025 (~165 trading days)
+#
+# PREREQUISITE: Decompress all files to hot store first for optimal performance:
+#   cd MBO-LOB-reconstructor
+#   cargo run --release --bin decompress_to_hot_store -- \
+#       --input ../data/NVDA_2025-02-01_to_2025-09-30 \
+#       --output ../data/hot_store
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_98feat_full.toml
+
+[experiment]
+name = "NVDA 98-Feature Full Dataset"
+description = "Full 8-month dataset: LOB + Derived + MBO + Signals (Feb-Sept 2025)"
+version = "2.0.0"
+tags = ["nvda", "98-features", "full", "signals", "8-months"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+# Paths relative to feature-extractor-MBO-LOB directory
+input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "../data/exports/nvda_98feat_full"
+
+# Hot store for ~30% faster processing (REQUIRED for efficient processing)
+hot_store_dir = "../data/hot_store"
+
+[dates]
+# Full date range: Feb 3, 2025 to Sept 29, 2025
+# Weekends are automatically excluded (~165 trading days)
+start_date = "2025-02-03"
+end_date = "2025-09-29"
+
+# US market holidays to exclude (2025)
+exclude_dates = [
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+]
+
+[features]
+lob_levels = 10          # 10 levels × 4 = 40 base features
+include_derived = true   # +8 features
+include_mbo = true       # +36 MBO features
+include_signals = true   # +14 trading signals
+mbo_window_size = 1000   # Rolling statistics window
+
+[sampling]
+strategy = "event_based"
+event_count = 1000       # Sample every 1000 events
+
+[sequence]
+window_size = 100        # 100 snapshots per sequence
+stride = 10              # 90% overlap between sequences
+max_buffer_size = 50000  # Memory limit
+
+[labels]
+horizon = 50             # Predict 50 samples ahead
+smoothing_window = 10    # Smooth over 10 prices
+threshold = 0.0008       # 8 bps threshold
+
+[split]
+# Temporal split: first 70% train, next 15% val, last 15% test
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+# Parallel processing - let Rayon auto-detect optimal thread count
+error_mode = "collect_errors"  # Continue on errors, report at end
+verbose = true  # Show progress for each day processed
+
