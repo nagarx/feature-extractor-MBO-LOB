@@ -341,9 +341,43 @@ Extracted in `mbo_features.rs` using multi-timescale windows:
 
 **MboAggregator Memory**: ~8 MB per symbol
 
+**Tick Size Configuration**:
+
+The `depth_ticks_bid` and `depth_ticks_ask` features (indices 24-25 within MBO) require correct
+tick size configuration for accurate depth measurements:
+
+```rust
+// Default: $0.01 (US equities)
+let aggregator = MboAggregator::new();
+
+// Crypto ($0.001 tick)
+let aggregator = MboAggregator::new().with_tick_size(0.001);
+
+// Forex ($0.0001 pip)
+let aggregator = MboAggregator::new().with_tick_size(0.0001);
+```
+
+When using `FeatureExtractor`, tick_size is automatically propagated from `FeatureConfig`:
+```rust
+let config = FeatureConfig::new(10)
+    .with_tick_size(0.001)  // Crypto tick size
+    .with_mbo(true);
+let extractor = FeatureExtractor::with_config(config);
+```
+
+**WARNING**: Using incorrect tick_size causes integer division truncation in depth calculations.
+A $0.001 tick instrument with default $0.01 configuration will report depth_ticks ≈ 0.
+
 ### Trading Signals (14 for indices 84-97)
 
-Computed in `signals.rs` using streaming OFI and base features:
+Computed in `signals.rs` using streaming OFI and base features.
+
+**CONSTRAINT**: Signals require **exactly 10 LOB levels** (`lob_levels == 10`).
+The signal indices are hardcoded for the 10-level layout:
+- `derived_indices::MID_PRICE = 40` (assumes 10 × 4 = 40 raw features)
+- `mbo_indices::CANCEL_RATE_BID = 50` (assumes MBO starts at 48)
+
+Configurations with `include_signals: true` and `lob_levels ≠ 10` will fail validation.
 
 **Implementation**:
 
@@ -523,11 +557,23 @@ pub struct Sequence {
 pub struct VolumeBasedSampler {
     target_volume: u64,         // Target shares per sample (default: 1000)
     accumulated_volume: u64,    // Current accumulation
-    min_time_interval_ns: u64,  // Min time between samples (default: 1ms)
+    min_time_interval_ns: u64,  // Min time between samples (default: 1ms = 1_000_000 ns)
     last_sample_time: u64,
 }
 
 impl VolumeBasedSampler {
+    /// Create a new volume-based sampler.
+    ///
+    /// # Arguments
+    /// * `target_volume` - Target volume per sample (shares)
+    /// * `min_time_interval_ns` - Minimum **nanoseconds** between samples (e.g., 1_000_000 = 1ms)
+    ///
+    /// # Units
+    /// The `min_time_interval_ns` is in nanoseconds to match:
+    /// - `SamplingConfig.min_time_interval_ns` (pipeline config)
+    /// - MBO message timestamps (nanoseconds since epoch)
+    pub fn new(target_volume: u64, min_time_interval_ns: u64) -> Self;
+    
     // Returns true when volume threshold AND time threshold met
     pub fn should_sample(&mut self, event_volume: u32, timestamp_ns: u64) -> bool {
         self.accumulated_volume += event_volume as u64;
@@ -755,29 +801,108 @@ impl NumpyExporter {
 }
 ```
 
-### BatchExporter
+### BatchExporter (⚠️ DEPRECATED)
 
-For multi-day processing with optional labeling:
+> **⚠️ DEPRECATED**: Use `AlignedBatchExporter` instead. `BatchExporter` uses
+> `to_flat_features()` which causes 10x data inflation and label misalignment.
 
 ```rust
+#[deprecated(since = "0.9.0", note = "Use AlignedBatchExporter")]
 pub struct BatchExporter {
     output_dir: PathBuf,
     label_config: Option<LabelConfig>,
 }
+```
 
-impl BatchExporter {
-    // Creates: {day}_features.npy, {day}_labels.npy, {day}_metadata.json
-    pub fn export_day(&self, day_name: &str, output: &PipelineOutput) -> Result<DayExportResult>;
+### AlignedBatchExporter (✅ RECOMMENDED)
+
+The correct exporter for labeled datasets with perfect 1:1 sequence-label alignment:
+
+```rust
+pub struct AlignedBatchExporter {
+    output_dir: PathBuf,
+    label_config: LabelConfig,
+    window_size: usize,
+    stride: usize,
+    tensor_format: Option<TensorFormat>,
+    multi_horizon_config: Option<MultiHorizonConfig>,
+}
+
+impl AlignedBatchExporter {
+    pub fn new(output_dir: P, label_config: LabelConfig, window_size: usize, stride: usize) -> Self;
+    
+    // Builder methods
+    pub fn with_tensor_format(self, format: TensorFormat) -> Self;
+    pub fn with_multi_horizon_labels(self, config: MultiHorizonConfig) -> Self;
+    
+    // Creates: {day}_sequences.npy, {day}_labels.npy, {day}_metadata.json, {day}_normalization.json
+    // For multi-horizon: also creates {day}_horizons.json
+    pub fn export_day(&self, day_name: &str, output: &PipelineOutput) -> Result<AlignedDayExport>;
 }
 ```
 
-### Export Process
+### ExportLabelConfig (Multi-Horizon Support)
 
-1. Flatten sequences to `[N_samples × N_features]`
-2. Apply z-score normalization (Stage 2 normalization)
-3. Write to NumPy format
-4. Generate labels from mid-prices (if configured)
-5. Write metadata JSON
+The `ExportLabelConfig` supports both single-horizon and multi-horizon label generation:
+
+```rust
+pub struct ExportLabelConfig {
+    pub horizon: usize,                    // Single horizon (default: 200)
+    pub horizons: Option<Vec<usize>>,      // Multiple horizons (e.g., [10, 20, 50, 100, 200])
+    pub smoothing_window: usize,           // Smoothing window (default: 10)
+    pub threshold: f64,                    // Classification threshold (default: 0.0008)
+}
+
+impl ExportLabelConfig {
+    // Check if multi-horizon mode is active
+    pub fn is_multi_horizon(&self) -> bool;
+    
+    // Get effective horizons (either `horizons` or single `[horizon]`)
+    pub fn effective_horizons(&self) -> Vec<usize>;
+    
+    // Get maximum horizon (for validation)
+    pub fn max_horizon(&self) -> usize;
+    
+    // Convert to MultiHorizonConfig (for AlignedBatchExporter)
+    pub fn to_multi_horizon_config(&self) -> Option<MultiHorizonConfig>;
+    
+    // Constructors
+    pub fn single(horizon: usize, smoothing: usize, threshold: f64) -> Self;
+    pub fn multi(horizons: Vec<usize>, smoothing: usize, threshold: f64) -> Self;
+    pub fn fi2010() -> Self;   // horizons: [10, 20, 30, 50, 100]
+    pub fn deeplob() -> Self;  // horizons: [10, 20, 50, 100]
+}
+```
+
+**TOML Configuration Examples:**
+
+```toml
+# Single-horizon (backward compatible)
+[labels]
+horizon = 200
+smoothing_window = 10
+threshold = 0.0008
+
+# Multi-horizon
+[labels]
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10
+threshold = 0.0008
+```
+
+**Output Shapes:**
+- Single-horizon: `labels.npy` shape `(N_seq,)` int8
+- Multi-horizon: `labels.npy` shape `(N_seq, num_horizons)` int8
+
+### Export Process (Aligned)
+
+1. Generate labels from mid-prices FIRST
+2. Align sequences with labels at sequence endpoints (1:1 mapping)
+3. Apply market-structure preserving normalization
+4. Write 3D sequences `[N_seq, window_size, n_features]` to NumPy
+5. Write 1D labels `[N_seq]` to NumPy
+6. Write metadata JSON with validation info
+7. Write normalization params JSON
 
 ### TensorFormatter (Model-Specific Shapes)
 
@@ -1015,13 +1140,13 @@ pub struct DatasetConfig {
 
 | Component | Purpose | Key Fields |
 |-----------|---------|------------|
-| `SymbolConfig` | Symbol definition | `name`, `exchange`, `filename_pattern` |
+| `SymbolConfig` | Symbol definition | `name`, `exchange`, `filename_pattern`, `tick_size` |
 | `DataPathConfig` | Data locations | `input_dir`, `output_dir`, `hot_store_dir` |
 | `DateRangeConfig` | Date selection | `start_date`, `end_date`, `exclude_weekends` |
 | `FeatureSetConfig` | Feature flags | `include_derived`, `include_mbo`, `include_signals` |
 | `ExportSamplingConfig` | Sampling strategy | `strategy`, `target_volume` or `event_count` |
 | `ExportSequenceConfig` | Sequence building | `window_size`, `stride`, `max_buffer` |
-| `ExportLabelConfig` | Label generation | `horizon`, `smoothing_window`, `threshold` |
+| `ExportLabelConfig` | Label generation | `horizon`, `horizons`, `smoothing_window`, `threshold` |
 | `SplitConfig` | Data splits | `train_ratio`, `val_ratio`, `test_ratio` |
 | `ProcessingConfig` | Parallelism | `num_threads`, `error_mode` |
 
@@ -1044,6 +1169,7 @@ pub struct DatasetConfig {
 name = "NVDA"
 exchange = "XNAS"
 filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01  # Minimum price increment (default: 0.01 for US stocks)
 
 [data]
 input_dir = "../data/databento/NVDA"
@@ -1103,8 +1229,8 @@ use feature_extractor::export::DatasetConfig;
 let config = DatasetConfig::load_toml("configs/nvda_98feat.toml")?;
 config.validate()?;
 
-// Convert to PipelineConfig (feature counts auto-synchronized)
-let pipeline_config = config.to_pipeline_config()?;
+// Convert to PipelineConfig (feature counts and tick_size auto-propagated from SymbolConfig)
+let pipeline_config = config.to_pipeline_config();
 
 // Use with BatchProcessor
 let batch_config = config.processing.to_batch_config(&config.data.hot_store_dir);
@@ -1407,24 +1533,78 @@ impl FeatureValidator {
 
 The library provides zero-allocation APIs for high-performance hot paths.
 
-### FeatureExtractor Zero-Allocation Methods
+### FeatureExtractor Methods
 
 ```rust
 impl FeatureExtractor {
-    /// Extract features into a pre-allocated buffer (zero allocation)
-    /// 
-    /// The output buffer is cleared and reused, avoiding per-sample allocation.
+    // === Point-in-Time Extraction (base features only) ===
+    
+    /// Extract base features into a pre-allocated buffer (zero allocation)
+    /// Returns 40-84 features depending on config (LOB + derived + MBO)
     pub fn extract_into(&mut self, lob_state: &LobState, output: &mut Vec<f64>) -> Result<()>;
     
     /// Extract and wrap in Arc for zero-copy sharing
-    /// 
-    /// Convenience method that calls extract_into() then wraps in Arc.
     pub fn extract_arc(&mut self, lob_state: &LobState) -> Result<Arc<Vec<f64>>>;
     
-    /// Legacy method (still works, uses extract_into internally)
-    #[deprecated(note = "Use extract_into() for better performance")]
-    pub fn extract_all_features(&mut self, lob_state: &LobState) -> Result<Vec<f64>>;
+    // === Signal Extraction (streaming, requires OFI warmup) ===
+    
+    /// Update OFI state on every LOB transition (required for signals)
+    pub fn update_ofi(&mut self, lob: &LobState);
+    
+    /// Extract all features including signals (98 features for full config)
+    /// Requires: include_signals=true, call update_ofi() on every LOB transition
+    pub fn extract_with_signals(
+        &mut self, lob: &LobState, ctx: &SignalContext, output: &mut Vec<f64>
+    ) -> Result<()>;
+    
+    // === Feature Counts ===
+    
+    /// Base features (LOB + derived + MBO): what extract_into() produces
+    pub fn base_feature_count(&self) -> usize;  // 40-84
+    
+    /// Total features (including signals): what extract_with_signals() produces
+    pub fn feature_count(&self) -> usize;       // 40-98
+    
+    /// Check if OFI is warmed up for signal computation
+    pub fn is_signals_warm(&self) -> bool;
 }
+```
+
+### Signal Extraction Pattern
+
+Signals are "streaming" features that require OFI accumulation across LOB transitions:
+
+```rust
+// 1. Configure with signals
+let config = FeatureConfig::new(10)
+    .with_derived(true)
+    .with_mbo(true)
+    .with_signals(true);
+let mut extractor = FeatureExtractor::with_config(config);
+
+// 2. On EVERY LOB transition (before sampling):
+extractor.update_ofi(&lob_state);
+
+// 3. At sampling points (e.g., after volume threshold):
+let ctx = SignalContext::new(timestamp_ns, invalidity_delta);
+let mut output = Vec::new();
+extractor.extract_with_signals(&lob_state, &ctx, &mut output)?;
+assert_eq!(output.len(), 98); // 40 + 8 + 36 + 14
+
+// 4. On day/session boundaries:
+extractor.reset(); // Clears OFI warmup state
+```
+
+### Feature Set Flexibility
+
+The pipeline supports multiple feature set configurations without being tied to any specific model:
+
+| Config | Features | Use Case |
+|--------|----------|----------|
+| `FeatureConfig::new(10)` | 40 | Raw LOB only (DeepLOB baseline) |
+| `.with_derived(true)` | 48 | + market structure metrics |
+| `.with_mbo(true)` | 76-84 | + MBO microstructure features |
+| `.with_signals(true)` | 98 | Full signal layer for HFT |
 ```
 
 ### SequenceBuilder Arc-Native Methods
@@ -1452,10 +1632,21 @@ impl MultiScaleWindow {
     /// 
     /// The same Arc is shared across fast/medium/slow builders.
     /// Memory savings: 16 bytes (2 Arc clones) vs 1,344 bytes (2 Vec clones).
+    ///
+    /// STREAMING MODE: Sequences are automatically built during push_arc().
+    /// Each scale's try_build_sequence() is called after push, and built
+    /// sequences are accumulated internally.
     pub fn push_arc(&mut self, timestamp: u64, features: FeatureVec);
     
     /// Legacy method (wraps in Arc, then calls push_arc)
     pub fn push(&mut self, timestamp: u64, features: Vec<f64>);
+    
+    /// Return all accumulated sequences from streaming mode.
+    /// 
+    /// Returns ALL sequences built during push_arc() calls, plus any
+    /// final sequences that can be built from remaining buffer data.
+    /// Returns None if no sequences were built at any scale.
+    pub fn try_build_all(&mut self) -> Option<MultiScaleSequence>;
 }
 ```
 
@@ -1768,19 +1959,39 @@ let sequences = sequence_builder.generate_all_sequences();
 
 ### Reset Semantics
 
+All stateful components follow the same reset contract: after `reset()`, the component
+behaves identically to a freshly constructed instance. This is critical for multi-day
+processing to prevent cross-day state leakage.
+
 ```rust
 // LobReconstructor
 reconstructor.reset();       // Clears book, PRESERVES stats
 reconstructor.full_reset();  // Clears EVERYTHING
 
 // Pipeline  
-pipeline.reset();            // Clears all state
+pipeline.reset();            // Clears ALL state (calls reset on all sub-components)
 
 // FeatureExtractor
 extractor.reset();           // Clears MBO aggregator state
 
 // SequenceBuilder
 builder.reset();             // Clears buffer and counters
+
+// MultiScaleWindow
+ms_window.reset();           // Clears builders, counters, AND accumulated sequences
+                             // CRITICAL: Prevents cross-day sequence leakage
+
+// OfiComputer
+ofi.reset_on_clear();        // Clears OFI accumulators and warmup state
+```
+
+**Multi-Day Processing Pattern**:
+```rust
+for day_file in data_files {
+    pipeline.reset();  // CRITICAL: Clear all state before each day
+    let output = pipeline.process(&day_file)?;
+    // Export day's sequences...
+}
 ```
 
 ---
@@ -1825,14 +2036,37 @@ Labels require future data, creating a lag:
 // min_prices_required() = k + h + k + 1 = 5 + 10 + 5 + 1 = 21
 ```
 
-### 5. Buffer Size vs Data Loss
+### 5. Buffer Size vs Data Loss (Regular SequenceBuilder)
 
-Sequence builder has fixed buffer; old data evicted:
+Regular sequence builder has fixed buffer; old data evicted:
 ```rust
 // If processing 10,000 snapshots with buffer_size=1000
 // and using generate_all_sequences() at end: 9,000 snapshots LOST
 // SOLUTION: Use streaming mode (try_build_sequence() during processing)
 ```
+
+**Note**: `MultiScaleWindow` now builds sequences automatically during `push_arc()`,
+accumulating them internally. Call `try_build_all()` at the end to retrieve all
+accumulated sequences (not just one per scale).
+
+### 6. Signals Require 10 LOB Levels
+
+Trading signals (`include_signals: true`) require exactly 10 LOB levels:
+```rust
+// Valid: 10 levels with signals
+let config = FeatureConfig::new(10).with_signals(true); // OK
+
+// Invalid: 5 levels with signals - validation fails
+let config = FeatureConfig {
+    lob_levels: 5,
+    include_signals: true,
+    ..Default::default()
+};
+assert!(config.validate().is_err()); // Error: requires 10 levels
+```
+
+Signal indices are hardcoded for the 10-level layout. Non-10-level configurations
+with signals enabled will fail validation.
 
 ---
 

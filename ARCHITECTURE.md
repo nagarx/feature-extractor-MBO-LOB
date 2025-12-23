@@ -256,6 +256,7 @@ pub enum Preset {
 - [x] **Graceful cancellation** (CancellationToken)
 - [x] **PriceLevel O(1) caching** (in mbo-lob-reconstructor)
 - [x] **Multi-Horizon Label Generator** (FI-2010, DeepLOB, TLOB presets)
+- [x] **ExportLabelConfig Multi-Horizon** (TOML `horizons` field for config-driven exports)
 - [x] **TensorFormatter** (DeepLOB, HLOB, Flat, Image formats)
 - [x] **Pipeline Integration** (format_sequences, generate_multi_horizon_labels)
 - [x] **Hot Store Integration** (decompressed file caching, ~30% faster)

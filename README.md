@@ -52,9 +52,11 @@ fn main() -> Result<()> {
     println!("Generated {} sequences", output.sequences_generated);
     println!("Features per snapshot: {}", output.sequences[0].features[0].len());
 
-    // Export to NumPy for Python/PyTorch
-    let exporter = NumpyExporter::new("output/");
+    // Export to NumPy for Python/PyTorch (with aligned labels)
+    let label_config = LabelConfig::short_term();
+    let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
     exporter.export_day("2025-02-03", &output)?;
+    // Creates: {day}_sequences.npy [N_seq, 100, 98], {day}_labels.npy [N_seq]
 
     Ok(())
 }
@@ -312,6 +314,27 @@ let config = MultiHorizonConfig::fi2010();
 
 // Generate labels from pipeline output
 let labels = output.generate_multi_horizon_labels(config)?;
+```
+
+#### TOML-Based Multi-Horizon Export
+
+For configuration-driven exports, use the `horizons` field in `[labels]`:
+
+```toml
+[labels]
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10
+threshold = 0.0008
+```
+
+**Output files for multi-horizon exports:**
+- `{day}_sequences.npy` - Shape: `(N, 100, 98)` float32
+- `{day}_labels.npy` - Shape: `(N, 5)` int8 (one column per horizon)
+- `{day}_horizons.json` - Horizon values: `[10, 20, 50, 100, 200]`
+- `{day}_metadata.json` - Includes `num_horizons`, `horizons` fields
+
+```rust
+// Using labels from multi-horizon export
 
 // Access per-horizon labels
 for horizon in labels.horizons() {
@@ -391,6 +414,7 @@ Sample configuration (`configs/nvda_98feat.toml`):
 name = "NVDA"
 exchange = "XNAS"
 filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01  # Default for US stocks
 
 [data]
 input_dir = "../data/databento/NVDA"
@@ -416,9 +440,15 @@ window_size = 100
 stride = 10
 
 [labels]
+# Single-horizon (backward compatible)
 horizon = 50
 smoothing_window = 10
 threshold = 0.0008
+
+# OR Multi-horizon (comment out horizon above, uncomment below)
+# horizons = [10, 20, 50, 100, 200]
+# smoothing_window = 10
+# threshold = 0.0008
 
 [split]
 train_ratio = 0.7
@@ -445,24 +475,31 @@ let pipeline_config = config.to_pipeline_config()?;
 // Process files...
 ```
 
-### Single Day Export (Legacy)
+### Aligned Export with Labels (✅ RECOMMENDED)
 
-```rust
-let exporter = NumpyExporter::new("output/");
-exporter.export_day("2025-02-03", &output)?;
-```
-
-### Batch Export with Labels (Legacy)
+Use `AlignedBatchExporter` for correct 1:1 sequence-label alignment:
 
 ```rust
 let label_config = LabelConfig::short_term();
-let exporter = BatchExporter::new("output/", Some(label_config));
+let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
 
 for day in trading_days {
     pipeline.reset();  // Clear state between days
     let output = pipeline.process(&format!("data/{}.dbn.zst", day))?;
     exporter.export_day(&day, &output)?;
+    // Creates: {day}_sequences.npy [N, 100, 98], {day}_labels.npy [N]
 }
+```
+
+### Single Day Export (⚠️ DEPRECATED)
+
+> **⚠️ DEPRECATED**: `NumpyExporter` and `BatchExporter` use `to_flat_features()` which causes
+> 10x data inflation and label misalignment. Use `AlignedBatchExporter` instead.
+
+```rust
+#[deprecated]
+let exporter = NumpyExporter::new("output/");
+exporter.export_day("2025-02-03", &output)?;
 ```
 
 ## Normalization Strategies
