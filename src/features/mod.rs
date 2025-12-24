@@ -34,6 +34,9 @@ pub mod mbo_features;
 pub mod order_flow;
 pub mod signals;
 
+// Re-export commonly used types for convenience
+pub use signals::SignalContext;
+
 use mbo_lob_reconstructor::{LobState, Result};
 
 /// Configuration for feature extraction.
@@ -195,6 +198,43 @@ impl FeatureConfig {
         self.lob_levels * 4
     }
 
+    /// Get the base feature count (excluding signals).
+    ///
+    /// This is the number of features produced by point-in-time extraction
+    /// (LOB + derived + MBO), without the streaming signals.
+    ///
+    /// # Returns
+    ///
+    /// Base feature count:
+    /// - Base: `lob_levels * 4`
+    /// - If `include_derived`: + 8 derived features  
+    /// - If `include_mbo`: + 36 MBO features
+    #[inline]
+    pub fn base_feature_count(&self) -> usize {
+        let base = self.lob_levels * 4;
+        let derived = if self.include_derived {
+            Self::DERIVED_FEATURE_COUNT
+        } else {
+            0
+        };
+        let mbo = if self.include_mbo {
+            Self::MBO_FEATURE_COUNT
+        } else {
+            0
+        };
+        base + derived + mbo
+    }
+
+    /// Get the signal feature count (0 if signals disabled).
+    #[inline]
+    pub fn signal_feature_count(&self) -> usize {
+        if self.include_signals {
+            Self::SIGNAL_FEATURE_COUNT
+        } else {
+            0
+        }
+    }
+
     /// Validate the configuration.
     pub fn validate(&self) -> std::result::Result<(), String> {
         if self.lob_levels == 0 {
@@ -217,6 +257,18 @@ impl FeatureConfig {
         if self.include_signals && !self.include_mbo {
             return Err("include_signals requires include_mbo to be enabled".to_string());
         }
+        // Signal indices are hardcoded for 10 levels (per signals.rs):
+        // - derived_indices::MID_PRICE = 40 (assumes 10 × 4 = 40 raw features)
+        // - mbo_indices::CANCEL_RATE_BID = 50 (assumes MBO starts at 48)
+        // With any other level count, signals would read from wrong indices.
+        if self.include_signals && self.lob_levels != 10 {
+            return Err(format!(
+                "include_signals requires exactly 10 lob_levels (got {}). \
+                 Signal feature indices are hardcoded for the 10-level layout. \
+                 See signals.rs for details.",
+                self.lob_levels
+            ));
+        }
         Ok(())
     }
 }
@@ -238,6 +290,11 @@ impl Default for FeatureConfig {
 pub struct FeatureExtractor {
     config: FeatureConfig,
     mbo_aggregator: Option<mbo_features::MboAggregator>,
+    /// OFI computer for signal computation (when `include_signals` is true).
+    ///
+    /// Signals are "streaming" features that accumulate state across
+    /// multiple LOB transitions, unlike the other "point-in-time" features.
+    ofi_computer: Option<signals::OfiComputer>,
 }
 
 impl FeatureExtractor {
@@ -249,17 +306,27 @@ impl FeatureExtractor {
                 ..Default::default()
             },
             mbo_aggregator: None,
+            ofi_computer: None,
         }
     }
 
     /// Create a new feature extractor with custom configuration.
     pub fn with_config(config: FeatureConfig) -> Self {
         let mbo_aggregator = if config.include_mbo {
-            Some(mbo_features::MboAggregator::with_windows(
-                100,                    // fast window
-                config.mbo_window_size, // medium window (customizable)
-                5000,                   // slow window
-            ))
+            Some(
+                mbo_features::MboAggregator::with_windows(
+                    100,                    // fast window
+                    config.mbo_window_size, // medium window (customizable)
+                    5000,                   // slow window
+                )
+                .with_tick_size(config.tick_size), // Propagate tick_size from config
+            )
+        } else {
+            None
+        };
+
+        let ofi_computer = if config.include_signals {
+            Some(signals::OfiComputer::new())
         } else {
             None
         };
@@ -267,6 +334,7 @@ impl FeatureExtractor {
         Self {
             config,
             mbo_aggregator,
+            ofi_computer,
         }
     }
 
@@ -279,6 +347,141 @@ impl FeatureExtractor {
     #[inline]
     pub fn has_signals(&self) -> bool {
         self.config.include_signals
+    }
+
+    /// Get the base feature count (excluding signals).
+    ///
+    /// This is the number of features produced by `extract_into()`.
+    #[inline]
+    pub fn base_feature_count(&self) -> usize {
+        self.config.base_feature_count()
+    }
+
+    /// Get the signal feature count (0 if signals disabled).
+    #[inline]
+    pub fn signal_feature_count(&self) -> usize {
+        self.config.signal_feature_count()
+    }
+
+    /// Check if OFI has sufficient warmup for signal computation.
+    ///
+    /// Returns `true` if at least `MIN_WARMUP_STATE_CHANGES` effective
+    /// state changes have occurred since the last reset.
+    #[inline]
+    pub fn is_signals_warm(&self) -> bool {
+        self.ofi_computer
+            .as_ref()
+            .map(|ofi| ofi.is_warm())
+            .unwrap_or(false)
+    }
+
+    /// Update OFI state from a LOB snapshot.
+    ///
+    /// This should be called on **every LOB state transition** to maintain
+    /// accurate OFI accumulation for signal computation.
+    ///
+    /// # Arguments
+    ///
+    /// * `lob` - The current LOB state after the transition
+    ///
+    /// # Note
+    ///
+    /// This is a no-op if `include_signals` is false.
+    ///
+    /// # Usage Pattern
+    ///
+    /// ```ignore
+    /// // On every LOB update (before sampling):
+    /// extractor.update_ofi(&lob_state);
+    ///
+    /// // At sampling points (e.g., after volume threshold):
+    /// let ctx = SignalContext::new(timestamp_ns, invalidity_delta);
+    /// extractor.extract_with_signals(&lob_state, &ctx, &mut output)?;
+    /// ```
+    #[inline]
+    pub fn update_ofi(&mut self, lob: &LobState) {
+        if let Some(ref mut ofi) = self.ofi_computer {
+            ofi.update(lob);
+        }
+    }
+
+    /// Extract all features including signals.
+    ///
+    /// This method extracts:
+    /// 1. Base features (LOB + derived + MBO) via `extract_into()`
+    /// 2. Trading signals (14 features) using accumulated OFI state
+    ///
+    /// # Arguments
+    ///
+    /// * `lob` - Current LOB state
+    /// * `ctx` - Signal context (timestamp, invalidity_delta)
+    /// * `output` - Output buffer (will be cleared and filled)
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if successful, `Err` if signals are disabled or extraction fails.
+    ///
+    /// # Contract
+    ///
+    /// The output buffer will contain exactly `feature_count()` features (98 for full config).
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let config = FeatureConfig::new(10)
+    ///     .with_derived(true)
+    ///     .with_mbo(true)
+    ///     .with_signals(true);
+    /// let mut extractor = FeatureExtractor::with_config(config);
+    ///
+    /// // Update OFI on every LOB transition
+    /// for lob_update in updates {
+    ///     extractor.update_ofi(&lob_update);
+    /// }
+    ///
+    /// // At sampling point, extract with signals
+    /// let ctx = SignalContext::new(timestamp_ns, invalidity_delta);
+    /// let mut output = Vec::new();
+    /// extractor.extract_with_signals(&lob, &ctx, &mut output)?;
+    /// assert_eq!(output.len(), 98);
+    /// ```
+    pub fn extract_with_signals(
+        &mut self,
+        lob: &LobState,
+        ctx: &signals::SignalContext,
+        output: &mut Vec<f64>,
+    ) -> Result<()> {
+        // Verify signals are enabled
+        if self.ofi_computer.is_none() {
+            return Err(mbo_lob_reconstructor::TlobError::generic(
+                "extract_with_signals() called but signals are disabled. \
+                 Enable signals in FeatureConfig with .with_signals(true)"
+            ));
+        }
+
+        // Extract base features
+        self.extract_into(lob, output)?;
+
+        // Sample OFI and compute signals
+        let ofi_computer = self.ofi_computer.as_mut().unwrap();
+        let ofi_sample = ofi_computer.sample_and_reset(ctx.timestamp_ns as i64);
+
+        // Compute book_valid from LOB state
+        let book_valid = signals::is_book_valid_from_lob(lob);
+
+        // Compute all 14 signals
+        let signal_vector = signals::compute_signals_with_book_valid(
+            output,
+            &ofi_sample,
+            ctx.timestamp_ns as i64,
+            ctx.invalidity_delta as u32,
+            book_valid,
+        );
+
+        // Append signals to output
+        output.extend_from_slice(&signal_vector.to_vec());
+
+        Ok(())
     }
 
     /// Extract features from a LOB state.
@@ -503,6 +706,10 @@ impl FeatureExtractor {
     ///
     /// # What gets reset:
     /// - MBO aggregator rolling windows and order tracker
+    /// - OFI computer (cumulative OFI, warmup counter)
+    ///
+    /// # What is preserved:
+    /// - Configuration (including tick_size)
     ///
     /// # When to call:
     /// - Before processing a new trading day
@@ -511,12 +718,18 @@ impl FeatureExtractor {
     pub fn reset(&mut self) {
         // Reset MBO aggregator if present
         if let Some(ref mut aggregator) = self.mbo_aggregator {
-            // Re-create the aggregator to clear all state
+            // Re-create the aggregator to clear all state, preserving tick_size from config
             *aggregator = mbo_features::MboAggregator::with_windows(
                 100,                         // fast window
                 self.config.mbo_window_size, // medium window
                 5000,                        // slow window
-            );
+            )
+            .with_tick_size(self.config.tick_size); // Preserve tick_size from config
+        }
+
+        // Reset OFI computer if present
+        if let Some(ref mut ofi) = self.ofi_computer {
+            ofi.reset_on_clear(); // Full reset including warmup counter
         }
     }
 

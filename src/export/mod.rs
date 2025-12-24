@@ -68,8 +68,8 @@ pub mod tensor_format;
 // Use dataset_config::SplitConfig for ratio-based splits
 pub use dataset_config::{
     DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo, ExportLabelConfig,
-    ExportSamplingConfig, ExportSequenceConfig, FeatureSetConfig, ProcessingConfig,
-    SamplingStrategyConfig, SymbolConfig,
+    ExportSamplingConfig, ExportSequenceConfig, ExportThresholdStrategy, FeatureSetConfig,
+    ProcessingConfig, SamplingStrategyConfig, SymbolConfig,
 };
 
 use crate::labeling::{LabelConfig, TlobLabelGenerator, TrendLabel};
@@ -223,6 +223,17 @@ pub struct ExportMetadata {
 }
 
 /// NumPy exporter - exports to .npy files for Python
+///
+/// # ⚠️ DEPRECATED - Use `AlignedBatchExporter` Instead
+///
+/// This exporter uses `PipelineOutput::to_flat_features()` which creates
+/// inflated, misaligned data. See `BatchExporter` deprecation notice for details.
+///
+/// For labeled exports, use `AlignedBatchExporter`.
+#[deprecated(
+    since = "0.9.0",
+    note = "Use AlignedBatchExporter for labeled exports with correct alignment."
+)]
 pub struct NumpyExporter {
     output_dir: PathBuf,
 }
@@ -416,6 +427,36 @@ pub struct BatchExportResult {
 }
 
 /// Batch exporter for processing multiple days
+///
+/// # ⚠️ DEPRECATED - Use `AlignedBatchExporter` Instead
+///
+/// This exporter uses `PipelineOutput::to_flat_features()` which causes:
+/// - **10x data inflation**: Each raw sample appears ~10 times due to overlapping sequences
+/// - **Label misalignment**: Labels are generated for raw samples, not sequence endpoints
+/// - **Broken model training**: Features and labels are not 1:1 aligned
+///
+/// ## Correct Usage
+///
+/// ```ignore
+/// use feature_extractor::AlignedBatchExporter;
+///
+/// let exporter = AlignedBatchExporter::new(
+///     output_dir,
+///     label_config,
+///     window_size,  // e.g., 100
+///     stride,       // e.g., 10
+/// );
+/// exporter.export_day("2025-02-03", &pipeline_output)?;
+/// ```
+///
+/// `AlignedBatchExporter` exports:
+/// - 3D sequences: `[n_sequences, window_size, n_features]`
+/// - 1D labels: `[n_sequences]` - one label per sequence, perfectly aligned
+/// - Comprehensive metadata with window_size, stride, and validation info
+#[deprecated(
+    since = "0.9.0",
+    note = "Use AlignedBatchExporter for correct feature-label alignment. See struct docs."
+)]
 pub struct BatchExporter {
     output_dir: PathBuf,
     label_config: Option<LabelConfig>,
@@ -1042,7 +1083,7 @@ mod tests {
             sample[94] = 1.0; // MBO_READY: all ready
             sample[95] = 0.01 * i as f64; // DT_SECONDS: varies (should normalize)
             sample[96] = 0.0; // INVALIDITY_DELTA: all clean
-            sample[97] = 2.0; // SCHEMA_VERSION: constant
+            sample[97] = 2.1; // SCHEMA_VERSION: constant (v2.1 after sign convention fix)
             features.push(sample);
         }
 
@@ -1080,10 +1121,10 @@ mod tests {
                 norm_sample[96]
             );
 
-            // SCHEMA_VERSION (97): Should still be 2.0
+            // SCHEMA_VERSION (97): Should still be 2.1
             assert!(
-                (norm_sample[97] - 2.0).abs() < 1e-10,
-                "SCHEMA_VERSION should be preserved at 2.0, got {}",
+                (norm_sample[97] - 2.1).abs() < 1e-10,
+                "SCHEMA_VERSION should be preserved at 2.1, got {}",
                 norm_sample[97]
             );
         }

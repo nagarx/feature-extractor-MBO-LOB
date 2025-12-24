@@ -1,14 +1,28 @@
-//! Multi-Symbol Dataset Export Tool
+//! Multi-Symbol Dataset Export Tool (Aligned)
 //!
-//! Configuration-driven, symbol-agnostic tool for exporting feature datasets.
+//! Configuration-driven, symbol-agnostic tool for exporting **aligned** feature datasets.
+//!
+//! # Key Feature: Correct Alignment
+//!
+//! This tool uses `AlignedBatchExporter` to ensure **perfect 1:1 alignment** between
+//! sequences and labels. Each exported sequence has exactly one corresponding label.
+//!
+//! ## Output Format
+//!
+//! - **Sequences**: `{day}_sequences.npy` - Shape `[N_sequences, window_size, n_features]`
+//! - **Labels**: `{day}_labels.npy` - Shape `[N_sequences]` - One label per sequence
+//! - **Metadata**: `{day}_metadata.json` - Comprehensive validation info
+//! - **Normalization**: `{day}_normalization.json` - Market-structure preserving params
 //!
 //! # Features
 //!
 //! - **Configuration-driven**: Load from TOML or command-line
-//! - **Symbol-agnostic**: Works for any instrument
+//! - **Symbol-agnostic**: Works for any instrument (NVDA, AAPL, MSFT, etc.)
 //! - **Flexible feature sets**: 40, 48, 84, or 98 features
 //! - **Parallel processing**: Multi-threaded batch processing
 //! - **Train/Val/Test splits**: Automatic chronological splitting
+//! - **Multi-horizon labels**: FI-2010, DeepLOB benchmark support (via config)
+//! - **Tensor formatting**: DeepLOB, HLOB, Image formats (via config)
 //!
 //! # Usage
 //!
@@ -26,9 +40,10 @@
 
 use feature_extractor::batch::{BatchConfig, BatchProcessor, ConsoleProgress, ErrorMode};
 use feature_extractor::export::{
-    BatchExporter, DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo,
+    DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo,
     ExportLabelConfig, SymbolConfig,
 };
+use feature_extractor::AlignedBatchExporter;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -93,6 +108,17 @@ For configuration options, see the generated sample config.
 
 /// Generate a sample configuration file
 fn generate_sample_config(path: &str) {
+    // Check if user wants multi-horizon example
+    let is_multi_horizon = path.contains("multi");
+
+    let label_config = if is_multi_horizon {
+        // Multi-horizon configuration (FI-2010 style)
+        ExportLabelConfig::multi(vec![10, 20, 50, 100, 200], 10, 0.0008)
+    } else {
+        // Single-horizon configuration (backward compatible)
+        ExportLabelConfig::single(50, 10, 0.0008)
+    };
+
     let sample_config = DatasetConfig::new(
         SymbolConfig::nasdaq("NVDA"),
         DataPathConfig::new(
@@ -102,17 +128,25 @@ fn generate_sample_config(path: &str) {
         DateRangeConfig::from_range("2025-02-03", "2025-09-29"),
     )
     .with_experiment(ExperimentInfo {
-        name: "NVDA 98-Feature Dataset".to_string(),
-        description: Some("Full feature set: LOB + Derived + MBO + Signals".to_string()),
+        name: if is_multi_horizon {
+            "NVDA Multi-Horizon Dataset".to_string()
+        } else {
+            "NVDA 98-Feature Dataset".to_string()
+        },
+        description: Some(if is_multi_horizon {
+            "Full features with multi-horizon labels: [10, 20, 50, 100, 200]".to_string()
+        } else {
+            "Full feature set: LOB + Derived + MBO + Signals".to_string()
+        }),
         version: "1.0.0".to_string(),
-        tags: vec!["nvda".to_string(), "98-features".to_string()],
+        tags: if is_multi_horizon {
+            vec!["nvda".to_string(), "multi-horizon".to_string()]
+        } else {
+            vec!["nvda".to_string(), "98-features".to_string()]
+        },
     })
     .with_full_features()
-    .with_labels(ExportLabelConfig {
-        horizon: 50,
-        smoothing_window: 10,
-        threshold: 0.0008,
-    });
+    .with_labels(label_config);
 
     match sample_config.save_toml(path) {
         Ok(()) => {
@@ -121,6 +155,11 @@ fn generate_sample_config(path: &str) {
             println!("  - data.input_dir: Path to raw MBO data files");
             println!("  - data.output_dir: Path for exported datasets");
             println!("  - dates.start_date/end_date: Date range to process");
+            if is_multi_horizon {
+                println!("\nMulti-horizon mode enabled:");
+                println!("  - labels.horizons: Prediction horizons (modify as needed)");
+                println!("  - Output labels shape: (N, num_horizons)");
+            }
         }
         Err(e) => {
             eprintln!("Error generating config: {}", e);
@@ -191,6 +230,35 @@ fn print_config_summary(config: &DatasetConfig) {
         config.features.include_signals
     );
     println!("│");
+    println!("│ Label Configuration:");
+    if config.labels.is_multi_horizon() {
+        println!(
+            "│   Mode:           Multi-horizon ({} horizons)",
+            config.labels.horizons.len()
+        );
+        println!(
+            "│   Horizons:       {:?}",
+            config.labels.horizons
+        );
+    } else {
+        println!(
+            "│   Mode:           Single-horizon"
+        );
+        println!(
+            "│   Horizon:        {}",
+            config.labels.horizon
+        );
+    }
+    println!(
+        "│   Smoothing:      {}",
+        config.labels.smoothing_window
+    );
+    println!(
+        "│   Threshold:      {} ({:.1} bps)",
+        config.labels.threshold,
+        config.labels.threshold * 10000.0
+    );
+    println!("│");
     println!("│ Input:      {}", config.data.input_dir.display());
     println!("│ Output:     {}", config.data.output_dir.display());
     println!("└────────────────────────────────────────────────────────────────┘");
@@ -251,8 +319,7 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
     ];
 
     let mut total_days_processed = 0;
-    let mut total_features_exported = 0;
-    let mut total_labels_exported = 0;
+    let mut total_sequences_exported = 0;
 
     for (split_name, split_dates) in splits.iter() {
         if split_dates.is_empty() {
@@ -330,17 +397,33 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
         }
 
         // Export results in chronological order for determinism
-        let exporter = BatchExporter::new(&split_output_dir, Some(config.labels.to_label_config()));
+        // Using AlignedBatchExporter for correct 1:1 sequence-label alignment
+        let base_exporter = AlignedBatchExporter::new(
+            &split_output_dir,
+            config.labels.to_label_config(),
+            pipeline_config.sequence.window_size,
+            pipeline_config.sequence.stride,
+        );
 
-        let mut split_features = 0;
-        let mut split_labels = 0;
+        // Enable multi-horizon labeling if configured
+        let exporter = if let Some(multi_config) = config.labels.to_multi_horizon_config() {
+            println!(
+                "    📊 Multi-horizon mode: {:?}",
+                multi_config.horizons()
+            );
+            base_exporter.with_multi_horizon_labels(multi_config)
+        } else {
+            base_exporter
+        };
+
+        let mut split_sequences = 0;
         let mut days_exported = Vec::new();
 
         for day_result in output.results_by_day() {
             let day_name = &day_result.day;
             let result = exporter.export_day(day_name, &day_result.output)?;
-            split_features += result.n_features;
-            split_labels += result.n_labels;
+            // AlignedDayExport has n_sequences (1:1 with labels)
+            split_sequences += result.n_sequences;
             days_exported.push(day_name.clone());
             total_days_processed += 1;
         }
@@ -355,12 +438,12 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
             .into());
         }
 
-        total_features_exported += split_features;
-        total_labels_exported += split_labels;
+        // For aligned export: sequences == labels (1:1)
+        total_sequences_exported += split_sequences;
 
         println!(
-            "  ✅ {} complete: {} features, {} labels",
-            split_name, split_features, split_labels
+            "  ✅ {} complete: {} sequences (aligned 1:1 with labels)",
+            split_name, split_sequences
         );
         println!();
     }
@@ -370,19 +453,47 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
 
     // Print summary
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║                     Export Complete                          ║");
+    println!("║              Aligned Export Complete                         ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
     println!(
         "║  Days processed: {:<44} ║",
         total_days_processed
     );
     println!(
-        "║  Features exported: {:<41} ║",
-        total_features_exported
+        "║  Sequences exported: {:<40} ║",
+        total_sequences_exported
+    );
+    if config.labels.is_multi_horizon() {
+        let horizons = &config.labels.horizons;
+        println!(
+            "║  Label mode: {:<48} ║",
+            format!("Multi-horizon ({} horizons)", horizons.len())
+        );
+        println!(
+            "║  Horizons: {:<50} ║",
+            format!("{:?}", horizons).chars().take(50).collect::<String>()
+        );
+        println!(
+            "║  Labels shape: {:<46} ║",
+            format!("[N, {}]", horizons.len())
+        );
+    } else {
+        println!(
+            "║  Label mode: {:<48} ║",
+            format!("Single-horizon (h={})", config.labels.horizon)
+        );
+        println!(
+            "║  Labels shape: {:<46} ║",
+            "[N]"
+        );
+    }
+    println!(
+        "║  Alignment: {:<49} ║",
+        "1:1 (sequence ↔ label)"
     );
     println!(
-        "║  Labels exported: {:<43} ║",
-        total_labels_exported
+        "║  Sequences format: {:<42} ║",
+        format!("[N, {}, {}]", pipeline_config.sequence.window_size, config.feature_count())
     );
     println!(
         "║  Output directory: {:<42} ║",

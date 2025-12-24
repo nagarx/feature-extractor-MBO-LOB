@@ -259,7 +259,7 @@ fn test_02_signal_bounds() {
         (Some(0.0), Some(1.0)),        // mbo_ready: {0, 1}
         (Some(0.0), None),             // dt_seconds: [0, ∞)
         (Some(0.0), None),             // invalidity_delta: [0, ∞)
-        (Some(2.0), Some(2.0)),        // schema_version: exactly 2.0
+        (Some(2.1), Some(2.1)),        // schema_version: exactly 2.1
     ];
 
     println!("{:<25} {:>12} {:>12} {:>12} {:>12}", "Signal", "Min", "Max", "Mean", "StdDev");
@@ -644,18 +644,18 @@ fn test_07_schema_version() {
 
     for (i, signals) in all_signals.iter().enumerate() {
         let version = signals[13]; // schema_version at index 13
-        if (version - 2.0).abs() > 0.001 {
+        if (version - 2.1).abs() > 0.001 {
             eprintln!("Sample {} has schema_version = {}", i, version);
             all_version_2 = false;
         }
     }
 
     println!("Schema Version Check:");
-    println!("  Expected: 2.0");
+    println!("  Expected: 2.1");
     println!("  Samples checked: {}", all_signals.len());
-    println!("  All v2.0: {}", if all_version_2 { "✓" } else { "✗" });
+    println!("  All v2.1: {}", if all_version_2 { "✓" } else { "✗" });
 
-    assert!(all_version_2, "All samples must have schema_version = 2.0");
+    assert!(all_version_2, "All samples must have schema_version = 2.1");
 
     println!("\n✅ PASSED: Schema version validated");
 }

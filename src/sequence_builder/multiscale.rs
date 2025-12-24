@@ -305,6 +305,15 @@ pub struct MultiScaleWindow {
 
     /// Number of features per snapshot
     feature_count: usize,
+
+    /// Accumulated fast sequences (streaming mode)
+    accumulated_fast: Vec<Sequence>,
+
+    /// Accumulated medium sequences (streaming mode)
+    accumulated_medium: Vec<Sequence>,
+
+    /// Accumulated slow sequences (streaming mode)
+    accumulated_slow: Vec<Sequence>,
 }
 
 impl MultiScaleWindow {
@@ -350,6 +359,9 @@ impl MultiScaleWindow {
             slow_counter: 0,
             total_events: 0,
             feature_count,
+            accumulated_fast: Vec::new(),
+            accumulated_medium: Vec::new(),
+            accumulated_slow: Vec::new(),
         }
     }
 
@@ -446,6 +458,10 @@ impl MultiScaleWindow {
         if self.fast_counter % self.config.fast.decimation == 0 {
             // Clone Arc (8 bytes) not Vec (672 bytes)
             let _ = self.fast_builder.push_arc(timestamp, features.clone());
+            // STREAMING FIX: Try to build sequence immediately after push
+            if let Some(seq) = self.fast_builder.try_build_sequence() {
+                self.accumulated_fast.push(seq);
+            }
         }
 
         // Medium scale: increment and check decimation
@@ -453,6 +469,10 @@ impl MultiScaleWindow {
         if self.medium_counter % self.config.medium.decimation == 0 {
             // Clone Arc (8 bytes) not Vec (672 bytes)
             let _ = self.medium_builder.push_arc(timestamp, features.clone());
+            // STREAMING FIX: Try to build sequence immediately after push
+            if let Some(seq) = self.medium_builder.try_build_sequence() {
+                self.accumulated_medium.push(seq);
+            }
         }
 
         // Slow scale: increment and check decimation
@@ -460,6 +480,10 @@ impl MultiScaleWindow {
         if self.slow_counter % self.config.slow.decimation == 0 {
             // Move Arc (no clone needed for last consumer)
             let _ = self.slow_builder.push_arc(timestamp, features);
+            // STREAMING FIX: Try to build sequence immediately after push
+            if let Some(seq) = self.slow_builder.try_build_sequence() {
+                self.accumulated_slow.push(seq);
+            }
         }
     }
 
@@ -488,17 +512,34 @@ impl MultiScaleWindow {
     /// }
     /// ```
     pub fn try_build_all(&mut self) -> Option<MultiScaleSequence> {
-        // Try to build from each scale
-        let fast = self.fast_builder.try_build_sequence()?;
-        let medium = self.medium_builder.try_build_sequence()?;
-        let slow = self.slow_builder.try_build_sequence()?;
+        // STREAMING FIX: Return ALL accumulated sequences from streaming mode,
+        // plus any final sequences that can be built from remaining buffer data.
+        
+        // Try to build any remaining sequences from buffers
+        if let Some(seq) = self.fast_builder.try_build_sequence() {
+            self.accumulated_fast.push(seq);
+        }
+        if let Some(seq) = self.medium_builder.try_build_sequence() {
+            self.accumulated_medium.push(seq);
+        }
+        if let Some(seq) = self.slow_builder.try_build_sequence() {
+            self.accumulated_slow.push(seq);
+        }
 
-        Some(MultiScaleSequence::new(
-            vec![fast],
-            vec![medium],
-            vec![slow],
-            self.total_events,
-        ))
+        // Return None if no sequences were built at any scale
+        if self.accumulated_fast.is_empty()
+            && self.accumulated_medium.is_empty()
+            && self.accumulated_slow.is_empty()
+        {
+            return None;
+        }
+
+        // Take ownership of accumulated sequences
+        let fast = std::mem::take(&mut self.accumulated_fast);
+        let medium = std::mem::take(&mut self.accumulated_medium);
+        let slow = std::mem::take(&mut self.accumulated_slow);
+
+        Some(MultiScaleSequence::new(fast, medium, slow, self.total_events))
     }
 
     /// Get the number of events in each scale's buffer.
@@ -547,10 +588,59 @@ impl MultiScaleWindow {
         (self.fast_counter, self.medium_counter, self.slow_counter)
     }
 
+    /// Get the number of accumulated sequences for each scale.
+    ///
+    /// Returns (fast_count, medium_count, slow_count).
+    ///
+    /// Accumulated sequences are built during `push_arc()` calls and
+    /// consumed by `try_build_all()`. This method is useful for:
+    /// - Monitoring streaming progress
+    /// - Verifying reset clears all state
+    /// - Debugging sequence generation
+    pub fn accumulated_counts(&self) -> (usize, usize, usize) {
+        (
+            self.accumulated_fast.len(),
+            self.accumulated_medium.len(),
+            self.accumulated_slow.len(),
+        )
+    }
+
     /// Reset all scales and counters.
     ///
-    /// Clears all buffers and resets decimation counters.
+    /// Clears ALL state to prepare for processing a new data segment (e.g., new day).
+    /// After reset, the window behaves identically to a newly constructed instance.
+    ///
+    /// # What gets reset:
+    ///
+    /// - **Builders**: All three SequenceBuilder instances are recreated (clears internal buffers)
+    /// - **Decimation counters**: Reset to 0
+    /// - **Event counter**: Reset to 0
+    /// - **Accumulated sequences**: All accumulated sequences are cleared (CRITICAL for day boundaries)
+    ///
+    /// # Why this matters:
+    ///
+    /// In multi-day processing, calling reset() between days prevents state leakage.
+    /// Without clearing accumulated sequences, sequences from Day 1 would leak into
+    /// Day 2's output if try_build_all() wasn't called before reset().
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::sequence_builder::{MultiScaleWindow, MultiScaleConfig};
+    ///
+    /// let mut window = MultiScaleWindow::new(MultiScaleConfig::default(), 40);
+    ///
+    /// // Process Day 1 data...
+    /// // window.push_arc(...);
+    ///
+    /// // Reset for Day 2 (clears ALL state including accumulated sequences)
+    /// window.reset();
+    ///
+    /// // Process Day 2 data with clean state
+    /// // window.push_arc(...);
+    /// ```
     pub fn reset(&mut self) {
+        // Recreate builders to clear their internal buffers
         self.fast_builder = SequenceBuilder::with_config(
             SequenceConfig::new(self.config.fast.window_size, self.config.fast.stride)
                 .with_feature_count(self.feature_count),
@@ -564,10 +654,21 @@ impl MultiScaleWindow {
                 .with_feature_count(self.feature_count),
         );
 
+        // Reset decimation counters
         self.fast_counter = 0;
         self.medium_counter = 0;
         self.slow_counter = 0;
+
+        // Reset event counter
         self.total_events = 0;
+
+        // CRITICAL: Clear accumulated sequences to prevent cross-day leakage
+        // This was missing in the original implementation, causing sequences from
+        // previous processing runs to leak into subsequent runs if try_build_all()
+        // was not called before reset().
+        self.accumulated_fast.clear();
+        self.accumulated_medium.clear();
+        self.accumulated_slow.clear();
     }
 }
 
@@ -742,10 +843,26 @@ mod tests {
         let ms = multiscale.unwrap();
         assert_eq!(ms.total_events(), 4000);
 
+        // STREAMING FIX: Now produces MANY sequences per scale, not just 1
         let (fast_count, medium_count, slow_count) = ms.sequence_counts();
-        assert_eq!(fast_count, 1);
-        assert_eq!(medium_count, 1);
-        assert_eq!(slow_count, 1);
+        // Fast scale: 4000 events, window=100, stride=1 → ~3900 sequences
+        assert!(
+            fast_count > 100,
+            "Fast scale should produce many sequences: {}",
+            fast_count
+        );
+        // Medium scale: 4000/2=2000 events, window=500, stride=1 → ~1500 sequences
+        assert!(
+            medium_count > 100,
+            "Medium scale should produce many sequences: {}",
+            medium_count
+        );
+        // Slow scale: 4000/4=1000 events, window=1000, stride=1 → 1 sequence
+        assert!(
+            slow_count >= 1,
+            "Slow scale should produce at least 1 sequence: {}",
+            slow_count
+        );
     }
 
     #[test]
@@ -784,22 +901,24 @@ mod tests {
         let config = MultiScaleConfig::default();
         let mut window = MultiScaleWindow::new(config, 4);
 
-        // Push events with specific timestamps
-        for i in 0..100 {
+        // Push enough events for all scales (need 4000 for slow scale with decimation)
+        for i in 0..4000 {
             let ts = (i * 1000) as u64;
             window.push(ts, vec![i as f64; 4]);
         }
 
-        if let Some(ms) = window.try_build_all() {
-            // All scales should have sequences
-            assert!(!ms.fast().is_empty());
-            assert!(!ms.medium().is_empty());
-            assert!(!ms.slow().is_empty());
+        let ms = window.try_build_all();
+        assert!(ms.is_some(), "Should produce sequences with 4000 events");
+        
+        let ms = ms.unwrap();
+        // All scales should have sequences
+        assert!(!ms.fast().is_empty(), "Fast scale should have sequences");
+        assert!(!ms.medium().is_empty(), "Medium scale should have sequences");
+        assert!(!ms.slow().is_empty(), "Slow scale should have sequences");
 
-            // Check first timestamp is correct
-            let fast_ts = ms.fast()[0].start_timestamp;
-            assert_eq!(fast_ts, 0);
-        }
+        // Check first timestamp is correct
+        let fast_ts = ms.fast()[0].start_timestamp;
+        assert_eq!(fast_ts, 0);
     }
 
     #[test]
@@ -879,16 +998,16 @@ mod tests {
 
         let ms = window.try_build_all().unwrap();
 
-        // Test accessors
-        assert_eq!(ms.fast().len(), 1);
-        assert_eq!(ms.medium().len(), 1);
-        assert_eq!(ms.slow().len(), 1);
+        // STREAMING FIX: Now produces MANY sequences per scale
+        assert!(ms.fast().len() > 100, "Fast should have many sequences");
+        assert!(ms.medium().len() > 100, "Medium should have many sequences");
+        assert!(ms.slow().len() >= 1, "Slow should have at least 1 sequence");
         assert_eq!(ms.total_events(), 4000);
 
         let (f, m, s) = ms.sequence_counts();
-        assert_eq!(f, 1);
-        assert_eq!(m, 1);
-        assert_eq!(s, 1);
+        assert!(f > 100);
+        assert!(m > 100);
+        assert!(s >= 1);
     }
 
     // ========================================================================
@@ -1040,9 +1159,9 @@ mod tests {
 
         // Different decimation rates
         let config = MultiScaleConfig::new(
-            ScaleConfig::new(3, 1, 1), // Fast: every event
-            ScaleConfig::new(3, 2, 1), // Medium: every 2nd
-            ScaleConfig::new(3, 4, 1), // Slow: every 4th
+            ScaleConfig::new(3, 1, 1), // Fast: window 3, decimation 1
+            ScaleConfig::new(3, 2, 1), // Medium: window 3, decimation 2
+            ScaleConfig::new(3, 4, 1), // Slow: window 3, decimation 4
         );
 
         let mut window = MultiScaleWindow::new(config, 3);
@@ -1052,25 +1171,41 @@ mod tests {
             window.push_arc(i as u64 * 1000, Arc::new(vec![i as f64; 3]));
         }
 
-        let (fast, medium, slow) = window.buffer_counts();
-        assert_eq!(fast, 12); // All 12
-        assert_eq!(medium, 6); // 12/2 = 6
-        assert_eq!(slow, 3); // 12/4 = 3
-
-        // Build and verify
+        // STREAMING FIX: Buffer counts are now reduced because sequences are built during push
+        // After push, buffers only contain what hasn't been consumed
+        // With stride=1 and window=3, buffer length stays at 3 (ring buffer)
+        
+        // Build and verify - now we get MULTIPLE sequences per scale
         let ms = window.try_build_all().unwrap();
 
-        // Fast should have values 9, 10, 11 (last 3)
-        assert_eq!(ms.fast()[0].features[0][0], 9.0);
-        assert_eq!(ms.fast()[0].features[2][0], 11.0);
+        // Fast: 12 events, window 3, stride 1 → 10 sequences (after first 3 events, then 9 more)
+        assert!(
+            ms.fast().len() >= 9,
+            "Fast should have many sequences: {}",
+            ms.fast().len()
+        );
+        // Last sequence should have last 3 events: values 9, 10, 11
+        let last_fast = ms.fast().last().unwrap();
+        assert_eq!(last_fast.features[2][0], 11.0);
 
-        // Medium should have values 6, 8, 10 (every 2nd, last 3)
-        // Actually, medium samples events 1,3,5,7,9,11 (2nd, 4th, 6th...)
-        // So last 3 are 7, 9, 11
-        assert_eq!(ms.medium()[0].features[2][0], 11.0);
+        // Medium: 6 effective events, window 3, stride 1 → 4 sequences
+        assert!(
+            ms.medium().len() >= 3,
+            "Medium should have multiple sequences: {}",
+            ms.medium().len()
+        );
+        // Last sequence last value should be 11 (the 12th raw event, 6th medium event)
+        let last_medium = ms.medium().last().unwrap();
+        assert_eq!(last_medium.features[2][0], 11.0);
 
-        // Slow samples events 3,7,11 (4th, 8th, 12th)
-        // So we have 3, 7, 11
-        assert_eq!(ms.slow()[0].features[2][0], 11.0);
+        // Slow: 3 effective events, window 3, stride 1 → 1 sequence
+        assert!(
+            ms.slow().len() >= 1,
+            "Slow should have at least 1 sequence: {}",
+            ms.slow().len()
+        );
+        // Slow samples events 3,7,11 (indices 0, 1, 2 in slow builder)
+        let last_slow = ms.slow().last().unwrap();
+        assert_eq!(last_slow.features[2][0], 11.0);
     }
 }

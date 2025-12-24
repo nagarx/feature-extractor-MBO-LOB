@@ -1,7 +1,11 @@
-# NVDA 98-Feature Full Dataset Configuration (Schema 2.1)
+# NVDA Multi-Horizon Dataset Configuration (Schema 2.1)
 # 
-# Full dataset export covering Feb 2025 to Sept 2025 (~165 trading days)
-# Optimized for SHORT-TERM OPTIONS TRADING (1-2 minute prediction horizon)
+# Multi-horizon export for analyzing signal decay across prediction horizons.
+# Useful for:
+#   - Understanding which signals are predictive at short vs long horizons
+#   - Comparing signal strength decay characteristics
+#   - Selecting optimal horizons for different trading strategies
+#   - Benchmarking against FI-2010 and DeepLOB papers
 #
 # PREREQUISITE: Decompress all files to hot store first:
 #   cd MBO-LOB-reconstructor
@@ -11,13 +15,13 @@
 #
 # Usage:
 #   cd feature-extractor-MBO-LOB
-#   cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_98feat_full.toml
+#   cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_multi_horizon.toml
 
 [experiment]
-name = "NVDA 98-Feature Full Dataset v2.1"
-description = "Full 8-month dataset for short-term options trading (1-2 min horizon)"
+name = "NVDA Multi-Horizon Dataset v2.1"
+description = "Multi-horizon labels [10, 20, 50, 100, 200] for signal decay analysis"
 version = "2.1.0"
-tags = ["nvda", "98-features", "full", "signals", "8-months", "options", "short-term"]
+tags = ["nvda", "98-features", "multi-horizon", "signal-analysis", "decay-study"]
 
 [symbol]
 name = "NVDA"
@@ -28,7 +32,7 @@ tick_size = 0.01
 [data]
 # Paths relative to feature-extractor-MBO-LOB directory
 input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
-output_dir = "../data/exports/nvda_98feat_full"
+output_dir = "../data/exports/nvda_multi_horizon"
 
 # Hot store for ~30% faster processing (REQUIRED for efficient processing)
 hot_store_dir = "../data/hot_store"
@@ -66,12 +70,20 @@ stride = 10              # 90% overlap between sequences
 max_buffer_size = 50000  # Memory limit
 
 [labels]
-# Short-term options trading: predict 1-2 minutes ahead
-# With event_count=1000, each sample ≈ 0.1-0.5s during active trading
-# horizon=200 ≈ 20-100 seconds ahead (adjustable based on empirical analysis)
-horizon = 200            # Predict ~1-2 minutes ahead
-smoothing_window = 20    # Smooth over 20 prices (reduce noise)
-threshold = 0.001        # 10 bps threshold (higher for options sensitivity)
+# Multi-horizon configuration for signal decay analysis
+#
+# With event_count=1000, each sample ≈ 0.1-0.5s during active trading:
+#   - horizon=10   ≈ 1-5 seconds ahead (ultra-short-term)
+#   - horizon=20   ≈ 2-10 seconds ahead (short-term HFT)
+#   - horizon=50   ≈ 5-25 seconds ahead (short-term)
+#   - horizon=100  ≈ 10-50 seconds ahead (medium-term)
+#   - horizon=200  ≈ 20-100 seconds ahead (medium-term options)
+#
+# Output: labels.npy shape = [N_sequences, 5] (one label per horizon)
+#
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10    # Smooth over 10 prices (reduce noise)
+threshold = 0.001        # 10 bps threshold
 
 [split]
 # Temporal split: first 70% train, next 15% val, last 15% test

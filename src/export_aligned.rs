@@ -1593,6 +1593,19 @@ impl AlignedBatchExporter {
                     norm_timestep.push(norm_value);
                 }
 
+                // CRITICAL FIX: Copy remaining features (40+) as-is
+                // These include:
+                // - Derived features (40-47): already in appropriate ranges
+                // - MBO features (48-83): pre-normalized or ratio-based
+                // - Signal features (84-97): includes categoricals that MUST NOT be normalized
+                //   (book_valid, time_regime, mbo_ready, schema_version)
+                //
+                // The model architecture handles feature scaling internally, and
+                // normalizing categorical features would destroy their semantics.
+                for i in 40..n_features {
+                    norm_timestep.push(timestep[i]);
+                }
+
                 norm_seq.push(norm_timestep);
             }
             normalized.push(norm_seq);

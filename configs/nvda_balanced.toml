@@ -1,0 +1,130 @@
+# NVDA Balanced Classes Dataset Configuration (Schema 2.2)
+#
+# This configuration uses Quantile-based threshold strategy to ensure
+# balanced class distribution regardless of NVDA's high volatility.
+#
+# Key difference from nvda_multi_horizon.toml:
+# - Uses adaptive quantile-based thresholds instead of fixed 0.001 (10 bps)
+# - Ensures ~33% Up, ~33% Down, ~34% Stable distribution
+# - Better for training models (avoids class imbalance)
+#
+# For NVIDIA specifically:
+# - High volatility = small fixed thresholds cause severe imbalance (90% Stable)
+# - Quantile strategy adapts to actual price movement distribution
+# - Produces more balanced training data for better model learning
+#
+# PREREQUISITE: Decompress all files to hot store first:
+#   cd MBO-LOB-reconstructor
+#   cargo run --release --bin decompress_to_hot_store -- \
+#       --input ../data/NVDA_2025-02-01_to_2025-09-30 \
+#       --output ../data/hot_store
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_balanced.toml
+
+[experiment]
+name = "NVDA Balanced Classes Dataset v2.2"
+description = "Multi-horizon labels with quantile-based thresholds for balanced classes"
+version = "2.2.0"
+tags = ["nvda", "98-features", "multi-horizon", "balanced-classes", "quantile-threshold"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+# Paths relative to feature-extractor-MBO-LOB directory
+input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "../data/exports/nvda_balanced"
+
+# Hot store for ~30% faster processing (REQUIRED for efficient processing)
+hot_store_dir = "../data/hot_store"
+
+[dates]
+# Full date range: Feb 3, 2025 to Sept 29, 2025
+# Weekends are automatically excluded (~165 trading days)
+start_date = "2025-02-03"
+end_date = "2025-09-29"
+
+# US market holidays to exclude (2025)
+exclude_dates = [
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+]
+
+[features]
+lob_levels = 10          # 10 levels × 4 = 40 base features
+include_derived = true   # +8 features
+include_mbo = true       # +36 MBO features
+include_signals = true   # +14 trading signals
+mbo_window_size = 1000   # Rolling statistics window
+
+[sampling]
+strategy = "event_based"
+event_count = 1000       # Sample every 1000 events
+
+[sequence]
+window_size = 100        # 100 snapshots per sequence
+stride = 10              # 90% overlap between sequences
+max_buffer_size = 50000  # Memory limit
+
+[labels]
+# Multi-horizon configuration for signal decay analysis
+#
+# With event_count=1000, each sample ≈ 0.1-0.5s during active trading:
+#   - horizon=10   ≈ 1-5 seconds ahead (ultra-short-term)
+#   - horizon=20   ≈ 2-10 seconds ahead (short-term HFT)
+#   - horizon=50   ≈ 5-25 seconds ahead (short-term)
+#   - horizon=100  ≈ 10-50 seconds ahead (medium-term)
+#   - horizon=200  ≈ 20-100 seconds ahead (medium-term options)
+#
+# Output: labels.npy shape = [N_sequences, 5] (one label per horizon)
+#
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10    # Smooth over 10 prices (reduce noise)
+
+# Legacy threshold (used as fallback for backward compatibility)
+threshold = 0.0008       # 8 bps fallback
+
+# Quantile-based threshold strategy for balanced class distribution
+#
+# This strategy ensures roughly equal Up/Down/Stable proportions
+# by computing thresholds from the rolling distribution of price changes.
+#
+# Parameters:
+#   - target_proportion: Target proportion for each of Up and Down
+#     - 0.33 means ~33% Up, ~33% Down, ~34% Stable
+#     - Adjust based on desired class balance
+#   - window_size: Rolling window for quantile computation
+#     - Larger window = more stable thresholds, slower adaptation
+#     - 5000 samples ≈ 25-50 minutes of trading at 1000 events/sample
+#   - fallback: Used when insufficient data for quantile computation
+#
+# Why Quantile for NVDA?
+#   NVDA is highly volatile. A fixed threshold of 10 bps creates severe
+#   class imbalance (~90% Stable). Quantile adapts to actual price movements,
+#   producing balanced training data for better model learning.
+[labels.threshold_strategy]
+type = "quantile"
+target_proportion = 0.33  # ~33% Up, ~33% Down, ~34% Stable
+window_size = 5000        # Rolling window for quantile computation
+fallback = 0.0008         # Fallback when insufficient data
+
+[split]
+# Temporal split: first 70% train, next 15% val, last 15% test
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+# Parallel processing - let Rayon auto-detect optimal thread count
+error_mode = "collect_errors"  # Continue on errors, report at end
+verbose = true  # Show progress for each day processed
+

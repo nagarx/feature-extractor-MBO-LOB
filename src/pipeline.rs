@@ -147,8 +147,32 @@ impl PipelineOutput {
     /// Get features as flat 2D array for export
     /// Returns [N_samples, N_features] where N_samples = sum of all sequence lengths
     ///
-    /// Note: This creates deep copies of the feature vectors. For performance-critical
-    /// code, consider working with the `Arc<Vec<f64>>` references in seq.features directly.
+    /// # ⚠️ DEPRECATED - DO NOT USE FOR LABELED EXPORTS
+    ///
+    /// This method exports EVERY sample from EVERY overlapping sequence, causing:
+    /// - **10x data inflation**: Each raw sample appears ~10 times (stride=10, window=100)
+    /// - **Label misalignment**: Labels are for raw samples, not flattened sequence samples
+    /// - **Broken training**: Models trained on this data will not generalize
+    ///
+    /// ## Use Instead
+    ///
+    /// For labeled exports with correct 1:1 alignment, use `AlignedBatchExporter`:
+    /// ```ignore
+    /// use feature_extractor::AlignedBatchExporter;
+    /// let exporter = AlignedBatchExporter::new(output_dir, label_config, window_size, stride);
+    /// exporter.export_day("2025-02-03", &pipeline_output)?;
+    /// ```
+    ///
+    /// ## Valid Use Cases
+    ///
+    /// This method is only valid for:
+    /// - Raw feature visualization (no labels)
+    /// - Debugging/inspection
+    /// - Legacy compatibility (not recommended)
+    #[deprecated(
+        since = "0.9.0",
+        note = "Use AlignedBatchExporter for labeled exports. See method docs for details."
+    )]
     pub fn to_flat_features(&self) -> Vec<Vec<f64>> {
         let mut flat = Vec::new();
         for seq in &self.sequences {

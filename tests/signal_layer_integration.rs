@@ -259,10 +259,10 @@ fn test_signal_values_in_expected_ranges() {
                 assert!(min >= 0.0, "invalidity_delta negative: {}", min);
             }
             13 => {
-                // schema_version should be 2.0
+                // schema_version should be 2.1
                 assert!(
-                    (min - 2.0).abs() < 0.001 && (max - 2.0).abs() < 0.001,
-                    "schema_version should be 2.0: [{}, {}]",
+                    (min - 2.1).abs() < 0.001 && (max - 2.1).abs() < 0.001,
+                    "schema_version should be 2.1: [{}, {}]",
                     min,
                     max
                 );

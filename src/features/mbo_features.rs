@@ -561,11 +561,29 @@ pub struct MboAggregator {
 
     /// Total message count processed
     message_count: u64,
+
+    /// Tick size in nanodollars for depth calculations.
+    ///
+    /// Default: 10_000_000 ($0.01 for US equities)
+    /// 
+    /// This is used by `depth_ticks_bid` and `depth_ticks_ask` to convert
+    /// price distances into tick units. Different instruments have different
+    /// tick sizes:
+    /// - US equities: $0.01 = 10_000_000 nanodollars
+    /// - Crypto: $0.001 = 1_000_000 nanodollars  
+    /// - Forex: $0.0001 = 100_000 nanodollars
+    /// - Some futures: $1.00 = 1_000_000_000 nanodollars
+    tick_size_nanodollars: i64,
 }
+
+/// Default tick size in nanodollars: $0.01 for US equities
+const DEFAULT_TICK_SIZE_NANODOLLARS: i64 = 10_000_000;
 
 impl MboAggregator {
     /// Create a new MBO aggregator with default window sizes.
     ///
+    /// Default tick size is $0.01 (US equity standard).
+    /// Use `with_tick_size()` to set a different tick size for other instruments.
     /// Queue position tracking is disabled by default for performance.
     /// Use `with_queue_tracking()` to enable it.
     pub fn new() -> Self {
@@ -576,10 +594,13 @@ impl MboAggregator {
             order_tracker: AHashMap::new(),
             queue_tracker: None,
             message_count: 0,
+            tick_size_nanodollars: DEFAULT_TICK_SIZE_NANODOLLARS,
         }
     }
 
     /// Create aggregator with custom window sizes.
+    ///
+    /// Default tick size is $0.01. Use `with_tick_size()` to customize.
     pub fn with_windows(fast_size: usize, medium_size: usize, slow_size: usize) -> Self {
         Self {
             fast_window: MboWindow::new(fast_size),
@@ -588,7 +609,53 @@ impl MboAggregator {
             order_tracker: AHashMap::new(),
             queue_tracker: None,
             message_count: 0,
+            tick_size_nanodollars: DEFAULT_TICK_SIZE_NANODOLLARS,
         }
+    }
+    
+    /// Set the tick size for depth calculations.
+    ///
+    /// The tick size is specified in **dollars** and is converted to nanodollars
+    /// internally. This affects `depth_ticks_bid` and `depth_ticks_ask` features.
+    ///
+    /// # Arguments
+    /// * `tick_size_dollars` - Tick size in dollars (e.g., 0.01 for US equities)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // US equity: $0.01 tick (default)
+    /// let aggregator = MboAggregator::new(); // Uses $0.01 by default
+    ///
+    /// // Crypto: $0.001 tick
+    /// let aggregator = MboAggregator::new().with_tick_size(0.001);
+    ///
+    /// // Forex: $0.0001 tick (pip)
+    /// let aggregator = MboAggregator::new().with_tick_size(0.0001);
+    ///
+    /// // Futures: $1.00 tick
+    /// let aggregator = MboAggregator::new().with_tick_size(1.0);
+    /// ```
+    ///
+    /// # Panics
+    /// Panics if tick_size_dollars is <= 0.
+    pub fn with_tick_size(mut self, tick_size_dollars: f64) -> Self {
+        assert!(
+            tick_size_dollars > 0.0,
+            "tick_size must be positive, got {}",
+            tick_size_dollars
+        );
+        // Convert dollars to nanodollars: 1 dollar = 1e9 nanodollars
+        self.tick_size_nanodollars = (tick_size_dollars * 1e9) as i64;
+        self
+    }
+    
+    /// Get the current tick size in nanodollars.
+    ///
+    /// Useful for debugging and testing.
+    #[inline]
+    pub fn tick_size_nanodollars(&self) -> i64 {
+        self.tick_size_nanodollars
     }
 
     /// Enable queue position tracking for accurate queue metrics.
@@ -798,16 +865,44 @@ impl MboAggregator {
         net as f64 / (total + 1e-8)
     }
 
+    /// Net cancel flow: ratio of seller vs buyer order cancellations.
+    ///
+    /// Formula: (cancel_count_ask - cancel_count_bid) / total
+    ///
+    /// Interpretation:
+    /// - Bid cancel = buyer pulling their order = less buying support = BEARISH
+    /// - Ask cancel = seller pulling their order = less selling pressure = BULLISH
+    ///
+    /// Sign convention (RULE.md §9):
+    /// - `> 0`: More ask cancels (sellers pulling) = reduced supply = BULLISH
+    /// - `< 0`: More bid cancels (buyers pulling) = reduced demand = BEARISH
+    /// - `= 0`: Balanced cancellation activity
     #[inline]
     fn net_cancel_flow(&self, w: &MboWindow) -> f64 {
-        let net = (w.cancel_count_bid as i64) - (w.cancel_count_ask as i64);
+        // CORRECT: (ask - bid) to follow > 0 = BULLISH convention
+        // cancel_count_ask = sellers pulling, cancel_count_bid = buyers pulling
+        let net = (w.cancel_count_ask as i64) - (w.cancel_count_bid as i64);
         let total = (w.cancel_count_bid + w.cancel_count_ask) as f64;
         net as f64 / (total + 1e-8)
     }
 
+    /// Net trade flow: ratio of aggressive buying vs selling.
+    ///
+    /// Formula: (trade_count_ask - trade_count_bid) / total
+    ///
+    /// In MBO data:
+    /// - Trade with Side::Bid = bid was HIT = seller aggressed = SELL-initiated
+    /// - Trade with Side::Ask = ask was HIT = buyer aggressed = BUY-initiated
+    ///
+    /// Sign convention (RULE.md §9):
+    /// - `> 0`: More BUY-initiated trades (buyers hitting asks) = BULLISH
+    /// - `< 0`: More SELL-initiated trades (sellers hitting bids) = BEARISH
+    /// - `= 0`: Balanced trading pressure
     #[inline]
     fn net_trade_flow(&self, w: &MboWindow) -> f64 {
-        let net = (w.trade_count_bid as i64) - (w.trade_count_ask as i64);
+        // CORRECT: (ask - bid) to follow > 0 = BULLISH convention
+        // trade_count_ask = BUY-initiated, trade_count_bid = SELL-initiated
+        let net = (w.trade_count_ask as i64) - (w.trade_count_bid as i64);
         let total = (w.trade_count_bid + w.trade_count_ask) as f64;
         net as f64 / (total + 1e-8)
     }
@@ -1157,12 +1252,13 @@ impl MboAggregator {
     /// - Average depth in ticks (0.0 if no volume)
     /// - Higher values indicate liquidity is further from best price
     ///
-    /// # Note
-    /// Uses standard US equity tick size of $0.01 (10_000_000 nanodollars).
-    /// For instruments with different tick sizes, this should be adjusted.
+    /// # Tick Size
+    /// Uses the tick size configured via `with_tick_size()` (default: $0.01).
+    /// This ensures correct depth measurements for different instrument types:
+    /// - US equities: $0.01
+    /// - Crypto: $0.001
+    /// - Forex: $0.0001
     fn depth_ticks_bid(&self, lob: &LobState) -> f64 {
-        const TICK_SIZE_NANODOLLARS: i64 = 10_000_000; // $0.01
-
         let best_bid = match lob.best_bid {
             Some(p) if p > 0 => p,
             _ => return 0.0,
@@ -1178,7 +1274,7 @@ impl MboAggregator {
             if price > 0 && size > 0 {
                 // Distance in ticks: (best_bid - this_price) / tick_size
                 // Bid prices decrease from best (index 0) to deeper levels
-                let distance_ticks = (best_bid - price) / TICK_SIZE_NANODOLLARS;
+                let distance_ticks = (best_bid - price) / self.tick_size_nanodollars;
                 weighted_depth += size as f64 * distance_ticks as f64;
                 total_volume += size;
             }
@@ -1200,12 +1296,13 @@ impl MboAggregator {
     /// - Average depth in ticks (0.0 if no volume)
     /// - Higher values indicate liquidity is further from best price
     ///
-    /// # Note
-    /// Uses standard US equity tick size of $0.01 (10_000_000 nanodollars).
-    /// For instruments with different tick sizes, this should be adjusted.
+    /// # Tick Size
+    /// Uses the tick size configured via `with_tick_size()` (default: $0.01).
+    /// This ensures correct depth measurements for different instrument types:
+    /// - US equities: $0.01
+    /// - Crypto: $0.001
+    /// - Forex: $0.0001
     fn depth_ticks_ask(&self, lob: &LobState) -> f64 {
-        const TICK_SIZE_NANODOLLARS: i64 = 10_000_000; // $0.01
-
         let best_ask = match lob.best_ask {
             Some(p) if p > 0 => p,
             _ => return 0.0,
@@ -1221,7 +1318,7 @@ impl MboAggregator {
             if price > 0 && size > 0 {
                 // Distance in ticks: (this_price - best_ask) / tick_size
                 // Ask prices increase from best (index 0) to deeper levels
-                let distance_ticks = (price - best_ask) / TICK_SIZE_NANODOLLARS;
+                let distance_ticks = (price - best_ask) / self.tick_size_nanodollars;
                 weighted_depth += size as f64 * distance_ticks as f64;
                 total_volume += size;
             }
@@ -2096,6 +2193,408 @@ mod tests {
             vol_ahead > 0.0,
             "With queue tracking, queue_size_ahead should be > 0, got {}",
             vol_ahead
+        );
+    }
+
+    // =========================================================================
+    // Sign Convention Tests (RULE.md §9)
+    // =========================================================================
+    // Standard convention: > 0 = BULLISH, < 0 = BEARISH
+    //
+    // For MBO data:
+    // - Action::Add with Side::Bid = new buy limit order = BULLISH
+    // - Action::Add with Side::Ask = new sell limit order = BEARISH
+    // - Action::Cancel with Side::Bid = buyer pulling order = BEARISH
+    // - Action::Cancel with Side::Ask = seller pulling order = BULLISH
+    // - Action::Trade with Side::Bid = bid was HIT = seller aggressed = BEARISH
+    // - Action::Trade with Side::Ask = ask was HIT = buyer aggressed = BULLISH
+
+    #[test]
+    fn test_net_order_flow_sign_convention_bullish() {
+        // More bid adds = more buy orders = BULLISH → should be > 0
+        let mut aggregator = MboAggregator::new();
+
+        // 10 bid adds, 5 ask adds
+        for i in 0..10u64 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+        for i in 10..15u64 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Ask, 100_010_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let net_order_flow = features[6]; // Index 6 in MBO features = net_order_flow
+
+        assert!(
+            net_order_flow > 0.0,
+            "More bid adds (buy orders) should give net_order_flow > 0 (BULLISH). \
+             Got {:.4}. Sign convention: > 0 = BULLISH per RULE.md §9",
+            net_order_flow
+        );
+
+        // Expected: (10 - 5) / 15 = 0.333...
+        let expected = (10.0 - 5.0) / 15.0;
+        assert!(
+            (net_order_flow - expected).abs() < 0.01,
+            "net_order_flow formula: (bid - ask) / total. Expected {:.4}, got {:.4}",
+            expected,
+            net_order_flow
+        );
+    }
+
+    #[test]
+    fn test_net_order_flow_sign_convention_bearish() {
+        // More ask adds = more sell orders = BEARISH → should be < 0
+        let mut aggregator = MboAggregator::new();
+
+        // 5 bid adds, 10 ask adds
+        for i in 0..5u64 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+        for i in 5..15u64 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Ask, 100_010_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let net_order_flow = features[6];
+
+        assert!(
+            net_order_flow < 0.0,
+            "More ask adds (sell orders) should give net_order_flow < 0 (BEARISH). \
+             Got {:.4}. Sign convention: < 0 = BEARISH per RULE.md §9",
+            net_order_flow
+        );
+    }
+
+    #[test]
+    fn test_net_cancel_flow_sign_convention_bullish() {
+        // More ask cancels = sellers pulling orders = less selling pressure = BULLISH
+        // Per standard convention: > 0 = BULLISH
+        //
+        // Current formula: (cancel_bid - cancel_ask) / total
+        // If more ask cancels: cancel_ask > cancel_bid → result < 0 → WRONG
+        //
+        // CORRECT formula should be: (cancel_ask - cancel_bid) / total
+        // If more ask cancels: result > 0 → BULLISH ✓
+        let mut aggregator = MboAggregator::new();
+
+        // First add some orders to cancel
+        for i in 0..20u64 {
+            let side = if i < 10 { Side::Bid } else { Side::Ask };
+            let price = if side == Side::Bid {
+                100_000_000_000
+            } else {
+                100_010_000_000
+            };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, price, 100, i);
+            aggregator.process_event(event);
+        }
+
+        // 3 bid cancels, 8 ask cancels
+        for i in 0..3u64 {
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+        for i in 10..18u64 {
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Cancel,
+                Side::Ask,
+                100_010_000_000,
+                100,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let net_cancel_flow = features[7]; // Index 7 = net_cancel_flow
+
+        // More ask cancels = sellers pulling = BULLISH → should be > 0
+        assert!(
+            net_cancel_flow > 0.0,
+            "More ask cancels (sellers pulling) should give net_cancel_flow > 0 (BULLISH). \
+             Got {:.4}. This test validates RULE.md §9 sign convention.",
+            net_cancel_flow
+        );
+    }
+
+    #[test]
+    fn test_net_cancel_flow_sign_convention_bearish() {
+        // More bid cancels = buyers pulling orders = less buying support = BEARISH
+        // Per standard convention: < 0 = BEARISH
+        let mut aggregator = MboAggregator::new();
+
+        // First add orders
+        for i in 0..20u64 {
+            let side = if i < 10 { Side::Bid } else { Side::Ask };
+            let price = if side == Side::Bid {
+                100_000_000_000
+            } else {
+                100_010_000_000
+            };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, price, 100, i);
+            aggregator.process_event(event);
+        }
+
+        // 8 bid cancels, 3 ask cancels
+        for i in 0..8u64 {
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+        for i in 10..13u64 {
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Cancel,
+                Side::Ask,
+                100_010_000_000,
+                100,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let net_cancel_flow = features[7];
+
+        // More bid cancels = buyers pulling = BEARISH → should be < 0
+        assert!(
+            net_cancel_flow < 0.0,
+            "More bid cancels (buyers pulling) should give net_cancel_flow < 0 (BEARISH). \
+             Got {:.4}. This test validates RULE.md §9 sign convention.",
+            net_cancel_flow
+        );
+    }
+
+    #[test]
+    fn test_net_trade_flow_sign_convention_bullish() {
+        // In MBO data:
+        // - Trade with Side::Bid = bid was HIT = seller aggressed = SELL-initiated
+        // - Trade with Side::Ask = ask was HIT = buyer aggressed = BUY-initiated
+        //
+        // More BUY-initiated trades = BULLISH → should be > 0
+        //
+        // Current formula: (trade_count_bid - trade_count_ask) / total
+        // trade_count_bid = SELL-initiated, trade_count_ask = BUY-initiated
+        // If more buys: trade_count_ask > trade_count_bid → result < 0 → WRONG
+        //
+        // CORRECT formula: (trade_count_ask - trade_count_bid) / total
+        // If more buys: result > 0 → BULLISH ✓
+        let mut aggregator = MboAggregator::new();
+
+        // First add orders to enable trades
+        for i in 0..20u64 {
+            let side = if i < 10 { Side::Bid } else { Side::Ask };
+            let price = if side == Side::Bid {
+                100_000_000_000
+            } else {
+                100_010_000_000
+            };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, price, 100, i);
+            aggregator.process_event(event);
+        }
+
+        // 3 bid-side trades (SELL-initiated), 8 ask-side trades (BUY-initiated)
+        for i in 0..3u64 {
+            // Seller hitting the bid = Side::Bid in MBO
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Trade,
+                Side::Bid,
+                100_000_000_000,
+                50,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+        for i in 10..18u64 {
+            // Buyer hitting the ask = Side::Ask in MBO
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Trade,
+                Side::Ask,
+                100_010_000_000,
+                50,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let net_trade_flow = features[8]; // Index 8 = net_trade_flow
+
+        // More ask-side trades (BUY-initiated) = BULLISH → should be > 0
+        assert!(
+            net_trade_flow > 0.0,
+            "More ask-side trades (buyer aggression) should give net_trade_flow > 0 (BULLISH). \
+             Got {:.4}. In MBO: Side::Ask on Trade = buyer hitting ask = BUY-initiated. \
+             Sign convention per RULE.md §9: > 0 = BULLISH.",
+            net_trade_flow
+        );
+    }
+
+    #[test]
+    fn test_net_trade_flow_sign_convention_bearish() {
+        // More SELL-initiated trades = BEARISH → should be < 0
+        let mut aggregator = MboAggregator::new();
+
+        // Add orders
+        for i in 0..20u64 {
+            let side = if i < 10 { Side::Bid } else { Side::Ask };
+            let price = if side == Side::Bid {
+                100_000_000_000
+            } else {
+                100_010_000_000
+            };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, price, 100, i);
+            aggregator.process_event(event);
+        }
+
+        // 8 bid-side trades (SELL-initiated), 3 ask-side trades (BUY-initiated)
+        for i in 0..8u64 {
+            // Seller hitting the bid
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Trade,
+                Side::Bid,
+                100_000_000_000,
+                50,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+        for i in 10..13u64 {
+            // Buyer hitting the ask
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Trade,
+                Side::Ask,
+                100_010_000_000,
+                50,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let net_trade_flow = features[8];
+
+        // More bid-side trades (SELL-initiated) = BEARISH → should be < 0
+        assert!(
+            net_trade_flow < 0.0,
+            "More bid-side trades (seller aggression) should give net_trade_flow < 0 (BEARISH). \
+             Got {:.4}. In MBO: Side::Bid on Trade = seller hitting bid = SELL-initiated. \
+             Sign convention per RULE.md §9: < 0 = BEARISH.",
+            net_trade_flow
+        );
+    }
+
+    #[test]
+    fn test_net_flow_symmetry() {
+        // When bid count == ask count, all net flows should be exactly 0
+        let mut aggregator = MboAggregator::new();
+
+        // 10 each for each action type
+        for i in 0..10u64 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+        for i in 10..20u64 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Ask, 100_010_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        for i in 0..5u64 {
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+        for i in 10..15u64 {
+            let event = MboEvent::new(
+                (20 + i) * 1_000_000,
+                Action::Cancel,
+                Side::Ask,
+                100_010_000_000,
+                100,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+
+        for i in 0..5u64 {
+            let event = MboEvent::new(
+                (30 + i) * 1_000_000,
+                Action::Trade,
+                Side::Bid,
+                100_000_000_000,
+                50,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+        for i in 10..15u64 {
+            let event = MboEvent::new(
+                (30 + i) * 1_000_000,
+                Action::Trade,
+                Side::Ask,
+                100_010_000_000,
+                50,
+                i,
+            );
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+
+        let net_order_flow = features[6];
+        let net_cancel_flow = features[7];
+        let net_trade_flow = features[8];
+
+        assert!(
+            net_order_flow.abs() < 0.01,
+            "Equal bid/ask adds should give net_order_flow ≈ 0. Got {:.4}",
+            net_order_flow
+        );
+        assert!(
+            net_cancel_flow.abs() < 0.01,
+            "Equal bid/ask cancels should give net_cancel_flow ≈ 0. Got {:.4}",
+            net_cancel_flow
+        );
+        assert!(
+            net_trade_flow.abs() < 0.01,
+            "Equal bid/ask trades should give net_trade_flow ≈ 0. Got {:.4}",
+            net_trade_flow
         );
     }
 }

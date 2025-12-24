@@ -492,10 +492,13 @@ impl FeatureSetConfig {
     }
 
     /// Convert to internal FeatureConfig.
-    pub fn to_feature_config(&self) -> FeatureConfig {
+    ///
+    /// # Arguments
+    /// * `tick_size` - The tick size from SymbolConfig (must be propagated from outer config)
+    pub fn to_feature_config(&self, tick_size: f64) -> FeatureConfig {
         FeatureConfig {
             lob_levels: self.lob_levels,
-            tick_size: 0.01,
+            tick_size,
             include_derived: self.include_derived,
             include_mbo: self.include_mbo,
             mbo_window_size: self.mbo_window_size,
@@ -683,20 +686,345 @@ impl ExportSequenceConfig {
 // Label Configuration (Export-specific wrapper)
 // ============================================================================
 
+/// Threshold strategy selection for TOML configuration.
+///
+/// This enum configures how classification thresholds are determined.
+/// Each strategy has different tradeoffs:
+///
+/// - **Fixed**: Constant threshold, reproducible, good for benchmarks
+/// - **RollingSpread**: Adapts to market conditions via bid-ask spread
+/// - **Quantile**: Ensures balanced class distribution regardless of volatility
+///
+/// # Research Reference
+///
+/// From TLOB paper Section 4.1.3:
+/// > "We argue that relating θ to transaction costs can better align trend
+/// >  predictions with profitability."
+///
+/// # TOML Configuration Examples
+///
+/// ## Fixed Threshold (default, backward compatible)
+/// ```toml
+/// [labels]
+/// threshold = 0.0008  # Simple fixed threshold (8 bps)
+/// ```
+///
+/// ## Explicit Fixed Strategy
+/// ```toml
+/// [labels.threshold_strategy]
+/// type = "fixed"
+/// value = 0.0008
+/// ```
+///
+/// ## Rolling Spread Strategy (adaptive to market conditions)
+/// ```toml
+/// [labels.threshold_strategy]
+/// type = "rolling_spread"
+/// window_size = 1000      # Rolling window for spread averaging
+/// multiplier = 1.5        # threshold = multiplier × avg_spread
+/// fallback = 0.0008       # Used when insufficient data
+/// ```
+///
+/// ## Quantile Strategy (balanced classes, recommended for training)
+/// ```toml
+/// [labels.threshold_strategy]
+/// type = "quantile"
+/// target_proportion = 0.33  # ~33% Up, ~33% Down, ~34% Stable
+/// window_size = 5000        # Window for quantile computation
+/// fallback = 0.0008         # Used when insufficient data
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExportThresholdStrategy {
+    /// Fixed percentage threshold.
+    ///
+    /// Simple and reproducible. Use for benchmark comparison.
+    /// Value is the classification threshold as a proportion (e.g., 0.0008 = 8 bps).
+    Fixed {
+        /// Classification threshold as proportion (e.g., 0.0008 = 8 basis points)
+        value: f64,
+    },
+
+    /// Rolling spread-based threshold.
+    ///
+    /// Threshold = multiplier × rolling_average_spread / mid_price
+    /// Adapts to market conditions automatically.
+    RollingSpread {
+        /// Number of samples for rolling spread computation
+        window_size: usize,
+        /// Multiplier for the average spread (typically 0.5-2.0)
+        multiplier: f64,
+        /// Fallback threshold when insufficient data
+        fallback: f64,
+    },
+
+    /// Quantile-based threshold for balanced class distribution.
+    ///
+    /// Computes threshold from rolling quantile of absolute price changes.
+    /// Ensures roughly equal Up/Down proportions regardless of market volatility.
+    ///
+    /// With target_proportion = 0.33:
+    /// - ~33% Up labels
+    /// - ~33% Down labels  
+    /// - ~34% Stable labels
+    Quantile {
+        /// Target proportion for up/down classes (0.0 to 0.5)
+        /// Example: 0.33 means ~33% Up, ~33% Down, ~34% Stable
+        target_proportion: f64,
+        /// Number of samples for quantile computation
+        window_size: usize,
+        /// Fallback threshold when insufficient data
+        fallback: f64,
+    },
+}
+
+impl Default for ExportThresholdStrategy {
+    fn default() -> Self {
+        // Default: Fixed at 8 bps (common HFT threshold)
+        Self::Fixed { value: 0.0008 }
+    }
+}
+
+impl ExportThresholdStrategy {
+    /// Create a fixed threshold strategy.
+    pub fn fixed(value: f64) -> Self {
+        Self::Fixed { value }
+    }
+
+    /// Create a rolling spread strategy.
+    ///
+    /// # Arguments
+    /// * `window_size` - Rolling window size for spread averaging
+    /// * `multiplier` - Multiplier for average spread (e.g., 1.5 = 1.5x spread)
+    /// * `fallback` - Fallback threshold when insufficient data
+    pub fn rolling_spread(window_size: usize, multiplier: f64, fallback: f64) -> Self {
+        Self::RollingSpread {
+            window_size,
+            multiplier,
+            fallback,
+        }
+    }
+
+    /// Create a quantile-based strategy for balanced classes.
+    ///
+    /// # Arguments
+    /// * `target_proportion` - Target proportion for Up/Down classes (0.0-0.5)
+    /// * `window_size` - Window size for quantile computation
+    /// * `fallback` - Fallback threshold when insufficient data
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::ExportThresholdStrategy;
+    ///
+    /// // Target 33% Up, 33% Down, 34% Stable
+    /// let strategy = ExportThresholdStrategy::quantile(0.33, 5000, 0.0008);
+    /// ```
+    pub fn quantile(target_proportion: f64, window_size: usize, fallback: f64) -> Self {
+        Self::Quantile {
+            target_proportion,
+            window_size,
+            fallback,
+        }
+    }
+
+    /// Convert to internal ThresholdStrategy for label generation.
+    pub fn to_internal(&self) -> crate::labeling::ThresholdStrategy {
+        match self {
+            Self::Fixed { value } => crate::labeling::ThresholdStrategy::Fixed(*value),
+            Self::RollingSpread {
+                window_size,
+                multiplier,
+                fallback,
+            } => crate::labeling::ThresholdStrategy::RollingSpread {
+                window_size: *window_size,
+                multiplier: *multiplier,
+                fallback: *fallback,
+            },
+            Self::Quantile {
+                target_proportion,
+                window_size,
+                fallback,
+            } => crate::labeling::ThresholdStrategy::Quantile {
+                target_proportion: *target_proportion,
+                window_size: *window_size,
+                fallback: *fallback,
+            },
+        }
+    }
+
+    /// Validate the strategy parameters.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Fixed { value } => {
+                if *value <= 0.0 {
+                    return Err("Fixed threshold value must be > 0".to_string());
+                }
+                if *value > 0.1 {
+                    return Err("Fixed threshold value seems too large (> 10%)".to_string());
+                }
+            }
+            Self::RollingSpread {
+                window_size,
+                multiplier,
+                fallback,
+            } => {
+                if *window_size == 0 {
+                    return Err("RollingSpread window_size must be > 0".to_string());
+                }
+                if *multiplier <= 0.0 {
+                    return Err("RollingSpread multiplier must be > 0".to_string());
+                }
+                if *fallback <= 0.0 {
+                    return Err("RollingSpread fallback must be > 0".to_string());
+                }
+            }
+            Self::Quantile {
+                target_proportion,
+                window_size,
+                fallback,
+            } => {
+                if *target_proportion <= 0.0 || *target_proportion > 0.5 {
+                    return Err(
+                        "Quantile target_proportion must be in range (0.0, 0.5]".to_string(),
+                    );
+                }
+                if *window_size == 0 {
+                    return Err("Quantile window_size must be > 0".to_string());
+                }
+                if *fallback <= 0.0 {
+                    return Err("Quantile fallback must be > 0".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Get a human-readable description of this strategy.
+    pub fn description(&self) -> String {
+        match self {
+            Self::Fixed { value } => format!("Fixed threshold: {:.4}%", value * 100.0),
+            Self::RollingSpread {
+                window_size,
+                multiplier,
+                ..
+            } => format!(
+                "Rolling spread: {}x avg spread over {} samples",
+                multiplier, window_size
+            ),
+            Self::Quantile {
+                target_proportion,
+                window_size,
+                ..
+            } => format!(
+                "Quantile: {:.0}% Up/Down target over {} samples",
+                target_proportion * 100.0,
+                window_size
+            ),
+        }
+    }
+}
+
 /// Export-specific label configuration.
+///
+/// Supports both single-horizon and multi-horizon labeling with configurable
+/// threshold strategies.
+///
+/// # Schema Version: 2.2
+///
+/// ## Single Horizon Mode (backward compatible)
+///
+/// ```toml
+/// [labels]
+/// horizon = 200
+/// smoothing_window = 50
+/// threshold = 0.0008
+/// ```
+///
+/// ## Multi-Horizon Mode (FI-2010, DeepLOB benchmarks)
+///
+/// ```toml
+/// [labels]
+/// horizons = [10, 20, 50, 100, 200]
+/// smoothing_window = 10
+/// threshold = 0.0008
+/// ```
+///
+/// ## With Explicit Threshold Strategy (Schema 2.2+)
+///
+/// ```toml
+/// [labels]
+/// horizons = [10, 20, 50, 100, 200]
+/// smoothing_window = 10
+///
+/// [labels.threshold_strategy]
+/// type = "quantile"
+/// target_proportion = 0.33
+/// window_size = 5000
+/// fallback = 0.0008
+/// ```
+///
+/// When `horizons` is non-empty, multi-horizon mode is used.
+/// When `threshold_strategy` is provided, it takes precedence over `threshold`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportLabelConfig {
-    /// Horizon for price change calculation (number of samples)
+    /// Single prediction horizon (number of samples ahead).
+    ///
+    /// Used when `horizons` is empty. For multi-horizon mode, use `horizons` instead.
     #[serde(default = "default_horizon")]
     pub horizon: usize,
 
-    /// Smoothing window for noise reduction
+    /// Multiple prediction horizons for multi-horizon labeling.
+    ///
+    /// When non-empty, enables multi-horizon mode (FI-2010, DeepLOB benchmarks).
+    /// Each horizon specifies steps ahead to predict.
+    ///
+    /// Example: `[10, 20, 50, 100, 200]` generates labels for 5 horizons.
+    /// The exported labels will have shape `(N, 5)` instead of `(N,)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub horizons: Vec<usize>,
+
+    /// Smoothing window for noise reduction (k in TLOB formula).
+    ///
+    /// Shared across all horizons in multi-horizon mode.
+    /// Recommended: 5-10 for most applications.
     #[serde(default = "default_smoothing_window")]
     pub smoothing_window: usize,
 
-    /// Threshold for up/down classification (as proportion, e.g., 0.0008 = 8 bps)
+    /// Classification threshold (θ) as proportion (backward compatible).
+    ///
+    /// **Deprecated in Schema 2.2+**: Use `threshold_strategy` instead.
+    ///
+    /// This field is used only when `threshold_strategy` is not provided.
+    /// When both are present, `threshold_strategy` takes precedence.
+    ///
+    /// Common values:
+    /// - 0.0002 (2 bps) for HFT
+    /// - 0.0008 (8 bps) for short-term
+    /// - 0.002 (20 bps) for standard (TLOB/DeepLOB papers)
     #[serde(default = "default_threshold")]
     pub threshold: f64,
+
+    /// Threshold strategy configuration (Schema 2.2+).
+    ///
+    /// When provided, this takes precedence over the `threshold` field.
+    /// Supports three strategies:
+    ///
+    /// - `fixed`: Constant threshold (equivalent to `threshold` field)
+    /// - `rolling_spread`: Adaptive threshold based on bid-ask spread
+    /// - `quantile`: Ensures balanced class distribution
+    ///
+    /// # Example
+    ///
+    /// ```toml
+    /// [labels.threshold_strategy]
+    /// type = "quantile"
+    /// target_proportion = 0.33
+    /// window_size = 5000
+    /// fallback = 0.0008
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold_strategy: Option<ExportThresholdStrategy>,
 }
 
 fn default_horizon() -> usize {
@@ -715,40 +1043,332 @@ impl Default for ExportLabelConfig {
     fn default() -> Self {
         Self {
             horizon: 50,
+            horizons: Vec::new(),
             smoothing_window: 10,
             threshold: 0.0008,
+            threshold_strategy: None, // Uses threshold field as Fixed fallback
         }
     }
 }
 
 impl ExportLabelConfig {
-    /// Convert to internal LabelConfig.
+    /// Create single-horizon configuration with fixed threshold.
+    ///
+    /// # Arguments
+    ///
+    /// * `horizon` - Steps ahead to predict
+    /// * `smoothing_window` - Smoothing window size
+    /// * `threshold` - Classification threshold
+    pub fn single(horizon: usize, smoothing_window: usize, threshold: f64) -> Self {
+        Self {
+            horizon,
+            horizons: Vec::new(),
+            smoothing_window,
+            threshold,
+            threshold_strategy: None,
+        }
+    }
+
+    /// Create multi-horizon configuration with fixed threshold.
+    ///
+    /// # Arguments
+    ///
+    /// * `horizons` - Array of prediction horizons
+    /// * `smoothing_window` - Shared smoothing window size
+    /// * `threshold` - Classification threshold
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::ExportLabelConfig;
+    ///
+    /// // FI-2010 benchmark horizons
+    /// let config = ExportLabelConfig::multi(vec![10, 20, 30, 50, 100], 5, 0.002);
+    /// assert!(config.is_multi_horizon());
+    /// assert_eq!(config.horizons.len(), 5);
+    /// ```
+    pub fn multi(horizons: Vec<usize>, smoothing_window: usize, threshold: f64) -> Self {
+        // Use max horizon as fallback single-horizon (for methods that need one)
+        let max_horizon = *horizons.iter().max().unwrap_or(&50);
+        Self {
+            horizon: max_horizon,
+            horizons,
+            smoothing_window,
+            threshold,
+            threshold_strategy: None,
+        }
+    }
+
+    /// Create multi-horizon configuration with explicit threshold strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `horizons` - Array of prediction horizons
+    /// * `smoothing_window` - Shared smoothing window size
+    /// * `strategy` - Threshold strategy (Fixed, RollingSpread, or Quantile)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::{ExportLabelConfig, ExportThresholdStrategy};
+    ///
+    /// // Balanced class distribution for training
+    /// let config = ExportLabelConfig::multi_with_strategy(
+    ///     vec![10, 20, 50, 100, 200],
+    ///     10,
+    ///     ExportThresholdStrategy::quantile(0.33, 5000, 0.0008),
+    /// );
+    /// ```
+    pub fn multi_with_strategy(
+        horizons: Vec<usize>,
+        smoothing_window: usize,
+        strategy: ExportThresholdStrategy,
+    ) -> Self {
+        let max_horizon = *horizons.iter().max().unwrap_or(&50);
+        let fallback_threshold = match &strategy {
+            ExportThresholdStrategy::Fixed { value } => *value,
+            ExportThresholdStrategy::RollingSpread { fallback, .. } => *fallback,
+            ExportThresholdStrategy::Quantile { fallback, .. } => *fallback,
+        };
+        Self {
+            horizon: max_horizon,
+            horizons,
+            smoothing_window,
+            threshold: fallback_threshold,
+            threshold_strategy: Some(strategy),
+        }
+    }
+
+    /// Create FI-2010 benchmark configuration.
+    ///
+    /// Horizons: [10, 20, 30, 50, 100]
+    /// Smoothing: 5
+    /// Threshold: 0.002 (20 bps)
+    pub fn fi2010() -> Self {
+        Self::multi(vec![10, 20, 30, 50, 100], 5, 0.002)
+    }
+
+    /// Create DeepLOB benchmark configuration.
+    ///
+    /// Horizons: [10, 20, 50, 100]
+    /// Smoothing: 5
+    /// Threshold: 0.002 (20 bps)
+    pub fn deeplob() -> Self {
+        Self::multi(vec![10, 20, 50, 100], 5, 0.002)
+    }
+
+    /// Create configuration optimized for balanced classes (recommended for training).
+    ///
+    /// Uses quantile-based thresholding to ensure roughly equal Up/Down/Stable
+    /// proportions regardless of market volatility.
+    ///
+    /// # Arguments
+    ///
+    /// * `horizons` - Array of prediction horizons
+    /// * `smoothing_window` - Shared smoothing window size
+    /// * `target_up_down_proportion` - Target proportion for Up+Down classes (e.g., 0.33 each)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::ExportLabelConfig;
+    ///
+    /// // ~33% Up, ~33% Down, ~34% Stable
+    /// let config = ExportLabelConfig::balanced(
+    ///     vec![10, 20, 50, 100, 200],
+    ///     10,
+    ///     0.33,
+    /// );
+    /// ```
+    pub fn balanced(
+        horizons: Vec<usize>,
+        smoothing_window: usize,
+        target_up_down_proportion: f64,
+    ) -> Self {
+        Self::multi_with_strategy(
+            horizons,
+            smoothing_window,
+            ExportThresholdStrategy::quantile(target_up_down_proportion, 5000, 0.0008),
+        )
+    }
+
+    /// Create configuration with spread-based adaptive threshold.
+    ///
+    /// Threshold adapts to market conditions based on bid-ask spread.
+    /// Good for ensuring predictions are profitable after transaction costs.
+    ///
+    /// # Arguments
+    ///
+    /// * `horizons` - Array of prediction horizons
+    /// * `smoothing_window` - Shared smoothing window size
+    /// * `spread_multiplier` - Threshold = multiplier × avg_spread (e.g., 1.5)
+    pub fn spread_adaptive(
+        horizons: Vec<usize>,
+        smoothing_window: usize,
+        spread_multiplier: f64,
+    ) -> Self {
+        Self::multi_with_strategy(
+            horizons,
+            smoothing_window,
+            ExportThresholdStrategy::rolling_spread(1000, spread_multiplier, 0.0008),
+        )
+    }
+
+    /// Check if multi-horizon mode is enabled.
+    ///
+    /// Returns `true` if `horizons` array is non-empty.
+    #[inline]
+    pub fn is_multi_horizon(&self) -> bool {
+        !self.horizons.is_empty()
+    }
+
+    /// Get the effective horizons.
+    ///
+    /// Returns `horizons` if non-empty, otherwise `[horizon]` as single-element vec.
+    pub fn effective_horizons(&self) -> Vec<usize> {
+        if self.is_multi_horizon() {
+            self.horizons.clone()
+        } else {
+            vec![self.horizon]
+        }
+    }
+
+    /// Get the maximum horizon (for buffer sizing).
+    pub fn max_horizon(&self) -> usize {
+        if self.is_multi_horizon() {
+            *self.horizons.iter().max().unwrap_or(&self.horizon)
+        } else {
+            self.horizon
+        }
+    }
+
+    /// Convert to internal LabelConfig (single-horizon).
+    ///
+    /// For multi-horizon mode, uses the first horizon.
+    /// Prefer `to_multi_horizon_config()` for multi-horizon exports.
     pub fn to_label_config(&self) -> LabelConfig {
+        let effective_horizon = if self.is_multi_horizon() {
+            *self.horizons.first().unwrap_or(&self.horizon)
+        } else {
+            self.horizon
+        };
+
         LabelConfig {
-            horizon: self.horizon,
+            horizon: effective_horizon,
             smoothing_window: self.smoothing_window,
             threshold: self.threshold,
         }
     }
 
-    /// Validate the label configuration.
-    pub fn validate(&self) -> Result<(), String> {
-        if self.horizon == 0 {
-            return Err("horizon must be > 0".to_string());
+    /// Get the effective threshold strategy.
+    ///
+    /// Returns the explicit `threshold_strategy` if provided,
+    /// otherwise creates a `Fixed` strategy from the `threshold` field.
+    pub fn effective_threshold_strategy(&self) -> ExportThresholdStrategy {
+        self.threshold_strategy
+            .clone()
+            .unwrap_or_else(|| ExportThresholdStrategy::fixed(self.threshold))
+    }
+
+    /// Convert to MultiHorizonConfig for multi-horizon exports.
+    ///
+    /// Returns `Some(MultiHorizonConfig)` if multi-horizon mode is enabled,
+    /// `None` otherwise (use `to_label_config()` for single-horizon mode).
+    ///
+    /// Uses the effective threshold strategy (explicit `threshold_strategy`
+    /// if provided, otherwise `Fixed(threshold)`).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::ExportLabelConfig;
+    ///
+    /// let config = ExportLabelConfig::fi2010();
+    /// let multi_config = config.to_multi_horizon_config().unwrap();
+    /// assert_eq!(multi_config.horizons().len(), 5);
+    /// ```
+    pub fn to_multi_horizon_config(
+        &self,
+    ) -> Option<crate::labeling::MultiHorizonConfig> {
+        if !self.is_multi_horizon() {
+            return None;
         }
+
+        let internal_strategy = self.effective_threshold_strategy().to_internal();
+
+        Some(crate::labeling::MultiHorizonConfig::new(
+            self.horizons.clone(),
+            self.smoothing_window,
+            internal_strategy,
+        ))
+    }
+
+    /// Validate the label configuration.
+    ///
+    /// Validates:
+    /// - At least one horizon is configured
+    /// - All horizons are > 0
+    /// - Smoothing window is > 0 and <= minimum horizon
+    /// - Threshold/threshold_strategy is in valid range
+    pub fn validate(&self) -> Result<(), String> {
+        // Validate horizons
+        if self.is_multi_horizon() {
+            // Multi-horizon mode validation
+            if self.horizons.iter().any(|&h| h == 0) {
+                return Err("All horizons must be > 0".to_string());
+            }
+            let min_horizon = *self.horizons.iter().min().unwrap_or(&0);
+            if self.smoothing_window > min_horizon {
+                return Err(format!(
+                    "smoothing_window ({}) should be <= minimum horizon ({})",
+                    self.smoothing_window, min_horizon
+                ));
+            }
+        } else {
+            // Single-horizon mode validation
+            if self.horizon == 0 {
+                return Err("horizon must be > 0".to_string());
+            }
+            if self.smoothing_window > self.horizon {
+                return Err("smoothing_window should be <= horizon".to_string());
+            }
+        }
+
+        // Common validation
         if self.smoothing_window == 0 {
             return Err("smoothing_window must be > 0".to_string());
         }
-        if self.smoothing_window > self.horizon {
-            return Err("smoothing_window should be <= horizon".to_string());
+
+        // Validate threshold strategy (if explicit) or fallback threshold
+        if let Some(ref strategy) = self.threshold_strategy {
+            strategy.validate().map_err(|e| format!("threshold_strategy: {}", e))?;
+        } else {
+            // Validate legacy threshold field
+            if self.threshold <= 0.0 {
+                return Err("threshold must be > 0".to_string());
+            }
+            if self.threshold > 0.1 {
+                return Err("threshold seems too large (> 10%), check units".to_string());
+            }
         }
-        if self.threshold <= 0.0 {
-            return Err("threshold must be > 0".to_string());
-        }
-        if self.threshold > 0.1 {
-            return Err("threshold seems too large (> 10%), check units".to_string());
-        }
+
         Ok(())
+    }
+
+    /// Get a human-readable description of the label configuration.
+    pub fn description(&self) -> String {
+        let horizons_str = if self.is_multi_horizon() {
+            format!("horizons={:?}", self.horizons)
+        } else {
+            format!("horizon={}", self.horizon)
+        };
+
+        let strategy_str = self.effective_threshold_strategy().description();
+
+        format!(
+            "{}, smoothing_window={}, {}",
+            horizons_str, self.smoothing_window, strategy_str
+        )
     }
 }
 
@@ -1108,8 +1728,10 @@ impl DatasetConfig {
     }
 
     /// Convert to PipelineConfig for processing.
+    ///
+    /// Propagates `tick_size` from `SymbolConfig` to `FeatureConfig`.
     pub fn to_pipeline_config(&self) -> PipelineConfig {
-        let feature_config = self.features.to_feature_config();
+        let feature_config = self.features.to_feature_config(self.symbol.tick_size);
         let feature_count = feature_config.feature_count();
 
         PipelineConfig {
@@ -1282,6 +1904,297 @@ mod tests {
         let pipeline_config = config.to_pipeline_config();
         assert_eq!(pipeline_config.features.feature_count(), 98);
         assert!(pipeline_config.features.include_signals);
+    }
+
+    // ========================================================================
+    // ExportLabelConfig Tests
+    // ========================================================================
+
+    #[test]
+    fn test_label_config_default_is_single_horizon() {
+        let config = ExportLabelConfig::default();
+        assert!(!config.is_multi_horizon(), "Default should be single-horizon mode");
+        assert_eq!(config.horizon, 50);
+        assert!(config.horizons.is_empty());
+        assert_eq!(config.smoothing_window, 10);
+        assert!((config.threshold - 0.0008).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_label_config_single_constructor() {
+        let config = ExportLabelConfig::single(100, 20, 0.002);
+        assert!(!config.is_multi_horizon());
+        assert_eq!(config.horizon, 100);
+        assert_eq!(config.smoothing_window, 20);
+        assert!((config.threshold - 0.002).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_label_config_multi_constructor() {
+        let config = ExportLabelConfig::multi(vec![10, 20, 50], 5, 0.001);
+        assert!(config.is_multi_horizon());
+        assert_eq!(config.horizons, vec![10, 20, 50]);
+        assert_eq!(config.smoothing_window, 5);
+        assert!((config.threshold - 0.001).abs() < 1e-10);
+        // max_horizon should be set as fallback single horizon
+        assert_eq!(config.horizon, 50);
+    }
+
+    #[test]
+    fn test_label_config_fi2010_preset() {
+        let config = ExportLabelConfig::fi2010();
+        assert!(config.is_multi_horizon());
+        assert_eq!(config.horizons, vec![10, 20, 30, 50, 100]);
+        assert_eq!(config.smoothing_window, 5);
+        assert!((config.threshold - 0.002).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_label_config_deeplob_preset() {
+        let config = ExportLabelConfig::deeplob();
+        assert!(config.is_multi_horizon());
+        assert_eq!(config.horizons, vec![10, 20, 50, 100]);
+        assert_eq!(config.smoothing_window, 5);
+    }
+
+    #[test]
+    fn test_label_config_effective_horizons_single() {
+        let config = ExportLabelConfig::single(200, 50, 0.0008);
+        let effective = config.effective_horizons();
+        assert_eq!(effective, vec![200]);
+    }
+
+    #[test]
+    fn test_label_config_effective_horizons_multi() {
+        let config = ExportLabelConfig::multi(vec![10, 20, 100], 5, 0.002);
+        let effective = config.effective_horizons();
+        assert_eq!(effective, vec![10, 20, 100]);
+    }
+
+    #[test]
+    fn test_label_config_max_horizon_single() {
+        let config = ExportLabelConfig::single(150, 30, 0.001);
+        assert_eq!(config.max_horizon(), 150);
+    }
+
+    #[test]
+    fn test_label_config_max_horizon_multi() {
+        let config = ExportLabelConfig::multi(vec![10, 50, 200, 100], 5, 0.002);
+        assert_eq!(config.max_horizon(), 200);
+    }
+
+    #[test]
+    fn test_label_config_to_label_config_single() {
+        let config = ExportLabelConfig::single(100, 20, 0.003);
+        let label_config = config.to_label_config();
+        assert_eq!(label_config.horizon, 100);
+        assert_eq!(label_config.smoothing_window, 20);
+        assert!((label_config.threshold - 0.003).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_label_config_to_label_config_multi_uses_first_horizon() {
+        // When converting multi-horizon to single LabelConfig, use first horizon
+        let config = ExportLabelConfig::multi(vec![10, 50, 100], 5, 0.002);
+        let label_config = config.to_label_config();
+        assert_eq!(
+            label_config.horizon, 10,
+            "Should use first horizon for single-horizon conversion"
+        );
+        assert_eq!(label_config.smoothing_window, 5);
+    }
+
+    #[test]
+    fn test_label_config_to_multi_horizon_config_single_returns_none() {
+        let config = ExportLabelConfig::single(100, 20, 0.002);
+        let multi_config = config.to_multi_horizon_config();
+        assert!(
+            multi_config.is_none(),
+            "Single-horizon config should return None for multi-horizon conversion"
+        );
+    }
+
+    #[test]
+    fn test_label_config_to_multi_horizon_config_multi_returns_some() {
+        let config = ExportLabelConfig::multi(vec![10, 20, 50], 5, 0.002);
+        let multi_config = config.to_multi_horizon_config();
+        assert!(multi_config.is_some());
+
+        let mc = multi_config.unwrap();
+        assert_eq!(mc.horizons(), &[10, 20, 50]);
+        assert_eq!(mc.smoothing_window, 5);
+    }
+
+    #[test]
+    fn test_label_config_validation_single_valid() {
+        let config = ExportLabelConfig::single(100, 20, 0.002);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_label_config_validation_multi_valid() {
+        let config = ExportLabelConfig::multi(vec![10, 20, 50], 5, 0.002);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_label_config_validation_single_zero_horizon() {
+        let config = ExportLabelConfig::single(0, 5, 0.002);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("horizon must be > 0"),
+            "Should reject zero horizon"
+        );
+    }
+
+    #[test]
+    fn test_label_config_validation_multi_zero_horizon_in_array() {
+        let config = ExportLabelConfig::multi(vec![10, 0, 50], 5, 0.002);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("All horizons must be > 0"),
+            "Should reject zero horizon in array"
+        );
+    }
+
+    #[test]
+    fn test_label_config_validation_zero_smoothing() {
+        let config = ExportLabelConfig::single(100, 0, 0.002);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("smoothing_window must be > 0"));
+    }
+
+    #[test]
+    fn test_label_config_validation_smoothing_greater_than_horizon() {
+        let config = ExportLabelConfig::single(10, 20, 0.002);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("smoothing_window should be <= horizon"));
+    }
+
+    #[test]
+    fn test_label_config_validation_multi_smoothing_greater_than_min_horizon() {
+        // smoothing=20, but min horizon is 10
+        let config = ExportLabelConfig::multi(vec![10, 50, 100], 20, 0.002);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("smoothing_window (20) should be <= minimum horizon (10)"),
+            "Should reject smoothing > min horizon"
+        );
+    }
+
+    #[test]
+    fn test_label_config_validation_zero_threshold() {
+        let config = ExportLabelConfig::single(100, 10, 0.0);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("threshold must be > 0"));
+    }
+
+    #[test]
+    fn test_label_config_validation_negative_threshold() {
+        let config = ExportLabelConfig::single(100, 10, -0.001);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("threshold must be > 0"));
+    }
+
+    #[test]
+    fn test_label_config_validation_threshold_too_large() {
+        let config = ExportLabelConfig::single(100, 10, 0.15);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("threshold seems too large"));
+    }
+
+    #[test]
+    fn test_label_config_toml_serialization_single() {
+        let config = ExportLabelConfig::single(100, 20, 0.0008);
+        let toml_str = toml::to_string(&config).unwrap();
+
+        // Should contain single horizon, not horizons array
+        assert!(toml_str.contains("horizon = 100"));
+        assert!(toml_str.contains("smoothing_window = 20"));
+        assert!(!toml_str.contains("horizons"), "Empty horizons should be skipped");
+    }
+
+    #[test]
+    fn test_label_config_toml_serialization_multi() {
+        let config = ExportLabelConfig::multi(vec![10, 20, 50], 5, 0.002);
+        let toml_str = toml::to_string(&config).unwrap();
+
+        // Should contain horizons array
+        assert!(toml_str.contains("horizons = [10, 20, 50]"));
+        assert!(toml_str.contains("smoothing_window = 5"));
+    }
+
+    #[test]
+    fn test_label_config_toml_deserialization_single() {
+        let toml_str = r#"
+horizon = 200
+smoothing_window = 50
+threshold = 0.0008
+"#;
+        let config: ExportLabelConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.is_multi_horizon());
+        assert_eq!(config.horizon, 200);
+        assert_eq!(config.smoothing_window, 50);
+        assert!((config.threshold - 0.0008).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_label_config_toml_deserialization_multi() {
+        let toml_str = r#"
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10
+threshold = 0.0008
+"#;
+        let config: ExportLabelConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.is_multi_horizon());
+        assert_eq!(config.horizons, vec![10, 20, 50, 100, 200]);
+        assert_eq!(config.smoothing_window, 10);
+    }
+
+    #[test]
+    fn test_label_config_toml_roundtrip_single() {
+        let original = ExportLabelConfig::single(100, 20, 0.0015);
+        let toml_str = toml::to_string(&original).unwrap();
+        let loaded: ExportLabelConfig = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(original.horizon, loaded.horizon);
+        assert_eq!(original.smoothing_window, loaded.smoothing_window);
+        assert!((original.threshold - loaded.threshold).abs() < 1e-10);
+        assert_eq!(original.is_multi_horizon(), loaded.is_multi_horizon());
+    }
+
+    #[test]
+    fn test_label_config_toml_roundtrip_multi() {
+        let original = ExportLabelConfig::multi(vec![10, 20, 50, 100], 5, 0.002);
+        let toml_str = toml::to_string(&original).unwrap();
+        let loaded: ExportLabelConfig = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(original.horizons, loaded.horizons);
+        assert_eq!(original.smoothing_window, loaded.smoothing_window);
+        assert!((original.threshold - loaded.threshold).abs() < 1e-10);
+        assert_eq!(original.is_multi_horizon(), loaded.is_multi_horizon());
+    }
+
+    #[test]
+    fn test_label_config_backward_compatibility() {
+        // Old TOML format (single horizon only) should still work
+        let old_format = r#"
+horizon = 50
+smoothing_window = 10
+threshold = 0.0008
+"#;
+        let config: ExportLabelConfig = toml::from_str(old_format).unwrap();
+        assert!(!config.is_multi_horizon());
+        assert_eq!(config.horizon, 50);
+        assert!(config.validate().is_ok());
     }
 }
 

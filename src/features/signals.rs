@@ -48,8 +48,13 @@ use mbo_lob_reconstructor::LobState;
 /// Epsilon for avoiding division by zero
 const EPSILON: f64 = 1e-10;
 
-/// Schema version for forward compatibility
-pub const SCHEMA_VERSION: f64 = 2.0;
+/// Schema version for forward compatibility.
+///
+/// Version history:
+/// - 2.0: Initial signal layer implementation
+/// - 2.1: Fixed sign convention for net_trade_flow (index 56) and net_cancel_flow (index 55)
+///        to follow RULE.md §9: > 0 = BULLISH, < 0 = BEARISH
+pub const SCHEMA_VERSION: f64 = 2.1;
 
 /// Number of signals in the signal layer (indices 84-97)
 pub const SIGNAL_COUNT: usize = 14;
@@ -69,6 +74,46 @@ const ET_OFFSET_STANDARD_NS: i64 = -5 * NS_PER_HOUR;
 
 /// US Eastern Time offset from UTC (daylight saving: -4 hours)
 const ET_OFFSET_DST_NS: i64 = -4 * NS_PER_HOUR;
+
+// ============================================================================
+// Signal Context
+// ============================================================================
+
+/// Context required for signal computation.
+///
+/// This struct encapsulates the additional context needed for computing
+/// trading signals beyond the LOB state and base features.
+///
+/// # Fields
+///
+/// * `timestamp_ns` - Current timestamp in nanoseconds (UTC since epoch)
+/// * `invalidity_delta` - Count of crossed/locked book events since last sample
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SignalContext {
+    /// Current timestamp in nanoseconds (UTC since epoch).
+    ///
+    /// Used for:
+    /// - Computing `time_regime` (market session detection)
+    /// - Computing `dt_seconds` (time since last sample)
+    pub timestamp_ns: u64,
+
+    /// Count of crossed/locked book events since last sample.
+    ///
+    /// Crossed quotes occur when best_bid >= best_ask, indicating
+    /// feed problems or latency issues. Higher values suggest
+    /// unreliable LOB state.
+    pub invalidity_delta: u64,
+}
+
+impl SignalContext {
+    /// Create a new signal context.
+    pub fn new(timestamp_ns: u64, invalidity_delta: u64) -> Self {
+        Self {
+            timestamp_ns,
+            invalidity_delta,
+        }
+    }
+}
 
 // ============================================================================
 // Time Regime
@@ -1492,7 +1537,7 @@ mod tests {
         // Signal 96: invalidity_delta = 0
         assert_eq!(signals.signals[12], 0.0);
 
-        // Signal 97: schema_version = 2.0
+        // Signal 97: schema_version = 2.1
         assert_eq!(signals.signals[13], SCHEMA_VERSION);
     }
 

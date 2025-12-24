@@ -17,9 +17,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lob = LobReconstructor::new(10);
     let extractor = FeatureExtractor::new(10);
 
-    // Volume-based sampler: 500 shares, 1ms minimum interval
+    // Volume-based sampler: 500 shares, 1ms minimum interval (1_000_000 ns)
     // Recommended by TLOB paper for liquid stocks like NVDA
-    let mut sampler = VolumeBasedSampler::new(500, 1);
+    let mut sampler = VolumeBasedSampler::new(500, 1_000_000);
 
     println!("Processing with volume-based sampling (500 shares per sample)...\n");
 

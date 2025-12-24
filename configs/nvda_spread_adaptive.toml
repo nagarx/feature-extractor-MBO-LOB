@@ -1,0 +1,100 @@
+# NVDA Spread-Adaptive Dataset Configuration (Schema 2.2)
+#
+# This configuration uses Rolling Spread-based threshold strategy.
+# Threshold adapts to market conditions based on bid-ask spread.
+#
+# Key difference from nvda_balanced.toml:
+# - Uses spread × multiplier as threshold (aligns with transaction costs)
+# - Better for evaluating profitability after costs
+# - Less balanced classes, but more realistic trading threshold
+#
+# Use this config when:
+# - You want thresholds aligned with actual transaction costs
+# - You're evaluating a trained model's real-world profitability
+# - You want to understand how predictions relate to spread
+#
+# From TLOB paper Section 4.1.3:
+# "We argue that relating θ to transaction costs can better align trend
+#  predictions with profitability."
+#
+# PREREQUISITE: Same as nvda_balanced.toml
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_spread_adaptive.toml
+
+[experiment]
+name = "NVDA Spread-Adaptive Dataset v2.2"
+description = "Multi-horizon labels with spread-based thresholds aligned to transaction costs"
+version = "2.2.0"
+tags = ["nvda", "98-features", "multi-horizon", "spread-adaptive", "transaction-cost-aware"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "../data/exports/nvda_spread_adaptive"
+hot_store_dir = "../data/hot_store"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2025-09-29"
+
+exclude_dates = [
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+[labels]
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10
+threshold = 0.0008  # Fallback
+
+# Rolling Spread-based threshold strategy
+#
+# Parameters:
+#   - window_size: Rolling window for spread averaging
+#   - multiplier: threshold = multiplier × avg_spread_ratio
+#     - 1.0 = breakeven (cover half-spread each way)
+#     - 1.5 = require 1.5x spread movement for Up/Down
+#     - 2.0 = conservative (require 2x spread)
+#   - fallback: Used when insufficient spread data
+[labels.threshold_strategy]
+type = "rolling_spread"
+window_size = 1000       # Average spread over last 1000 samples
+multiplier = 1.5         # 1.5x spread = moderate conservatism
+fallback = 0.0008        # 8 bps fallback
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = true
+

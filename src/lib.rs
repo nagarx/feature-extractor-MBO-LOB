@@ -102,7 +102,7 @@ pub use features::market_impact::{
 };
 pub use features::mbo_features::{MboAggregator, MboEvent};
 pub use features::order_flow::{MultiLevelOfiTracker, OrderFlowFeatures, OrderFlowTracker};
-pub use features::{FeatureConfig, FeatureExtractor};
+pub use features::{FeatureConfig, FeatureExtractor, SignalContext};
 
 // Re-exports - Preprocessing
 pub use preprocessing::{
@@ -118,7 +118,7 @@ pub use sequence_builder::{FeatureVec, Sequence, SequenceBuilder, SequenceConfig
 pub use export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
 pub use export::{
     export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
-    NumpyExporter, SplitConfig,
+    ExportThresholdStrategy, NumpyExporter, SplitConfig,
 };
 pub use export_aligned::{
     AlignedBatchExporter, AlignedDayExport, NormalizationParams, NormalizationStrategy,

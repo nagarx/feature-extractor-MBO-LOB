@@ -1,3 +1,27 @@
+//! ⚠️ DEPRECATED - Use `export_dataset` Instead
+//!
+//! This legacy tool uses `BatchExporter` which has critical bugs:
+//! - 10x data inflation (every sample from every overlapping sequence)
+//! - Label misalignment (labels don't match sequence endpoints)
+//!
+//! # Recommended Alternative
+//!
+//! Use the TOML-config-driven `export_dataset` tool which uses `AlignedBatchExporter`:
+//!
+//! ```bash
+//! cargo run --release --bin export_dataset --features parallel -- --config configs/nvda_98feat.toml
+//! ```
+//!
+//! Or use `export_aligned_legacy` for the aligned version:
+//!
+//! ```bash
+//! cargo run --release --bin export_aligned_legacy -- --start 2025-02-03 --end 2025-02-05
+//! ```
+//!
+//! ---
+//!
+//! # Legacy Tool Documentation (kept for reference)
+//!
 //! Export NVIDIA MBO Dataset to NumPy Format
 //!
 //! This example processes NVIDIA MBO data and exports it to NumPy format

@@ -89,8 +89,8 @@ fn test_volume_based_sampling(file_path: &str) -> Result<(), Box<dyn std::error:
     let mut lob = LobReconstructor::new(10);
     let extractor = FeatureExtractor::new(10);
 
-    // Volume-based sampler: 500 shares per sample, 1ms minimum interval
-    let mut sampler = VolumeBasedSampler::new(500, 1);
+    // Volume-based sampler: 500 shares per sample, 1ms minimum interval (1_000_000 ns)
+    let mut sampler = VolumeBasedSampler::new(500, 1_000_000);
 
     let mut msg_count = 0u64;
     let mut sample_count = 0u64;
@@ -328,7 +328,7 @@ fn benchmark_sampling_performance(file_path: &str) -> Result<(), Box<dyn std::er
     let loader = DbnLoader::new(file_path)?.skip_invalid(true);
 
     // Benchmark volume-based sampler
-    let mut vol_sampler = VolumeBasedSampler::new(500, 1);
+    let mut vol_sampler = VolumeBasedSampler::new(500, 1_000_000);
     let mut vol_samples = 0u64;
     let vol_start = Instant::now();
 
@@ -434,7 +434,7 @@ fn compare_sample_quality(file_path: &str) -> Result<(), Box<dyn std::error::Err
     let loader = DbnLoader::new(file_path)?.skip_invalid(true);
     let mut lob = LobReconstructor::new(10);
     let extractor = FeatureExtractor::new(10);
-    let mut vol_sampler = VolumeBasedSampler::new(500, 1);
+    let mut vol_sampler = VolumeBasedSampler::new(500, 1_000_000);
     let mut vol_spreads = Vec::new();
 
     for msg in loader.iter_messages()? {
