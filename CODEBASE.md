@@ -406,10 +406,14 @@ pub struct OfiComputer {
     depth_sum: u64,         // For average depth
     depth_count: u64,
     
-    // Warmup tracking
-    state_changes_since_reset: u64,  // Must reach 100
+    // Warmup tracking (MIN_WARMUP_STATE_CHANGES = 100)
+    state_changes_since_reset: u64,  // Must reach MIN_WARMUP_STATE_CHANGES (100)
     last_sample_timestamp: i64,
 }
+
+/// Minimum effective state changes before OFI is considered "warm".
+/// This counts ACTUAL LOB state transitions, not raw messages.
+pub const MIN_WARMUP_STATE_CHANGES: u64 = 100;
 
 impl OfiComputer {
     /// Update on EVERY LOB state transition (critical for accuracy)
@@ -418,7 +422,7 @@ impl OfiComputer {
     /// Sample OFI and reset accumulators (at sampling points)
     pub fn sample_and_reset(&mut self, timestamp: i64) -> OfiSample;
     
-    /// Check if warmup complete (≥100 state changes)
+    /// Check if warmup complete (≥MIN_WARMUP_STATE_CHANGES state changes)
     pub fn is_warm(&self) -> bool;
     
     /// Reset on Action::Clear or day boundary
@@ -436,14 +440,38 @@ impl OfiComputer {
 | 87 | `signed_mp_delta_bps` | Microprice delta in basis points | ~[-100, 100] |
 | 88 | `trade_asymmetry` | Normalized trade imbalance | [-1, 1] |
 | 89 | `cancel_asymmetry` | Normalized cancel imbalance | [-1, 1] |
-| 90 | `fragility_score` | Book fragility indicator | [0, 1] |
-| 91 | `depth_asymmetry` | Volume imbalance | [-1, 1] |
+| 90 | `fragility_score` | `level_conc / ln(avg_depth)` | [0, ∞) |
+| 91 | `depth_asymmetry` | Depth position asymmetry ¹ | [-1, 1] |
 | 92 | `book_valid` | Valid book flag | {0, 1} |
 | 93 | `time_regime` | Market session | {0, 1, 2, 3, 4} |
 | 94 | `mbo_ready` | Warmup status | {0, 1} |
 | 95 | `dt_seconds` | Time since last sample | [0, ∞) |
 | 96 | `invalidity_delta` | Quote anomalies since last sample | [0, ∞) |
-| 97 | `schema_version` | Always 2.0 | {2.0} |
+| 97 | `schema_version` | Always 2.1 | {2.1} |
+
+**Signal Index Constants Module**:
+
+For programmatic access to signal indices, use the `signals::indices` module:
+
+```rust
+use feature_extractor::features::signals::indices;
+
+// Access specific signal indices
+let ofi_idx = indices::TRUE_OFI;           // 84
+let regime_idx = indices::TIME_REGIME;      // 93
+let valid_idx = indices::BOOK_VALID;        // 92
+
+// Use in feature selection or analysis
+let ofi_value = features[indices::TRUE_OFI];
+let is_valid = features[indices::BOOK_VALID] > 0.5;
+```
+
+**Available constants**:
+- `TRUE_OFI`, `DEPTH_NORM_OFI`, `EXECUTED_PRESSURE` — Direction signals
+- `SIGNED_MP_DELTA_BPS`, `TRADE_ASYMMETRY`, `CANCEL_ASYMMETRY` — Confirmation signals
+- `FRAGILITY_SCORE`, `DEPTH_ASYMMETRY` — Impact signals
+- `BOOK_VALID`, `MBO_READY` — Safety gates
+- `TIME_REGIME`, `DT_SECONDS`, `INVALIDITY_DELTA`, `SCHEMA_VERSION` — Meta signals
 
 **TimeRegime Enum**:
 
@@ -456,6 +484,8 @@ pub enum TimeRegime {
     Closed = 4,  // Outside market hours
 }
 ```
+
+¹ `depth_asymmetry` uses `depth_ticks_*` (volume-weighted avg distance from BBO), NOT raw volume.
 
 **Signal Categories**:
 
@@ -588,6 +618,27 @@ impl VolumeBasedSampler {
         } else {
             false
         }
+    }
+    
+    /// Dynamically update the volume threshold at runtime.
+    ///
+    /// This enables adaptive sampling strategies that adjust to market conditions:
+    /// - **High volatility**: Increase threshold to avoid over-sampling
+    /// - **Low volatility**: Decrease threshold to maintain data density
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut sampler = VolumeBasedSampler::new(1000, 1_000_000);
+    /// 
+    /// // Adaptive adjustment based on volatility
+    /// if realized_volatility > high_threshold {
+    ///     sampler.set_threshold(1500);  // Wider threshold in volatile markets
+    /// } else if realized_volatility < low_threshold {
+    ///     sampler.set_threshold(500);   // Tighter threshold in quiet markets
+    /// }
+    /// ```
+    pub fn set_threshold(&mut self, new_threshold: u64) {
+        self.target_volume = new_threshold;
     }
 }
 ```
@@ -2120,4 +2171,4 @@ use feature_extractor::batch::{BatchProcessor, BatchConfig, CancellationToken};
 
 ---
 
-*Last updated: December 19, 2025*
+*Last updated: December 24, 2025*
