@@ -41,3 +41,7 @@ Thumbs.db
 # Create .cargo/config.toml locally to override git deps to local paths
 .cargo/
 
+# AI assistant working files
+CLAUDE.md
+RULE.md
+
