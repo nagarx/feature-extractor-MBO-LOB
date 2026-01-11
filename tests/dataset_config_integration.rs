@@ -126,6 +126,7 @@ fn test_symbol_config_filename_patterns() {
 
 #[test]
 #[ignore = "Requires real data files"]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_98_feature_export_with_real_data() {
     if !hot_store_exists() {
         eprintln!("Skipping: Hot store not found at {}", HOT_STORE_PATH);

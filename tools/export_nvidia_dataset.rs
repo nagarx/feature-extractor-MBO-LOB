@@ -48,6 +48,8 @@
 //! cargo run --release --example export_nvidia_dataset -- --start 2025-02-03 --end 2025-03-14
 //! ```
 
+#![allow(deprecated)] // This entire tool uses deprecated BatchExporter for backward compatibility
+
 use feature_extractor::{BatchExporter, DayExportResult, LabelConfig, Pipeline, PipelineConfig};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

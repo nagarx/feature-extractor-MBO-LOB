@@ -2,7 +2,7 @@
 
 > **Purpose**: Single source of truth for all data transformations from raw Databento MBO files to model-ready LOB feature datasets. This document describes the preprocessing pipeline capabilities independent of any specific model architecture.  
 > **Audience**: LLMs and developers needing exact technical details for debugging, extending, or reproducing the pipeline.  
-> **Last Updated**: 2025-12-19 (DatasetConfig export system added)
+> **Last Updated**: 2025-12-28 (Per-horizon quantile threshold fix documented)
 
 ---
 
@@ -1254,6 +1254,38 @@ MultiHorizonConfig::new(vec![10, 20, 50, 100], 10, ThresholdStrategy::Quantile {
 });
 ```
 
+#### Per-Horizon Quantile Threshold Computation
+
+When using `ThresholdStrategy::Quantile`, thresholds are computed **per-horizon** from the actual
+smoothed price change distribution for that specific horizon. This is critical for balanced class
+distribution at longer horizons.
+
+**Problem with Global Threshold**:
+- 1-step price changes are tiny (e.g., 0.001%)
+- Multi-step smoothed changes `l(t,h,k)` are larger (scale with horizon h)
+- Using a global threshold derived from 1-step changes for h=100/200 causes severe imbalance
+
+**Solution - Per-Horizon Computation**:
+```rust
+fn compute_quantile_threshold_for_horizon(horizon: usize) -> Option<f64> {
+    // 1. Compute all smoothed percentage changes for THIS horizon
+    let smoothed_changes: Vec<f64> = (start..end)
+        .map(|t| {
+            let past_smooth = smoothed_past(t, k);           // w⁻(t,h,k)
+            let future_smooth = smoothed_future(t, horizon, k); // w⁺(t,h,k)
+            (future_smooth - past_smooth) / past_smooth      // l(t,h,k)
+        })
+        .collect();
+    
+    // 2. Compute quantile of |l(t,h,k)|
+    // target_proportion=0.33 → threshold at 67th percentile → ~34% Stable
+    let quantile_pos = (1.0 - target_proportion) * (n - 1);
+    // Linear interpolation for threshold
+}
+```
+
+**Result**: Each horizon gets an appropriate threshold matching its actual price change scale.
+
 ---
 
 ### Output Schema
@@ -2006,4 +2038,4 @@ let valid_idx = indices::BOOK_VALID;    // 92
 
 ---
 
-*This document reflects the actual implementation as of 2025-12-24. All formulas and code snippets are derived from source files in `MBO-LOB-reconstructor` and `feature-extractor-MBO-LOB`.*
+*This document reflects the actual implementation as of 2025-12-28. All formulas and code snippets are derived from source files in `MBO-LOB-reconstructor` and `feature-extractor-MBO-LOB`.*

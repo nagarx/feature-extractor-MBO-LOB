@@ -231,33 +231,37 @@ fn print_config_summary(config: &DatasetConfig) {
     );
     println!("│");
     println!("│ Label Configuration:");
+    println!(
+        "│   Strategy:       {}",
+        config.labels.strategy.description()
+    );
     if config.labels.is_multi_horizon() {
-        println!(
-            "│   Mode:           Multi-horizon ({} horizons)",
-            config.labels.horizons.len()
-        );
         println!(
             "│   Horizons:       {:?}",
             config.labels.horizons
         );
     } else {
         println!(
-            "│   Mode:           Single-horizon"
-        );
-        println!(
             "│   Horizon:        {}",
             config.labels.horizon
         );
     }
-    println!(
-        "│   Smoothing:      {}",
-        config.labels.smoothing_window
-    );
+    if !config.labels.strategy.is_opportunity() {
+        println!(
+            "│   Smoothing:      {}",
+            config.labels.smoothing_window
+        );
+    }
     println!(
         "│   Threshold:      {} ({:.1} bps)",
         config.labels.threshold,
         config.labels.threshold * 10000.0
     );
+    if config.labels.strategy.is_opportunity() {
+        if let Some(priority) = &config.labels.conflict_priority {
+            println!("│   Conflict:       {:?}", priority);
+        }
+    }
     println!("│");
     println!("│ Input:      {}", config.data.input_dir.display());
     println!("│ Output:     {}", config.data.output_dir.display());
@@ -405,14 +409,24 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
             pipeline_config.sequence.stride,
         );
 
-        // Enable multi-horizon labeling if configured
-        let exporter = if let Some(multi_config) = config.labels.to_multi_horizon_config() {
+        // Configure exporter based on labeling strategy
+        let exporter = if let Some((opp_configs, horizons)) = config.labels.to_opportunity_configs() {
+            // Opportunity labeling (big-move detection)
             println!(
-                "    📊 Multi-horizon mode: {:?}",
+                "    📊 Opportunity mode: {:?} horizons, threshold={:.1} bps",
+                horizons,
+                opp_configs[0].threshold * 10000.0
+            );
+            base_exporter.with_opportunity_labels(opp_configs)
+        } else if let Some(multi_config) = config.labels.to_multi_horizon_config() {
+            // Multi-horizon TLOB labeling
+            println!(
+                "    📊 Multi-horizon TLOB mode: {:?}",
                 multi_config.horizons()
             );
             base_exporter.with_multi_horizon_labels(multi_config)
         } else {
+            // Single-horizon TLOB labeling
             base_exporter
         };
 

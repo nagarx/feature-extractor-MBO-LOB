@@ -193,6 +193,7 @@ fn test_format_sequences_empty_error() {
 }
 
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_format_sequences_preserves_values() {
     let output = create_test_output(1, 10, 10);
 

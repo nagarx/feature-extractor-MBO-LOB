@@ -683,6 +683,134 @@ impl ExportSequenceConfig {
 }
 
 // ============================================================================
+// Labeling Strategy Selection
+// ============================================================================
+
+/// Labeling strategy selection for export configuration.
+///
+/// This enum determines HOW labels are computed from price data.
+/// Different strategies are suited for different trading objectives.
+///
+/// # Strategies
+///
+/// | Strategy | Use Case | Label Meaning |
+/// |----------|----------|---------------|
+/// | `tlob` (default) | Trend prediction | Up/Down/Stable based on smoothed avg return |
+/// | `opportunity` | Big move detection | BigUp/BigDown/NoOpportunity based on peak return |
+/// | `triple_barrier` | Trade outcomes | ProfitTake/StopLoss/Timeout based on barriers |
+///
+/// # TOML Configuration Examples
+///
+/// ## TLOB/DeepLOB (default, backward compatible)
+/// ```toml
+/// [labels]
+/// # No strategy field = defaults to TLOB
+/// horizon = 50
+/// smoothing_window = 10
+/// threshold = 0.0008
+/// ```
+///
+/// ## Opportunity Detection (big moves)
+/// ```toml
+/// [labels]
+/// strategy = "opportunity"
+/// horizons = [50, 100, 200]
+/// threshold = 0.005  # 50 bps threshold
+/// conflict_priority = "larger_magnitude"
+/// ```
+///
+/// ## Triple Barrier (trade outcomes)
+/// ```toml
+/// [labels]
+/// strategy = "triple_barrier"
+/// horizon = 100
+/// profit_target = 0.005   # 50 bps profit target
+/// stop_loss = 0.003       # 30 bps stop loss
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelingStrategy {
+    /// TLOB/DeepLOB smoothed average labeling (default).
+    ///
+    /// Computes label based on smoothed average mid-price change.
+    /// Best for trend prediction with relatively balanced classes.
+    #[default]
+    Tlob,
+
+    /// Opportunity detection based on peak returns.
+    ///
+    /// Labels based on max/min return within horizon.
+    /// Best for detecting "big moves" with expected class imbalance.
+    Opportunity,
+
+    /// Triple barrier labeling for trade outcomes.
+    ///
+    /// Labels based on which barrier is hit first: profit, stop-loss, or timeout.
+    /// Best for directly modeling trading profitability.
+    TripleBarrier,
+}
+
+impl LabelingStrategy {
+    /// Check if this strategy requires opportunity-specific config fields.
+    pub fn is_opportunity(&self) -> bool {
+        matches!(self, Self::Opportunity)
+    }
+
+    /// Check if this strategy requires triple-barrier-specific config fields.
+    pub fn is_triple_barrier(&self) -> bool {
+        matches!(self, Self::TripleBarrier)
+    }
+
+    /// Get a human-readable description.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Tlob => "TLOB/DeepLOB (smoothed average trend)",
+            Self::Opportunity => "Opportunity (peak return detection)",
+            Self::TripleBarrier => "Triple Barrier (trade outcomes)",
+        }
+    }
+}
+
+// ============================================================================
+// Conflict Priority for Opportunity Labeling
+// ============================================================================
+
+/// Priority strategy when both big up and big down occur in the same horizon.
+///
+/// During volatile periods, both max_return > threshold AND min_return < -threshold
+/// may occur. This strategy determines how to resolve the conflict.
+///
+/// Used only when `strategy = "opportunity"`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportConflictPriority {
+    /// Label based on which move has larger absolute magnitude (default).
+    #[default]
+    LargerMagnitude,
+
+    /// Always prioritize BigUp when both trigger.
+    UpPriority,
+
+    /// Always prioritize BigDown when both trigger.
+    DownPriority,
+
+    /// Label as NoOpportunity when both trigger.
+    Ambiguous,
+}
+
+impl ExportConflictPriority {
+    /// Convert to internal labeling ConflictPriority.
+    pub fn to_internal(&self) -> crate::labeling::ConflictPriority {
+        match self {
+            Self::LargerMagnitude => crate::labeling::ConflictPriority::LargerMagnitude,
+            Self::UpPriority => crate::labeling::ConflictPriority::UpPriority,
+            Self::DownPriority => crate::labeling::ConflictPriority::DownPriority,
+            Self::Ambiguous => crate::labeling::ConflictPriority::Ambiguous,
+        }
+    }
+}
+
+// ============================================================================
 // Label Configuration (Export-specific wrapper)
 // ============================================================================
 
@@ -968,6 +1096,36 @@ impl ExportThresholdStrategy {
 /// When `threshold_strategy` is provided, it takes precedence over `threshold`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportLabelConfig {
+    /// Labeling strategy selection (Schema 2.3+).
+    ///
+    /// Determines HOW labels are computed from price data:
+    /// - `tlob` (default): Smoothed average trend labels
+    /// - `opportunity`: Peak return based big-move detection
+    /// - `triple_barrier`: Trade outcome based on profit/stop barriers
+    ///
+    /// # Example
+    ///
+    /// ```toml
+    /// [labels]
+    /// strategy = "opportunity"  # Use opportunity detection
+    /// horizons = [50, 100, 200]
+    /// threshold = 0.005
+    /// ```
+    #[serde(default)]
+    pub strategy: LabelingStrategy,
+
+    /// Conflict priority for opportunity labeling (Schema 2.3+).
+    ///
+    /// When both up and down thresholds are exceeded in the same horizon,
+    /// this determines how to resolve the conflict.
+    ///
+    /// Only used when `strategy = "opportunity"`.
+    /// Ignored for other strategies.
+    ///
+    /// Options: `larger_magnitude`, `up_priority`, `down_priority`, `ambiguous`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict_priority: Option<ExportConflictPriority>,
+
     /// Single prediction horizon (number of samples ahead).
     ///
     /// Used when `horizons` is empty. For multi-horizon mode, use `horizons` instead.
@@ -1042,6 +1200,8 @@ fn default_threshold() -> f64 {
 impl Default for ExportLabelConfig {
     fn default() -> Self {
         Self {
+            strategy: LabelingStrategy::Tlob,
+            conflict_priority: None,
             horizon: 50,
             horizons: Vec::new(),
             smoothing_window: 10,
@@ -1052,7 +1212,7 @@ impl Default for ExportLabelConfig {
 }
 
 impl ExportLabelConfig {
-    /// Create single-horizon configuration with fixed threshold.
+    /// Create single-horizon configuration with fixed threshold (TLOB strategy).
     ///
     /// # Arguments
     ///
@@ -1061,6 +1221,8 @@ impl ExportLabelConfig {
     /// * `threshold` - Classification threshold
     pub fn single(horizon: usize, smoothing_window: usize, threshold: f64) -> Self {
         Self {
+            strategy: LabelingStrategy::Tlob,
+            conflict_priority: None,
             horizon,
             horizons: Vec::new(),
             smoothing_window,
@@ -1069,7 +1231,45 @@ impl ExportLabelConfig {
         }
     }
 
-    /// Create multi-horizon configuration with fixed threshold.
+    /// Create opportunity-based configuration for big-move detection.
+    ///
+    /// # Arguments
+    ///
+    /// * `horizons` - Prediction horizons to look ahead
+    /// * `threshold` - Minimum return to qualify as a "big move" (e.g., 0.005 = 50 bps)
+    /// * `conflict_priority` - How to resolve when both up and down exceed threshold
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::{ExportLabelConfig, ExportConflictPriority};
+    ///
+    /// // Detect 0.5% moves with larger-magnitude priority
+    /// let config = ExportLabelConfig::opportunity(
+    ///     vec![50, 100, 200],
+    ///     0.005,
+    ///     ExportConflictPriority::LargerMagnitude,
+    /// );
+    /// assert!(config.strategy.is_opportunity());
+    /// ```
+    pub fn opportunity(
+        horizons: Vec<usize>,
+        threshold: f64,
+        conflict_priority: ExportConflictPriority,
+    ) -> Self {
+        let max_horizon = *horizons.iter().max().unwrap_or(&50);
+        Self {
+            strategy: LabelingStrategy::Opportunity,
+            conflict_priority: Some(conflict_priority),
+            horizon: max_horizon,
+            horizons,
+            smoothing_window: 1, // Not used for opportunity labeling
+            threshold,
+            threshold_strategy: None,
+        }
+    }
+
+    /// Create multi-horizon configuration with fixed threshold (TLOB strategy).
     ///
     /// # Arguments
     ///
@@ -1091,6 +1291,8 @@ impl ExportLabelConfig {
         // Use max horizon as fallback single-horizon (for methods that need one)
         let max_horizon = *horizons.iter().max().unwrap_or(&50);
         Self {
+            strategy: LabelingStrategy::Tlob,
+            conflict_priority: None,
             horizon: max_horizon,
             horizons,
             smoothing_window,
@@ -1122,20 +1324,22 @@ impl ExportLabelConfig {
     pub fn multi_with_strategy(
         horizons: Vec<usize>,
         smoothing_window: usize,
-        strategy: ExportThresholdStrategy,
+        thresh_strategy: ExportThresholdStrategy,
     ) -> Self {
         let max_horizon = *horizons.iter().max().unwrap_or(&50);
-        let fallback_threshold = match &strategy {
+        let fallback_threshold = match &thresh_strategy {
             ExportThresholdStrategy::Fixed { value } => *value,
             ExportThresholdStrategy::RollingSpread { fallback, .. } => *fallback,
             ExportThresholdStrategy::Quantile { fallback, .. } => *fallback,
         };
         Self {
+            strategy: LabelingStrategy::Tlob,
+            conflict_priority: None,
             horizon: max_horizon,
             horizons,
             smoothing_window,
             threshold: fallback_threshold,
-            threshold_strategy: Some(strategy),
+            threshold_strategy: Some(thresh_strategy),
         }
     }
 
@@ -1303,52 +1507,112 @@ impl ExportLabelConfig {
         ))
     }
 
+    /// Convert to OpportunityConfig for opportunity-based labeling.
+    ///
+    /// Returns `Some(OpportunityConfig)` if this is an opportunity labeling config,
+    /// `None` otherwise.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((Vec<OpportunityConfig>, horizons))` if `strategy == Opportunity`
+    /// - `None` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::{ExportLabelConfig, ExportConflictPriority};
+    ///
+    /// let config = ExportLabelConfig::opportunity(vec![50, 100], 0.005, ExportConflictPriority::LargerMagnitude);
+    /// let (opp_configs, horizons) = config.to_opportunity_configs().unwrap();
+    /// assert_eq!(horizons.len(), 2);
+    /// ```
+    pub fn to_opportunity_configs(
+        &self,
+    ) -> Option<(Vec<crate::labeling::OpportunityConfig>, Vec<usize>)> {
+        if !self.strategy.is_opportunity() {
+            return None;
+        }
+
+        let horizons = self.effective_horizons();
+        let conflict_priority = self
+            .conflict_priority
+            .unwrap_or_default()
+            .to_internal();
+
+        let configs: Vec<crate::labeling::OpportunityConfig> = horizons
+            .iter()
+            .map(|&h| {
+                crate::labeling::OpportunityConfig::new(h, self.threshold)
+                    .with_conflict_priority(conflict_priority)
+            })
+            .collect();
+
+        Some((configs, horizons))
+    }
+
     /// Validate the label configuration.
     ///
     /// Validates:
     /// - At least one horizon is configured
     /// - All horizons are > 0
-    /// - Smoothing window is > 0 and <= minimum horizon
+    /// - Smoothing window is > 0 and <= minimum horizon (for TLOB/DeepLOB only)
     /// - Threshold/threshold_strategy is in valid range
+    /// - Strategy-specific parameters are present
     pub fn validate(&self) -> Result<(), String> {
-        // Validate horizons
+        // Validate horizons (common to all strategies)
         if self.is_multi_horizon() {
-            // Multi-horizon mode validation
             if self.horizons.iter().any(|&h| h == 0) {
                 return Err("All horizons must be > 0".to_string());
             }
-            let min_horizon = *self.horizons.iter().min().unwrap_or(&0);
-            if self.smoothing_window > min_horizon {
-                return Err(format!(
-                    "smoothing_window ({}) should be <= minimum horizon ({})",
-                    self.smoothing_window, min_horizon
-                ));
-            }
-        } else {
-            // Single-horizon mode validation
-            if self.horizon == 0 {
-                return Err("horizon must be > 0".to_string());
-            }
-            if self.smoothing_window > self.horizon {
-                return Err("smoothing_window should be <= horizon".to_string());
-            }
+        } else if self.horizon == 0 {
+            return Err("horizon must be > 0".to_string());
         }
 
-        // Common validation
-        if self.smoothing_window == 0 {
-            return Err("smoothing_window must be > 0".to_string());
-        }
+        // Strategy-specific validation
+        match &self.strategy {
+            LabelingStrategy::Tlob => {
+                // TLOB requires smoothing_window
+                if self.smoothing_window == 0 {
+                    return Err("smoothing_window must be > 0 for TLOB labeling".to_string());
+                }
+                let min_horizon = if self.is_multi_horizon() {
+                    *self.horizons.iter().min().unwrap_or(&self.horizon)
+                } else {
+                    self.horizon
+                };
+                if self.smoothing_window > min_horizon {
+                    return Err(format!(
+                        "smoothing_window ({}) should be <= minimum horizon ({})",
+                        self.smoothing_window, min_horizon
+                    ));
+                }
 
-        // Validate threshold strategy (if explicit) or fallback threshold
-        if let Some(ref strategy) = self.threshold_strategy {
-            strategy.validate().map_err(|e| format!("threshold_strategy: {}", e))?;
-        } else {
-            // Validate legacy threshold field
-            if self.threshold <= 0.0 {
-                return Err("threshold must be > 0".to_string());
+                // Validate threshold for TLOB (typically 2-100 bps)
+                if let Some(ref ts) = self.threshold_strategy {
+                    ts.validate().map_err(|e| format!("threshold_strategy: {}", e))?;
+                } else {
+                    if self.threshold <= 0.0 {
+                        return Err("threshold must be > 0".to_string());
+                    }
+                    if self.threshold > 0.1 {
+                        return Err("threshold seems too large (> 10%), check units".to_string());
+                    }
+                }
             }
-            if self.threshold > 0.1 {
-                return Err("threshold seems too large (> 10%), check units".to_string());
+            LabelingStrategy::Opportunity => {
+                // Opportunity uses higher thresholds (typically 30-500 bps)
+                if self.threshold <= 0.0 {
+                    return Err("threshold must be > 0 for opportunity labeling".to_string());
+                }
+                if self.threshold > 0.5 {
+                    return Err("threshold > 50% seems unreasonable for opportunity detection".to_string());
+                }
+            }
+            LabelingStrategy::TripleBarrier => {
+                // Triple barrier validation (to be implemented when used)
+                if self.threshold <= 0.0 {
+                    return Err("threshold must be > 0 for triple barrier labeling".to_string());
+                }
             }
         }
 
@@ -1363,12 +1627,32 @@ impl ExportLabelConfig {
             format!("horizon={}", self.horizon)
         };
 
-        let strategy_str = self.effective_threshold_strategy().description();
-
-        format!(
-            "{}, smoothing_window={}, {}",
-            horizons_str, self.smoothing_window, strategy_str
-        )
+        match &self.strategy {
+            LabelingStrategy::Tlob => {
+                let threshold_str = self.effective_threshold_strategy().description();
+                format!(
+                    "TLOB: {}, smoothing_window={}, {}",
+                    horizons_str, self.smoothing_window, threshold_str
+                )
+            }
+            LabelingStrategy::Opportunity => {
+                let priority_str = self
+                    .conflict_priority
+                    .as_ref()
+                    .map(|p| format!("{:?}", p))
+                    .unwrap_or_else(|| "LargerMagnitude".to_string());
+                format!(
+                    "Opportunity: {}, threshold={:.4}%, conflict_priority={}",
+                    horizons_str, self.threshold * 100.0, priority_str
+                )
+            }
+            LabelingStrategy::TripleBarrier => {
+                format!(
+                    "TripleBarrier: {}, profit_target={:.4}%",
+                    horizons_str, self.threshold * 100.0
+                )
+            }
+        }
     }
 }
 
@@ -2072,7 +2356,9 @@ mod tests {
         let config = ExportLabelConfig::single(10, 20, 0.002);
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("smoothing_window should be <= horizon"));
+        // Updated to match new error message format
+        let err_msg = result.unwrap_err();
+        assert!(err_msg.contains("smoothing_window") && err_msg.contains("should be <= minimum horizon"));
     }
 
     #[test]

@@ -88,6 +88,7 @@ fn test_pipeline_reset() {
 }
 
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_pipeline_output_to_flat_features() {
     // Create mock sequences (using Arc for zero-copy)
     let sequences = vec![
@@ -239,6 +240,7 @@ fn test_pipeline_config_serialization_round_trip() {
 }
 
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_pipeline_handles_empty_output() {
     let output = PipelineOutput {
         sequences: vec![],
@@ -346,6 +348,7 @@ fn test_pipeline_numerical_accuracy() {
 }
 
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_large_sequence_handling() {
     // Test with many sequences (using Arc for zero-copy)
     let mut sequences = Vec::new();
@@ -625,6 +628,7 @@ fn test_sequence_arc_feature_storage() {
 
 /// Test that PipelineOutput.to_flat_features() works correctly with Arc storage.
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_pipeline_output_flat_features_with_arc() {
     // Create mock sequences with Arc features
     let seq1 = Sequence {

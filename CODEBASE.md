@@ -93,10 +93,13 @@ src/
 │   └── volatility.rs         # VolatilityEstimator
 │
 ├── labeling/
-│   ├── mod.rs                # LabelConfig, TrendLabel, LabelStats
-│   ├── tlob.rs               # TlobLabelGenerator
-│   ├── deeplob.rs            # DeepLobLabelGenerator
-│   └── multi_horizon.rs      # MultiHorizonLabelGenerator, ThresholdStrategy
+│   ├── mod.rs                # LabelConfig, TrendLabel, LabelStats, re-exports
+│   ├── tlob.rs               # TlobLabelGenerator - ✅ Export integrated
+│   ├── deeplob.rs            # DeepLobLabelGenerator - ✅ Export integrated
+│   ├── multi_horizon.rs      # MultiHorizonLabelGenerator - ✅ Export integrated
+│   ├── opportunity.rs        # OpportunityLabelGenerator - ✅ Export integrated
+│   ├── triple_barrier.rs     # TripleBarrierLabeler - ⚠️ API only, export pending
+│   └── magnitude.rs          # MagnitudeGenerator (regression) - ⚠️ API only, export pending
 │
 ├── schema/
 │   ├── mod.rs                # Module exports
@@ -747,6 +750,22 @@ impl TrendLabel {
 }
 ```
 
+### Labeling Strategies Overview
+
+The library provides multiple labeling strategies for different trading objectives:
+
+| Strategy | Classes | Export CLI | Use Case |
+|----------|---------|------------|----------|
+| **TLOB** | Down/Stable/Up | ✅ Integrated | Trend following, DeepLOB reproduction |
+| **Multi-Horizon** | Down/Stable/Up × N | ✅ Integrated | FI-2010 benchmarks, multi-task learning |
+| **Opportunity** | BigDown/NoOpp/BigUp | ✅ Integrated | Big move detection, peak returns |
+| **Triple Barrier** | StopLoss/Timeout/ProfitTarget | ⚠️ API only | Risk-managed trading |
+| **Magnitude** | Continuous returns | ⚠️ API only | Regression, position sizing |
+
+> **Note**: "API only" means the labeler is fully implemented and tested in Rust, but NOT yet
+> integrated into `export_dataset` CLI. Use the Rust API directly or wait for export integration.
+> See [docs/LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md) for detailed documentation.
+
 ### TLOB Labeling Method
 
 ```
@@ -792,8 +811,41 @@ pub enum ThresholdStrategy {
         multiplier: f64,      // Multiplier for average spread
         fallback: f64,        // Fallback threshold when insufficient data
     },
+    
+    /// Quantile-based threshold for balanced class distribution
+    Quantile {
+        target_proportion: f64,  // Target proportion for Up/Down (e.g., 0.33)
+        window_size: usize,      // Rolling window for quantile computation
+        fallback: f64,           // Fallback when insufficient data
+    },
 }
 ```
+
+**Per-Horizon Quantile Threshold Computation**:
+
+When using `ThresholdStrategy::Quantile`, the threshold is computed **per-horizon** from the actual
+smoothed price change distribution `l(t,h,k) = (w⁺ - w⁻) / w⁻` for that specific horizon.
+
+```rust
+// compute_quantile_threshold_for_horizon(horizon) logic:
+// 1. Compute all smoothed percentage changes for THIS horizon
+let smoothed_changes: Vec<f64> = (start..end)
+    .map(|t| {
+        let past_smooth = smoothed_past(t, k);        // w⁻(t,h,k)
+        let future_smooth = smoothed_future(t, h, k); // w⁺(t,h,k)
+        (future_smooth - past_smooth) / past_smooth   // l(t,h,k)
+    })
+    .collect();
+
+// 2. Compute threshold from quantile of |l(t,h,k)|
+// target_proportion=0.33 → ~33% Up, ~33% Down, ~34% Stable
+```
+
+**Why Per-Horizon Matters**:
+- 1-step price changes are tiny (e.g., 0.001%)
+- Multi-step smoothed changes are larger (scale with horizon)
+- Using 1-step threshold for h=100 causes severe class imbalance (~95% Stable)
+- Per-horizon thresholds match the actual distribution being classified
 
 #### MultiHorizonLabelGenerator
 
@@ -1853,7 +1905,7 @@ fn process_file(path: &str) -> Result<PipelineOutput> {
         .window(100, 10)              // 100 snapshots, stride 10
         .volume_sampling(1000)        // Sample every 1000 shares
         .build()?;
-
+    
     // Process entire file - returns complete output
     let output = pipeline.process(path)?;
 
@@ -1899,7 +1951,7 @@ fn process_multiple_days(paths: &[&str]) -> Result<()> {
         .build()?;
 
     let exporter = BatchExporter::new("output/", Some(LabelConfig::short_term()));
-
+    
     for (i, path) in paths.iter().enumerate() {
         // IMPORTANT: Reset between days to prevent state leakage
         pipeline.reset();
@@ -1910,7 +1962,7 @@ fn process_multiple_days(paths: &[&str]) -> Result<()> {
         // Export with labels
         exporter.export_day(&format!("day_{}", i), &output)?;
     }
-
+    
     Ok(())
 }
 ```
@@ -2119,6 +2171,23 @@ assert!(config.validate().is_err()); // Error: requires 10 levels
 Signal indices are hardcoded for the 10-level layout. Non-10-level configurations
 with signals enabled will fail validation.
 
+### 7. Triple Barrier and Magnitude Export Not Integrated
+
+These labelers are fully implemented and tested but NOT integrated into `export_dataset`:
+```rust
+// Can use directly in Rust code
+let config = TripleBarrierConfig::new(0.005, 0.003, 50);
+let mut labeler = TripleBarrierLabeler::new(config);
+labeler.add_prices(&prices);
+let labels = labeler.generate_labels()?;
+
+// CANNOT use via TOML config - will fall back to TLOB
+// [labels]
+// strategy = "triple_barrier"  # NOT SUPPORTED IN export_dataset
+```
+
+**Tracking**: See roadmap in [docs/LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md#roadmap).
+
 ---
 
 ## Quick Reference
@@ -2171,4 +2240,4 @@ use feature_extractor::batch::{BatchProcessor, BatchConfig, CancellationToken};
 
 ---
 
-*Last updated: December 24, 2025*
+*Last updated: January 11, 2026*

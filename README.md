@@ -18,8 +18,9 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 - **Auto-Computed Feature Count**: No manual calculation required
 - **Comprehensive Feature Set**: Up to 98 features across multiple categories
 - **Trading Signals**: 14 research-backed signals (OFI, microprice, time regime)
-- **Label Generation**: TLOB and DeepLOB labeling methods for supervised learning
+- **Label Generation**: TLOB, DeepLOB, Opportunity, and Triple Barrier labeling methods
 - **Multi-Horizon Labels**: Generate labels for multiple prediction horizons (FI-2010, DeepLOB presets)
+- **Labeling Strategies**: TLOB, Multi-Horizon, Opportunity (✅ Export integrated), Triple Barrier (API only)
 - **TensorFormatter**: Model-specific tensor shapes (DeepLOB, HLOB, Flat, Image formats)
 - **Multiple Normalization Strategies**: Z-score, Rolling Z-score, Global Z-score, Bilinear
 - **Multi-Scale Sequences**: Fast/Medium/Slow temporal resolution
@@ -262,6 +263,19 @@ let pipeline = PipelineBuilder::new()
 
 ## Label Generation
 
+The library provides multiple labeling strategies for different trading objectives:
+
+| Strategy | Export CLI | Use Case |
+|----------|------------|----------|
+| **TLOB** | ✅ Integrated | Trend following, DeepLOB reproduction |
+| **Multi-Horizon** | ✅ Integrated | FI-2010 benchmarks, multi-task learning |
+| **Opportunity** | ✅ Integrated | Big move detection, whale watching |
+| **Triple Barrier** | ⚠️ API only | Risk-managed trading (export integration pending) |
+| **Magnitude** | ⚠️ API only | Regression targets (export integration pending) |
+
+> **Note**: "API only" means the labeler works in Rust code but isn't yet available via `export_dataset` CLI.
+> See [LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md) for detailed documentation.
+
 ### TLOB Method (Recommended)
 
 ```rust
@@ -363,7 +377,19 @@ let config = MultiHorizonConfig::new(
     5,
     ThresholdStrategy::rolling_spread(100, 1.0, 0.002)
 );
+
+// Quantile-based (balanced classes, computed per-horizon)
+let config = MultiHorizonConfig::new(
+    vec![10, 20, 50, 100],
+    5,
+    ThresholdStrategy::quantile(0.33, 5000, 0.002)
+);
+// → ~33% Up, ~33% Down, ~34% Stable at each horizon
 ```
+
+**Note**: Quantile thresholds are computed **per-horizon** from the actual smoothed price change
+distribution `l(t,h,k)`. This ensures balanced class distribution even at longer horizons (h=100, h=200)
+where 1-step price changes are too small to represent multi-step movements.
 
 ## Tensor Formatting
 

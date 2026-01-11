@@ -41,10 +41,13 @@ feature_extractor/
 │   │   └── market_impact.rs     # Market impact estimation (slippage, VWAP)
 │   │
 │   ├── labeling/                 # Label generation for supervised learning
-│   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats
-│   │   ├── tlob.rs              # TLOB labeling (decoupled h/k)
-│   │   ├── deeplob.rs           # DeepLOB labeling (k=h)
-│   │   └── multi_horizon.rs     # Multi-horizon labels (FI-2010, DeepLOB presets)
+│   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats, re-exports
+│   │   ├── tlob.rs              # TLOB labeling (decoupled h/k) - ✅ Export integrated
+│   │   ├── deeplob.rs           # DeepLOB labeling (k=h) - ✅ Export integrated
+│   │   ├── multi_horizon.rs     # Multi-horizon labels - ✅ Export integrated
+│   │   ├── opportunity.rs       # Opportunity/big-move detection - ✅ Export integrated
+│   │   ├── triple_barrier.rs    # Triple Barrier (de Prado) - ⚠️ API only, export pending
+│   │   └── magnitude.rs         # Magnitude/regression targets - ⚠️ API only, export pending
 │   │
 │   ├── preprocessing/            # Normalization and sampling
 │   │   ├── mod.rs               # Module exports
@@ -270,6 +273,8 @@ pub enum Preset {
 - [x] **Sample Configurations** (NVDA 98-feat, 84-feat baseline, multi-symbol templates)
 
 ### Pending
+- [ ] **Triple Barrier Export Integration** - Integrate `TripleBarrierLabeler` into `AlignedBatchExporter`
+- [ ] **Magnitude Export Integration** - Integrate `MagnitudeGenerator` for regression targets
 - [ ] crates.io publication
 - [ ] Additional paper presets (ViT-LOB)
 - [ ] Weighted MLOFI (depth-aware OFI scalar per Xu et al.)

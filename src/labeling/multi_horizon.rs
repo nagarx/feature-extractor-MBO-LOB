@@ -702,39 +702,70 @@ impl MultiHorizonLabelGenerator {
         None
     }
 
-    /// Compute quantile threshold (for Quantile threshold strategy).
+    /// Compute quantile threshold for a specific horizon.
     ///
-    /// This computes the threshold from the quantile of absolute percentage changes.
-    /// For example, with target_proportion = 0.3:
-    /// - We want ~30% Up, ~30% Down, ~40% Stable
-    /// - Threshold = (1 - target_proportion)th quantile of |pct_change|
-    /// - This ensures ~(1 - target_proportion) samples are within ±threshold (Stable)
-    fn compute_quantile_threshold(&self) -> Option<f64> {
+    /// This computes the threshold from the quantile of absolute smoothed percentage
+    /// changes (the actual `l(t,h,k)` values used for labeling), NOT from 1-step changes.
+    ///
+    /// For example, with target_proportion = 0.33:
+    /// - We want ~33% Up, ~33% Down, ~34% Stable
+    /// - Threshold = (1 - target_proportion)th quantile of |l(t,h,k)|
+    /// - This ensures ~(1 - 2*target_proportion) samples are within ±threshold (Stable)
+    ///
+    /// # Arguments
+    ///
+    /// * `horizon` - The prediction horizon to compute threshold for
+    ///
+    /// # Returns
+    ///
+    /// The quantile threshold for this horizon, or None if insufficient data.
+    ///
+    /// # Research Reference
+    ///
+    /// Using horizon-specific thresholds computed from the actual l(t,h,k) distribution
+    /// ensures balanced class distribution at each horizon. This addresses the issue
+    /// where 1-step changes don't represent the scale of multi-step smoothed changes.
+    fn compute_quantile_threshold_for_horizon(&self, horizon: usize) -> Option<f64> {
         if let ThresholdStrategy::Quantile {
             target_proportion,
             window_size,
             ..
         } = &self.config.threshold_strategy
         {
-            // Need percentage changes to compute quantile
-            if self.prices.len() < 2 {
+            let k = self.config.smoothing_window;
+            let total = self.prices.len();
+
+            // Valid range: [k, total - horizon - k)
+            let start = k;
+            let end = total.saturating_sub(horizon + k);
+
+            if start >= end {
                 return None;
             }
 
-            // Compute percentage changes from prices
-            let pct_changes: Vec<f64> = self
-                .prices
-                .windows(2)
-                .map(|w| (w[1] - w[0]) / w[0])
+            // Compute all smoothed percentage changes l(t,h,k) for this horizon
+            // This is the ACTUAL distribution we're classifying, not 1-step changes
+            let smoothed_changes: Vec<f64> = (start..end)
+                .map(|t| {
+                    let past_smooth = self.smoothed_past(t, k);
+                    let future_smooth = self.smoothed_future(t, horizon, k);
+                    (future_smooth - past_smooth) / past_smooth
+                })
                 .collect();
 
-            if pct_changes.len() < *window_size {
-                return None;
+            if smoothed_changes.len() < *window_size {
+                // Fall back to using all available changes if less than window_size
+                if smoothed_changes.is_empty() {
+                    return None;
+                }
             }
 
-            // Take the most recent window
-            let start = pct_changes.len().saturating_sub(*window_size);
-            let mut abs_changes: Vec<f64> = pct_changes[start..].iter().map(|x| x.abs()).collect();
+            // Take the most recent window (or all if fewer than window_size)
+            let window_start = smoothed_changes.len().saturating_sub(*window_size);
+            let mut abs_changes: Vec<f64> = smoothed_changes[window_start..]
+                .iter()
+                .map(|x| x.abs())
+                .collect();
 
             // Sort for quantile computation
             abs_changes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -742,6 +773,7 @@ impl MultiHorizonLabelGenerator {
             // Compute quantile position
             // We want (1 - 2*target_proportion) of samples to be Stable
             // So the threshold is at the (1 - target_proportion) quantile
+            // Example: target_proportion=0.33 → quantile=0.67 → ~34% Stable
             let quantile_pos = (1.0 - *target_proportion) * (abs_changes.len() - 1) as f64;
             let lower_idx = quantile_pos.floor() as usize;
             let upper_idx = (lower_idx + 1).min(abs_changes.len() - 1);
@@ -753,6 +785,23 @@ impl MultiHorizonLabelGenerator {
             return Some(threshold);
         }
         None
+    }
+
+    /// Compute quantile threshold (legacy method for backwards compatibility).
+    ///
+    /// **DEPRECATED**: Use `compute_quantile_threshold_for_horizon` instead.
+    /// This method computes threshold from 1-step changes which doesn't match
+    /// the scale of multi-step smoothed changes used for labeling.
+    ///
+    /// Kept for RollingSpread strategy and backwards compatibility.
+    fn compute_quantile_threshold(&self) -> Option<f64> {
+        // For backwards compatibility, compute for the median horizon
+        let horizons = &self.config.horizons;
+        if horizons.is_empty() {
+            return None;
+        }
+        let median_horizon = horizons[horizons.len() / 2];
+        self.compute_quantile_threshold_for_horizon(median_horizon)
     }
 
     /// Generate labels for all horizons.
@@ -794,12 +843,25 @@ impl MultiHorizonLabelGenerator {
             )));
         }
 
-        let threshold = self.current_threshold();
         let k = self.config.smoothing_window;
         let mut result = MultiHorizonLabels::new(self.config.clone(), total);
 
+        // Determine if we should use per-horizon thresholds
+        let use_per_horizon_threshold =
+            matches!(self.config.threshold_strategy, ThresholdStrategy::Quantile { .. });
+
         // Generate labels for each horizon
         for &horizon in &self.config.horizons {
+            // For Quantile strategy, compute horizon-specific threshold from
+            // the actual l(t,h,k) distribution for this horizon.
+            // For Fixed/RollingSpread, use the same threshold for all horizons.
+            let threshold = if use_per_horizon_threshold {
+                self.compute_quantile_threshold_for_horizon(horizon)
+                    .unwrap_or_else(|| self.current_threshold())
+            } else {
+                self.current_threshold()
+            };
+
             let labels = self.generate_for_horizon(horizon, k, threshold)?;
             let stats = Self::compute_stats(&labels);
             result.labels.insert(horizon, labels);

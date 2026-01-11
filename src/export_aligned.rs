@@ -20,7 +20,8 @@
 
 use crate::export::tensor_format::{FeatureMapping, TensorFormat};
 use crate::labeling::{
-    LabelConfig, MultiHorizonConfig, MultiHorizonLabelGenerator, TlobLabelGenerator, TrendLabel,
+    LabelConfig, MultiHorizonConfig, MultiHorizonLabelGenerator, OpportunityConfig,
+    OpportunityLabel, OpportunityLabelGenerator, TlobLabelGenerator, TrendLabel,
 };
 use crate::pipeline::PipelineOutput;
 use mbo_lob_reconstructor::Result;
@@ -230,6 +231,8 @@ pub struct AlignedBatchExporter {
     feature_mapping: Option<FeatureMapping>,
     /// Optional multi-horizon configuration (replaces single-horizon if set)
     multi_horizon_config: Option<MultiHorizonConfig>,
+    /// Optional opportunity config for big-move detection labeling
+    opportunity_configs: Option<Vec<OpportunityConfig>>,
 }
 
 impl AlignedBatchExporter {
@@ -254,6 +257,7 @@ impl AlignedBatchExporter {
             tensor_format: None,
             feature_mapping: None,
             multi_horizon_config: None,
+            opportunity_configs: None,
         }
     }
 
@@ -323,6 +327,45 @@ impl AlignedBatchExporter {
         self
     }
 
+    /// Enable opportunity-based labeling for big-move detection (builder pattern).
+    ///
+    /// When set, uses peak-return-based labeling instead of smoothed average labeling.
+    /// This is designed for detecting "big moves" rather than trend direction.
+    ///
+    /// # Arguments
+    /// * `configs` - Vector of OpportunityConfig, one per horizon
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::labeling::OpportunityConfig;
+    ///
+    /// // Detect 0.5% moves at horizons 50, 100, 200
+    /// let configs = vec![
+    ///     OpportunityConfig::new(50, 0.005),
+    ///     OpportunityConfig::new(100, 0.005),
+    ///     OpportunityConfig::new(200, 0.005),
+    /// ];
+    /// let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10)
+    ///     .with_opportunity_labels(configs);
+    /// ```
+    ///
+    /// # Output
+    ///
+    /// - Labels: 0 = BigDown, 1 = NoOpportunity, 2 = BigUp
+    /// - Multi-horizon: `{day}_labels.npy` shape (N, num_horizons)
+    /// - Single-horizon: `{day}_labels.npy` shape (N,)
+    pub fn with_opportunity_labels(mut self, configs: Vec<OpportunityConfig>) -> Self {
+        self.opportunity_configs = Some(configs);
+        self
+    }
+
+    /// Check if opportunity labeling is enabled.
+    #[inline]
+    pub fn is_opportunity_labeling(&self) -> bool {
+        self.opportunity_configs.is_some()
+    }
+
     /// Check if multi-horizon labeling is enabled.
     #[inline]
     pub fn is_multi_horizon(&self) -> bool {
@@ -381,12 +424,15 @@ impl AlignedBatchExporter {
         println!("    Sequences generated: {sequences_generated}");
         println!("    Mid-prices collected: {}", output.mid_prices.len());
 
-        // Branch based on labeling mode
-        if let Some(multi_config) = &self.multi_horizon_config {
-            // Multi-horizon labeling path
+        // Branch based on labeling mode (order matters: opportunity takes precedence)
+        if let Some(opp_configs) = &self.opportunity_configs {
+            // Opportunity labeling path (big-move detection)
+            self.export_day_opportunity(day_name, output, opp_configs.clone())
+        } else if let Some(multi_config) = &self.multi_horizon_config {
+            // Multi-horizon TLOB labeling path
             self.export_day_multi_horizon(day_name, output, multi_config.clone())
         } else {
-            // Single-horizon labeling path (original behavior)
+            // Single-horizon TLOB labeling path (original behavior)
             self.export_day_single_horizon(day_name, output)
         }
     }
@@ -734,6 +780,294 @@ impl AlignedBatchExporter {
             sequences_generated,
             sequences_dropped,
         })
+    }
+
+    // ========================================================================
+    // Opportunity Labeling Methods
+    // ========================================================================
+
+    /// Export with opportunity-based labeling (big-move detection)
+    fn export_day_opportunity(
+        &self,
+        day_name: &str,
+        output: &PipelineOutput,
+        configs: Vec<OpportunityConfig>,
+    ) -> Result<AlignedDayExport> {
+        let features_extracted = output.features_extracted;
+        let sequences_generated = output.sequences.len();
+        let horizons: Vec<usize> = configs.iter().map(|c| c.horizon).collect();
+        let is_multi_horizon = configs.len() > 1;
+
+        println!(
+            "  📊 Generating OPPORTUNITY labels for {} horizon(s): {:?}",
+            horizons.len(),
+            horizons
+        );
+        println!(
+            "    Threshold: {:.4}% ({:.1} bps)",
+            configs[0].threshold * 100.0,
+            configs[0].threshold * 10000.0
+        );
+
+        // Step 1: Generate opportunity labels for each horizon
+        let mut all_labels: Vec<Vec<(usize, OpportunityLabel, f64, f64)>> = Vec::new();
+        
+        for config in &configs {
+            let mut generator = OpportunityLabelGenerator::new(config.clone());
+            generator.add_prices(&output.mid_prices);
+            let labels = generator.generate_labels()?;
+            
+            println!(
+                "    Horizon {}: {} labels, {:.1}% opportunities",
+                config.horizon,
+                labels.len(),
+                labels.iter().filter(|(_, l, _, _)| l.is_opportunity()).count() as f64 / labels.len() as f64 * 100.0
+            );
+            
+            all_labels.push(labels);
+        }
+
+        // Step 2: Build label matrix (intersect valid indices)
+        let (label_indices, label_matrix, combined_dist) =
+            self.build_opportunity_label_matrix(&all_labels, is_multi_horizon)?;
+
+        println!(
+            "    Valid aligned indices: {} (intersection of all horizons)",
+            label_indices.len()
+        );
+
+        // Step 3: Extract aligned sequences
+        println!("  🔗 Aligning sequences with opportunity labels...");
+        let (aligned_sequences, aligned_label_matrix) = if is_multi_horizon {
+            self.align_sequences_with_multi_labels(
+                &output.sequences,
+                &label_indices,
+                &label_matrix,
+            )?
+        } else {
+            // Single-horizon: convert to simpler format
+            let single_labels: Vec<i8> = label_matrix.iter().map(|v| v[0]).collect();
+            let (seqs, labels) = self.align_sequences_with_labels(
+                &output.sequences,
+                &label_indices,
+                &single_labels,
+            )?;
+            (seqs, labels.iter().map(|&l| vec![l]).collect())
+        };
+
+        let sequences_dropped = sequences_generated.saturating_sub(aligned_sequences.len());
+
+        println!(
+            "    Aligned {} sequences with {} horizon(s)",
+            aligned_sequences.len(),
+            horizons.len()
+        );
+        println!("    Dropped {sequences_dropped} sequences (no label)");
+
+        // Step 4: Validate alignment
+        self.validate_multi_horizon_alignment(&aligned_sequences, &aligned_label_matrix)?;
+
+        // Step 5: Verify RAW spreads
+        self.verify_raw_spreads(&aligned_sequences)?;
+
+        // Step 6: Normalize sequences
+        let (aligned_sequences, norm_params) = self.normalize_sequences(&aligned_sequences)?;
+
+        // Step 7: Export sequences
+        let seq_shape = if !aligned_sequences.is_empty() {
+            let window = aligned_sequences[0].len();
+            let features = aligned_sequences[0][0].len();
+            (window, features)
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "No aligned sequences to export",
+            )
+            .into());
+        };
+
+        let sequences_path = self.output_dir.join(format!("{day_name}_sequences.npy"));
+        self.export_sequences_with_format(&aligned_sequences, seq_shape, &sequences_path)?;
+
+        // Step 8: Export labels
+        let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
+        if is_multi_horizon {
+            // Export multi-horizon labels
+            let n_seq = aligned_label_matrix.len();
+            let n_horizons = horizons.len();
+            let mut labels_array = Array2::<i8>::zeros((n_seq, n_horizons));
+            for (i, row) in aligned_label_matrix.iter().enumerate() {
+                for (j, &label) in row.iter().enumerate() {
+                    labels_array[[i, j]] = label;
+                }
+            }
+            let file = File::create(&labels_path)?;
+            labels_array.write_npy(file).map_err(|e| {
+                std::io::Error::other(format!("Failed to write labels: {e}"))
+            })?;
+            println!("  💾 Exported labels: {} [{}, {}]", labels_path.display(), n_seq, n_horizons);
+        } else {
+            // Export single-horizon labels
+            let labels_vec: Vec<i8> = aligned_label_matrix.iter().map(|v| v[0]).collect();
+            let labels_array = Array1::from(labels_vec);
+            let file = File::create(&labels_path)?;
+            labels_array.write_npy(file).map_err(|e| {
+                std::io::Error::other(format!("Failed to write labels: {e}"))
+            })?;
+            println!("  💾 Exported labels: {} [{}]", labels_path.display(), aligned_label_matrix.len());
+        }
+
+        // Step 9: Export normalization params
+        norm_params.save_json(self.output_dir.join(format!("{day_name}_normalization.json")))?;
+
+        // Step 10: Export metadata with opportunity-specific info
+        let drop_rate = if sequences_generated > 0 {
+            (sequences_dropped as f64 / sequences_generated as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let tensor_format_str = self.tensor_format.as_ref().map(|f| format!("{:?}", f));
+
+        let metadata = serde_json::json!({
+            "day": day_name,
+            "n_sequences": aligned_sequences.len(),
+            "window_size": seq_shape.0,
+            "n_features": seq_shape.1,
+            "tensor_format": tensor_format_str,
+            "labeling": {
+                "strategy": "opportunity",
+                "horizons": horizons,
+                "threshold": configs[0].threshold,
+                "threshold_bps": configs[0].threshold * 10000.0,
+                "conflict_priority": format!("{:?}", configs[0].conflict_priority),
+            },
+            "label_distribution": combined_dist,
+            "label_encoding": {
+                "format": "signed_int8",
+                "values": {
+                    "-1": "BigDown",
+                    "0": "NoOpportunity",
+                    "1": "BigUp",
+                },
+                "class_index_mapping": "class_idx = label + 1  # For softmax: -1→0, 0→1, 1→2",
+            },
+            "normalization": {
+                "strategy": "market_structure_zscore",
+                "params_file": format!("{day_name}_normalization.json"),
+            },
+            "processing": {
+                "messages_processed": output.messages_processed,
+                "features_extracted": features_extracted,
+                "sequences_generated": sequences_generated,
+                "sequences_aligned": aligned_sequences.len(),
+                "sequences_dropped": sequences_dropped,
+                "drop_rate_percent": format!("{:.2}", drop_rate),
+                "buffer_coverage_ok": features_extracted <= 50000,
+            }
+        });
+
+        let metadata_path = self.output_dir.join(format!("{day_name}_metadata.json"));
+        let mut file = File::create(&metadata_path)?;
+        serde_json::to_writer_pretty(&mut file, &metadata)
+            .map_err(|e| std::io::Error::other(format!("Failed to write metadata: {e}")))?;
+        println!("  💾 Exported metadata: {}", metadata_path.display());
+
+        // Step 11: Export horizon config
+        let horizons_config = serde_json::json!({
+            "labeling_strategy": "opportunity",
+            "horizons": horizons,
+            "threshold": configs[0].threshold,
+            "threshold_bps": configs[0].threshold * 10000.0,
+            "conflict_priority": format!("{:?}", configs[0].conflict_priority),
+        });
+        let horizons_path = self.output_dir.join(format!("{day_name}_horizons.json"));
+        let horizons_file = File::create(&horizons_path)?;
+        serde_json::to_writer_pretty(horizons_file, &horizons_config)
+            .map_err(|e| std::io::Error::other(format!("Failed to write horizons config: {e}")))?;
+        println!("  💾 Exported horizons config: {}", horizons_path.display());
+
+        Ok(AlignedDayExport {
+            day: day_name.to_string(),
+            n_sequences: aligned_sequences.len(),
+            seq_shape,
+            label_distribution: combined_dist,
+            messages_processed: output.messages_processed,
+            export_path: self.output_dir.clone(),
+            features_extracted,
+            buffer_size: 50_000,
+            sequences_generated,
+            sequences_dropped,
+        })
+    }
+
+    /// Build label matrix for opportunity labeling.
+    ///
+    /// Returns (indices, label_matrix, distribution) where:
+    /// - indices: Valid snapshot indices that have labels for ALL horizons
+    /// - label_matrix: Vec<Vec<i8>> where each row has labels for all horizons
+    /// - distribution: Combined label distribution across all horizons
+    #[allow(clippy::type_complexity)]
+    fn build_opportunity_label_matrix(
+        &self,
+        all_labels: &[Vec<(usize, OpportunityLabel, f64, f64)>],
+        _is_multi_horizon: bool,
+    ) -> Result<(Vec<usize>, Vec<Vec<i8>>, HashMap<String, usize>)> {
+        use std::collections::BTreeSet;
+
+        // Find intersection of all valid indices across horizons
+        let mut valid_indices: Option<BTreeSet<usize>> = None;
+
+        for horizon_labels in all_labels {
+            let indices: BTreeSet<usize> = horizon_labels.iter().map(|(idx, _, _, _)| *idx).collect();
+            valid_indices = match valid_indices {
+                None => Some(indices),
+                Some(prev) => Some(prev.intersection(&indices).cloned().collect()),
+            };
+        }
+
+        let valid_indices: Vec<usize> = valid_indices
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+        if valid_indices.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "No valid indices found across all horizons",
+            )
+            .into());
+        }
+
+        // Create index lookup for each horizon
+        let mut horizon_lookups: Vec<HashMap<usize, OpportunityLabel>> = Vec::new();
+        for horizon_labels in all_labels {
+            let lookup: HashMap<usize, OpportunityLabel> = horizon_labels
+                .iter()
+                .map(|(idx, label, _, _)| (*idx, *label))
+                .collect();
+            horizon_lookups.push(lookup);
+        }
+
+        // Build label matrix
+        let mut label_matrix = Vec::with_capacity(valid_indices.len());
+        let mut dist = HashMap::new();
+        dist.insert("BigDown".to_string(), 0);
+        dist.insert("NoOpportunity".to_string(), 0);
+        dist.insert("BigUp".to_string(), 0);
+
+        for &idx in &valid_indices {
+            let mut row = Vec::with_capacity(all_labels.len());
+            for lookup in &horizon_lookups {
+                let label = lookup.get(&idx).unwrap_or(&OpportunityLabel::NoOpportunity);
+                // Use as_int() for consistency with TLOB labels: -1=BigDown, 0=NoOpp, 1=BigUp
+                row.push(label.as_int());
+                *dist.entry(label.name().to_string()).or_insert(0) += 1;
+            }
+            label_matrix.push(row);
+        }
+
+        Ok((valid_indices, label_matrix, dist))
     }
 
     // ========================================================================

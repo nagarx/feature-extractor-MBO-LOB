@@ -731,6 +731,14 @@ impl Pipeline {
     }
 
     /// Process and return flat features (for direct export)
+    ///
+    /// **Deprecated**: This method uses `to_flat_features()` which causes data inflation.
+    /// Use `process()` followed by `AlignedBatchExporter` for correct alignment.
+    #[deprecated(
+        since = "0.9.0",
+        note = "Use process() with AlignedBatchExporter for correct feature-label alignment."
+    )]
+    #[allow(deprecated)] // Intentionally uses deprecated to_flat_features
     pub fn process_flat<P: AsRef<Path>>(
         &mut self,
         input_path: P,

@@ -67,9 +67,9 @@ pub mod tensor_format;
 // Note: SplitConfig not re-exported to avoid conflict with existing SplitConfig (day counts)
 // Use dataset_config::SplitConfig for ratio-based splits
 pub use dataset_config::{
-    DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo, ExportLabelConfig,
-    ExportSamplingConfig, ExportSequenceConfig, ExportThresholdStrategy, FeatureSetConfig,
-    ProcessingConfig, SamplingStrategyConfig, SymbolConfig,
+    DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo, ExportConflictPriority,
+    ExportLabelConfig, ExportSamplingConfig, ExportSequenceConfig, ExportThresholdStrategy,
+    FeatureSetConfig, LabelingStrategy, ProcessingConfig, SamplingStrategyConfig, SymbolConfig,
 };
 
 use crate::labeling::{LabelConfig, TlobLabelGenerator, TrendLabel};
@@ -238,6 +238,7 @@ pub struct NumpyExporter {
     output_dir: PathBuf,
 }
 
+#[allow(deprecated)]
 impl NumpyExporter {
     /// Create new NumPy exporter
     pub fn new<P: AsRef<Path>>(output_dir: P) -> Self {
@@ -354,6 +355,14 @@ impl NumpyExporter {
 }
 
 /// Convenience function for direct export
+///
+/// **Deprecated**: Uses deprecated `NumpyExporter` with label misalignment.
+/// Use `AlignedBatchExporter::export_day()` instead.
+#[deprecated(
+    since = "0.9.0",
+    note = "Use AlignedBatchExporter for correct feature-label alignment."
+)]
+#[allow(deprecated)] // Intentionally uses deprecated NumpyExporter
 pub fn export_to_numpy<P: AsRef<Path>>(output: &PipelineOutput, output_dir: P) -> Result<()> {
     let exporter = NumpyExporter::new(output_dir);
     exporter.export(output)
@@ -462,6 +471,7 @@ pub struct BatchExporter {
     label_config: Option<LabelConfig>,
 }
 
+#[allow(deprecated)]
 impl BatchExporter {
     /// Create new batch exporter
     ///
@@ -654,6 +664,7 @@ struct DayMetadata {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // Tests for backward-compatible deprecated exporters
 mod tests {
     use super::*;
     use crate::labeling::LabelConfig;

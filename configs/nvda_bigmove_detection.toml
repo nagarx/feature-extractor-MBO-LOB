@@ -1,0 +1,204 @@
+# NVDA Big Move Detection Configuration (Schema 2.3)
+#
+# This configuration is designed for training models to detect "big move"
+# opportunities rather than predicting small average price changes.
+#
+# KEY DIFFERENCES FROM BALANCED CONFIG:
+# =====================================
+# 1. Uses "opportunity" labeling strategy (peak return in horizon)
+# 2. Higher thresholds (50+ bps vs 8-10 bps)
+# 3. Longer horizons for capturing significant moves
+# 4. Expected severe class imbalance (~5-15% opportunities)
+#
+# RESEARCH MOTIVATION:
+# ====================
+# Backtesting revealed that:
+# - DeepLOB achieves 65% directional accuracy
+# - But 65% isn't profitable at realistic transaction costs
+# - Only 90%+ confidence predictions are profitable
+# - This suggests training for "obvious" opportunities, not average trends
+#
+# The key insight: We should train the model to detect moments when the
+# LOB state is CLEARLY predictive (big moves, whale activity, imbalance spikes),
+# rather than predicting small moves that get consumed by transaction costs.
+#
+# PREREQUISITE: Decompress all files to hot store first:
+#   cd MBO-LOB-reconstructor
+#   cargo run --release --bin decompress_to_hot_store -- \
+#       --input ../data/NVDA_2025-02-01_to_2025-09-30 \
+#       --output ../data/hot_store
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_bigmove_detection.toml
+
+[experiment]
+name = "NVDA Big Move Detection v2.3"
+description = "Opportunity-based labeling for detecting significant price movements"
+version = "2.3.0"
+tags = ["nvda", "98-features", "opportunity-detection", "big-moves", "imbalanced"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+# Paths relative to feature-extractor-MBO-LOB directory
+input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "../data/exports/nvda_bigmove"
+
+# Hot store for ~30% faster processing (REQUIRED for efficient processing)
+hot_store_dir = "../data/hot_store"
+
+[dates]
+# Full date range: Feb 3, 2025 to Sept 29, 2025
+# Weekends are automatically excluded (~165 trading days)
+start_date = "2025-02-03"
+end_date = "2025-09-29"
+
+# US market holidays to exclude (2025)
+exclude_dates = [
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+]
+
+[features]
+lob_levels = 10          # 10 levels × 4 = 40 base features
+include_derived = true   # +8 features
+include_mbo = true       # +36 MBO features
+include_signals = true   # +14 trading signals
+mbo_window_size = 1000   # Rolling statistics window
+
+[sampling]
+strategy = "event_based"
+event_count = 1000       # Sample every 1000 events
+
+[sequence]
+window_size = 100        # 100 snapshots per sequence
+stride = 10              # 90% overlap between sequences
+max_buffer_size = 50000  # Memory limit
+
+# =============================================================================
+# OPPORTUNITY-BASED LABELING (NEW for v2.3)
+# =============================================================================
+#
+# Unlike TLOB/DeepLOB which use smoothed average returns, opportunity labeling
+# detects PEAK returns within the horizon:
+#
+#   max_return = max(prices[t+1:t+h]) / price[t] - 1
+#   min_return = min(prices[t+1:t+h]) / price[t] - 1
+#
+#   if max_return > threshold → BIG_UP
+#   elif min_return < -threshold → BIG_DOWN
+#   else → NO_OPPORTUNITY
+#
+# This answers: "Is there a significant move in the next h events?"
+# Rather than: "What is the average trend direction?"
+
+[labels]
+# Labeling strategy: "opportunity" uses peak return detection
+strategy = "opportunity"
+
+# Prediction horizons
+# Longer horizons capture slower-developing but larger moves
+# With event_count=1000, each sample ≈ 0.1-0.5s during active trading:
+#   - horizon=50  ≈ 5-25 seconds ahead (short-term, quick scalps)
+#   - horizon=100 ≈ 10-50 seconds ahead (medium-term, normal moves)
+#   - horizon=200 ≈ 20-100 seconds ahead (longer-term, larger moves)
+#
+# We export multiple horizons so we can experiment with different
+# time scales without re-exporting data.
+horizons = [50, 100, 200]
+
+# Move threshold: minimum absolute return to qualify as "opportunity"
+#
+# CRITICAL PARAMETER: This determines class balance and signal quality
+#
+# | Threshold | Name     | Expected Rate | Use Case |
+# |-----------|----------|---------------|----------|
+# | 0.003     | Medium   | ~15-25%       | Higher recall, more trades |
+# | 0.005     | Large    | ~5-15%        | Balanced (RECOMMENDED) |
+# | 0.010     | XLarge   | ~1-5%         | High precision, fewer trades |
+# | 0.020     | XXLarge  | ~0.1-1%       | Only major moves |
+#
+# Start with 0.005 (50 bps) - this is large enough to exceed typical
+# transaction costs (0.5-1 bps) with margin, but frequent enough
+# to have enough training samples.
+threshold = 0.005  # 0.5% = 50 bps
+
+# Conflict resolution: when both up and down moves exceed threshold
+# in the same horizon (volatile period), how to resolve?
+#
+# Options:
+#   - "larger_magnitude": Label based on which move is larger (default)
+#   - "up_priority": Always label as BIG_UP when both trigger
+#   - "down_priority": Always label as BIG_DOWN when both trigger
+#   - "ambiguous": Label as NO_OPPORTUNITY when both trigger
+#
+# For initial experiments, use "larger_magnitude" which captures
+# the dominant move direction.
+conflict_priority = "larger_magnitude"
+
+# Optional: asymmetric thresholds
+# Uncomment to use different thresholds for up vs down moves
+# (e.g., if downside protection is more important)
+# up_threshold = 0.005
+# down_threshold = 0.003
+
+[split]
+# Temporal split: first 70% train, next 15% val, last 15% test
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+# Parallel processing - let Rayon auto-detect optimal thread count
+error_mode = "collect_errors"  # Continue on errors, report at end
+verbose = true  # Show progress for each day processed
+
+# =============================================================================
+# EXPECTED OUTPUTS
+# =============================================================================
+#
+# This configuration will generate:
+#
+# 1. sequences.npy     - Shape: [N_sequences, 100, 98] - LOB features
+# 2. labels.npy        - Shape: [N_sequences, 3] - Multi-horizon labels
+# 3. timestamps.npy    - Shape: [N_sequences] - Nanosecond timestamps
+# 4. mid_prices.npy    - Shape: [N_sequences] - Mid prices for backtesting
+# 5. metadata.json     - Configuration and statistics
+#
+# Labels are encoded as class indices:
+#   0 = BIG_DOWN (min_return < -threshold)
+#   1 = NO_OPPORTUNITY (neither threshold exceeded)
+#   2 = BIG_UP (max_return > threshold)
+#
+# =============================================================================
+# TRAINING CONSIDERATIONS
+# =============================================================================
+#
+# 1. CLASS IMBALANCE:
+#    With 0.5% threshold, expect ~10% opportunities, ~90% no-opportunity.
+#    Use weighted cross-entropy or focal loss to handle imbalance.
+#
+# 2. LOSS FUNCTIONS:
+#    - WeightedCrossEntropy: Weight inversely by class frequency
+#    - FocalLoss: Downweight easy examples, focus on hard ones
+#    - ClassBalancedLoss: Use effective number of samples
+#
+# 3. METRICS:
+#    - Track per-class precision/recall, not just accuracy
+#    - Focus on precision of BIG_UP/BIG_DOWN classes
+#    - Use Precision@K to match backtest filtering behavior
+#
+# 4. DATA AUGMENTATION:
+#    - Consider oversampling minority classes
+#    - Or class-balanced batch sampling
+#
+

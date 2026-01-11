@@ -112,10 +112,14 @@ pub use preprocessing::{
 };
 
 // Re-exports - Sequence Building
-pub use sequence_builder::{FeatureVec, Sequence, SequenceBuilder, SequenceConfig};
+pub use sequence_builder::{
+    FeatureVec, HorizonAwareConfig, MultiScaleConfig, MultiScaleSequence, MultiScaleWindow,
+    ScaleConfig, Sequence, SequenceBuilder, SequenceConfig, SequenceError,
+};
 
 // Re-exports - Export
 pub use export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
+#[allow(deprecated)] // Re-exporting deprecated types for backward compatibility
 pub use export::{
     export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
     ExportThresholdStrategy, NumpyExporter, SplitConfig,
@@ -131,9 +135,13 @@ pub use validation::{
 
 // Re-exports - Labeling
 pub use labeling::{
-    DeepLobLabelGenerator, DeepLobMethod, LabelConfig, LabelGenerator, LabelStats,
-    MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels, MultiHorizonSummary,
-    ThresholdStrategy, TlobLabelGenerator, TrendLabel,
+    BarrierLabel, ConflictPriority, DeepLobLabelGenerator, DeepLobMethod, LabelConfig,
+    LabelGenerator, LabelStats, MagnitudeConfig, MagnitudeGenerator, MagnitudeOutput,
+    MagnitudeStats, MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels,
+    MultiHorizonMagnitudeOutput, MultiHorizonSummary, OpportunityConfig, OpportunityLabel,
+    OpportunityLabelGenerator, OpportunityStats, ReturnData, ReturnType, ThresholdStrategy,
+    TimeoutStrategy, TlobLabelGenerator, TrendLabel, TripleBarrierConfig, TripleBarrierLabeler,
+    TripleBarrierOutput, TripleBarrierStats,
 };
 
 // Re-exports - Pipeline

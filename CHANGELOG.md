@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Trading Signals (14 features)** (`src/features/signals.rs`)
+  - 14 research-backed signals at indices 84-97
+  - `OfiComputer` - Streaming OFI per Cont et al. (2014)
+    - `update()` - Called on every LOB state transition
+    - `sample_and_reset()` - Extract OFI sample at sampling points
+    - `is_warm()` - Check if warmup complete (≥100 state changes)
+  - `TimeRegime` - Market session detection (Open/Early/Midday/Close/Closed)
+    - Automatic UTC → Eastern Time conversion with DST handling
+  - Safety gates: `book_valid`, `mbo_ready` for data quality
+  - Direction signals: `true_ofi`, `depth_norm_ofi`, `executed_pressure`
+  - Confirmation signals: `trade_asymmetry`, `cancel_asymmetry`
+  - Impact signals: `fragility_score`, `depth_asymmetry`
+  - Timing signals: `signed_mp_delta_bps`, `time_regime`
+  - Meta signals: `dt_seconds`, `invalidity_delta`, `schema_version`
+  - Requires: `include_signals: true` + `lob_levels == 10`
+  - Comprehensive validation with 1.7M+ samples on NVIDIA data
+
 - **Normalization Metadata Export**
   - New `NormalizationStrategy` enum: `None`, `PerFeatureZScore`, `MarketStructureZScore`, `GlobalZScore`, `Bilinear`
   - New `NormalizationParams` struct with serialization support
@@ -96,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ThresholdStrategy` - Configurable classification thresholds
     - `Fixed(f64)` - Fixed percentage threshold (default: 0.002)
     - `RollingSpread { window_size, multiplier, fallback }` - Adaptive spread-based
+    - `Quantile { target_proportion, window_size, fallback }` - Auto-balanced classes
   - Memory efficient: Single price buffer shared across all horizons
   - O(T × H) complexity where H = number of horizons
   - 16 comprehensive unit tests + integration tests
@@ -172,6 +190,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-scale sharing**: 16 bytes (2 Arc clones) vs 1,344 bytes (2 Vec clones)
 - **Parallel processing**: ~64K msg/sec with 2 threads, ~1.5x speedup
 - **Validated**: 28M+ messages across multiple days with BIT-LEVEL identical results
+
+### Fixed
+
+- **Per-Horizon Quantile Threshold Computation** (`src/labeling/multi_horizon.rs`)
+  - `compute_quantile_threshold_for_horizon(horizon)` - NEW: Computes threshold from actual smoothed `l(t,h,k)` values for each horizon
+  - Fixes class imbalance at longer horizons (h=100, h=200) where 1-step thresholds were too small
+  - Problem: Old method computed threshold from 1-step price changes, which didn't match the scale of multi-step smoothed changes
+  - Solution: Now computes threshold from the actual `l(t,h,k) = (w⁺ - w⁻) / w⁻` distribution per horizon
+  - Old `compute_quantile_threshold()` deprecated (kept for backwards compatibility)
+  - All 81 labeling tests pass with the fix
 
 ## [0.1.1] - 2025-12-04
 
