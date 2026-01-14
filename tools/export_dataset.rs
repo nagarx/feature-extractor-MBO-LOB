@@ -407,7 +407,20 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
             config.labels.to_label_config(),
             pipeline_config.sequence.window_size,
             pipeline_config.sequence.stride,
-        );
+        )
+        // CRITICAL: Apply normalization config from TOML
+        // Without this, normalization settings are ignored!
+        .with_normalization(config.normalization.clone());
+
+        // Log normalization strategy
+        if config.normalization.any_normalization() {
+            println!(
+                "    📊 Normalization: {}",
+                config.normalization.summary()
+            );
+        } else {
+            println!("    📊 Normalization: NONE (raw export)");
+        }
 
         // Configure exporter based on labeling strategy
         let exporter = if let Some((opp_configs, horizons)) = config.labels.to_opportunity_configs() {
