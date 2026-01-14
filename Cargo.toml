@@ -120,20 +120,12 @@ required-features = ["parallel"]
 # Tools - Data processing scripts
 # ============================================================================
 
-# New modular, symbol-agnostic export tool
+# Modular, symbol-agnostic export tool (TOML configuration-driven)
+# Uses AlignedBatchExporter from export_aligned.rs for correct sequence-label alignment
 [[bin]]
 name = "export_dataset"
 path = "tools/export_dataset.rs"
 required-features = ["parallel"]
-
-# Legacy NVIDIA-specific tools (for reference)
-[[bin]]
-name = "export_nvidia_legacy"
-path = "tools/export_nvidia_dataset.rs"
-
-[[bin]]
-name = "export_aligned_legacy"
-path = "tools/export_nvidia_dataset_aligned.rs"
 
 # ============================================================================
 # Benchmarks
