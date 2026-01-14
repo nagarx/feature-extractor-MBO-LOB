@@ -106,24 +106,34 @@ error_mode = "collect_errors"
 verbose = true
 
 # =============================================================================
-# NORMALIZATION - CRITICAL: GLOBAL Z-SCORE (MATCHING OFFICIAL TLOB REPO)
+# NORMALIZATION - RAW EXPORT (MATCHES OFFICIAL TLOB REPO PATTERN)
 # =============================================================================
 #
-# From TLOB/utils/utils_data.py::z_score_orderbook():
-#   - All 20 price columns (10 ask + 10 bid) share ONE mean/std
-#   - All 20 size columns (10 ask + 10 bid) share ONE mean/std
+# IMPORTANT: The official TLOB repo computes GLOBAL stats across ALL training
+# data BEFORE saving to .npy files. Our Rust exporter cannot do this in a
+# single pass (it processes day-by-day).
 #
-# This is GlobalZScore strategy in our feature extractor.
+# SOLUTION: Export RAW data, then normalize in Python training code:
+#   1. Export: Raw values (no normalization) 
+#   2. Python: Compute global mean/std from ALL training files
+#   3. Python: Apply training stats to train/val/test
 #
-# DO NOT USE "none" - the BiN layer expects pre-normalized data!
+# This matches TLOB/preprocessing/lobster.py::_normalize_dataframes() exactly.
+#
+# The lob-model-trainer will compute:
+#   mean_prices = ALL_TRAIN_PRICES.mean()  (one value for all 20 price cols)
+#   std_prices  = ALL_TRAIN_PRICES.std()   (one value for all 20 price cols)
+#   mean_sizes  = ALL_TRAIN_SIZES.mean()   (one value for all 20 size cols)
+#   std_sizes   = ALL_TRAIN_SIZES.std()    (one value for all 20 size cols)
+#
 # =============================================================================
 
 [normalization]
-lob_prices = "global_z_score"   # All prices share same mean/std (LIKE OFFICIAL REPO)
-lob_sizes = "global_z_score"    # All sizes share same mean/std (LIKE OFFICIAL REPO)
-derived = "none"                # Not used (include_derived = false)
-mbo = "none"                    # Not used (include_mbo = false)
-signals = "none"                # Not used (include_signals = false)
+lob_prices = "none"     # Export RAW - normalize in Python with GLOBAL stats
+lob_sizes = "none"      # Export RAW - normalize in Python with GLOBAL stats  
+derived = "none"        # Not used (include_derived = false)
+mbo = "none"            # Not used (include_mbo = false)
+signals = "none"        # Not used (include_signals = false)
 
 reference_price = "mid_price"
 bilinear_scale_factor = 50.0
