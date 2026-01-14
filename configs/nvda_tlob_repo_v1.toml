@@ -1,0 +1,129 @@
+# =============================================================================
+# NVDA Dataset Configuration - OFFICIAL TLOB REPO MATCHING
+# =============================================================================
+#
+# This configuration matches the EXACT preprocessing from the official TLOB
+# GitHub repository (https://github.com/...) for proper model training.
+#
+# KEY CHANGES FROM PREVIOUS EXPORTS:
+# 1. GlobalZScore normalization on prices and sizes (LIKE OFFICIAL REPO)
+# 2. 40 LOB features only (MATCHING OFFICIAL REPO)
+# 3. Multi-horizon labels for flexibility
+#
+# Research Reference:
+# - TLOB/utils/utils_data.py::z_score_orderbook() applies global z-score
+# - TLOB/preprocessing/lobster.py::_normalize_dataframes() confirms this
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA TLOB-Repo Matching (GlobalZScore)"
+description = "234-day dataset matching official TLOB repository preprocessing"
+version = "5.0.0"
+tags = [
+    "nvda",
+    "40-features",
+    "multi-horizon",
+    "tlob-repo-match",
+    "global-zscore",
+    "production",
+]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_tlob_repo"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-07"
+# US Market Holidays 2025-2026
+exclude_dates = [
+    "2025-01-20",   # MLK Day
+    "2025-02-17",   # Presidents Day
+    "2025-04-18",   # Good Friday
+    "2025-05-26",   # Memorial Day
+    "2025-06-19",   # Juneteenth
+    "2025-07-04",   # Independence Day
+    "2025-09-01",   # Labor Day
+    "2025-11-27",   # Thanksgiving
+    "2025-12-25",   # Christmas
+    "2026-01-01",   # New Year's Day
+]
+
+# =============================================================================
+# FEATURE CONFIGURATION - 40 RAW LOB FEATURES ONLY
+# =============================================================================
+# Official TLOB uses only 40 LOB features for basic experiments.
+# Derived, MBO, and signals are DISABLED to match official repo.
+# =============================================================================
+
+[features]
+lob_levels = 10
+include_derived = false    # DISABLED - official TLOB doesn't use these
+include_mbo = false        # DISABLED - official TLOB doesn't use these
+include_signals = false    # DISABLED - official TLOB doesn't use these
+mbo_window_size = 1000
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+volume_threshold = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+# =============================================================================
+# LABELS - Multi-horizon for flexibility
+# =============================================================================
+# Note: Official TLOB uses DYNAMIC threshold (mean(abs(change))/2).
+# Our fixed threshold is an approximation. For exact reproduction,
+# you may need to post-process labels in Python.
+# =============================================================================
+
+[labels]
+strategy = "tlob"
+horizon = 50
+horizons = [10, 20, 50, 100]
+smoothing_window = 10
+threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = true
+
+# =============================================================================
+# NORMALIZATION - CRITICAL: GLOBAL Z-SCORE (MATCHING OFFICIAL TLOB REPO)
+# =============================================================================
+#
+# From TLOB/utils/utils_data.py::z_score_orderbook():
+#   - All 20 price columns (10 ask + 10 bid) share ONE mean/std
+#   - All 20 size columns (10 ask + 10 bid) share ONE mean/std
+#
+# This is GlobalZScore strategy in our feature extractor.
+#
+# DO NOT USE "none" - the BiN layer expects pre-normalized data!
+# =============================================================================
+
+[normalization]
+lob_prices = "global_z_score"   # All prices share same mean/std (LIKE OFFICIAL REPO)
+lob_sizes = "global_z_score"    # All sizes share same mean/std (LIKE OFFICIAL REPO)
+derived = "none"                # Not used (include_derived = false)
+mbo = "none"                    # Not used (include_mbo = false)
+signals = "none"                # Not used (include_signals = false)
+
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

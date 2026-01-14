@@ -144,9 +144,20 @@ impl PipelineBuilder {
     /// Create a builder from a research paper preset.
     ///
     /// Available presets:
-    /// - `Preset::DeepLOB`: 40 features, 100 window, stride 1
-    /// - `Preset::TLOB`: 40 features, 100 window, stride 1
-    /// - `Preset::FI2010`: 144 features (40 raw + 104 handcrafted)
+    /// - `Preset::DeepLOB`: 40 features, 100 window, stride 1 (Zhang et al., 2019)
+    /// - `Preset::TLOB`: 40 features, 100 window, stride 1 (Berti & Kasneci, 2025)
+    /// - `Preset::FI2010`: 48 features (40 raw + 8 derived), 100 window, stride 1
+    /// - `Preset::TransLOB`: 40 features, 100 window, stride 1
+    /// - `Preset::LiT`: 80 features (20 levels × 4), 100 window, stride 1
+    /// - `Preset::Minimal`: 20 features (5 levels × 4), 50 window, stride 1
+    /// - `Preset::Full`: 84 features (40 raw + 8 derived + 36 MBO), 100 window, stride 1
+    ///
+    /// # Note on FI-2010
+    ///
+    /// The original FI-2010 benchmark dataset has 144 handcrafted features.
+    /// This preset provides a simplified version with 48 features (40 LOB + 8 derived).
+    /// The full FI-2010 feature set is partially implemented in `fi2010.rs` but not yet
+    /// integrated into the pipeline. See TODO.md for details.
     ///
     /// # Example
     ///

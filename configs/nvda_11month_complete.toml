@@ -1,0 +1,212 @@
+# =============================================================================
+# NVDA 11-Month Complete Dataset Configuration
+# =============================================================================
+#
+# Complete NVIDIA dataset: Feb 3, 2025 → Jan 7, 2026 (234 trading days)
+#
+# This is the canonical configuration for the full dataset.
+# Schema version: 2.1 (98 features, multi-horizon TLOB labels)
+#
+# Features:
+#   - 40 LOB features (10 levels × 4)
+#   - 8 derived features (spread, mid_price, etc.)
+#   - 36 MBO features (order flow, queue dynamics)
+#   - 14 trading signals (OFI, VPIN, etc.)
+#   Total: 98 features
+#
+# Labels:
+#   - Multi-horizon TLOB: [10, 20, 50, 100] ticks ahead
+#   - Classification: Up (+1), Stable (0), Down (-1)
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- \
+#       --config configs/nvda_11month_complete.toml
+#
+# Prerequisites:
+#   1. Complete dataset in: data/NVDA_2025-02-03_to_2026-01-07 (234 files)
+#   2. Hot store will be populated on-demand during extraction
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA 11-Month Complete Dataset"
+description = "Full 234-day dataset (Feb 2025 - Jan 2026) with multi-horizon TLOB labels"
+version = "3.1.0"
+tags = [
+    "nvda",
+    "98-features",
+    "multi-horizon",
+    "tlob",
+    "complete-dataset",
+    "production",
+]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01  # NVIDIA tick size in USD
+
+[data]
+# Primary input: Complete merged dataset
+input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+
+# Output directory for exported features
+output_dir = "../data/exports/nvda_11month_complete"
+
+# Hot store for decompressed files (~30% faster processing)
+# Missing files are decompressed on-demand and cached here
+hot_store_dir = "../data/hot_store"
+
+[dates]
+# Full date range: Feb 3, 2025 to Jan 7, 2026
+# Total trading days: 234 (weekends and holidays excluded)
+start_date = "2025-02-03"
+end_date = "2026-01-07"
+
+# US market holidays to exclude (NYSE/NASDAQ calendar 2025-2026)
+# Reference: https://www.nyse.com/markets/hours-calendars
+exclude_dates = [
+    # 2025 holidays (market closed)
+    "2025-01-20",  # Martin Luther King Jr. Day
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth National Independence Day
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+    "2025-11-27",  # Thanksgiving Day
+    "2025-12-25",  # Christmas Day
+    # 2026 holidays (market closed)
+    "2026-01-01",  # New Year's Day
+]
+
+[features]
+# Full 98-feature set per Schema 2.1 specification
+lob_levels = 10          # 10 price levels × 4 features = 40 base features
+include_derived = true   # +8 derived features (spread, mid_price, imbalance, etc.)
+include_mbo = true       # +36 MBO features (order flow, queue dynamics, cancellations)
+include_signals = true   # +14 trading signals (OFI, VPIN, spread regime, etc.)
+mbo_window_size = 1000   # Rolling statistics window for MBO features
+
+[sampling]
+# Event-based sampling for consistent temporal resolution
+strategy = "event_based"
+event_count = 1000       # Sample every 1000 events
+                         # ~1 sample per second during active trading
+                         # Results in ~30,000-50,000 samples per day
+
+[sequence]
+# Sequence parameters for transformer input
+window_size = 100        # 100 snapshots per sequence (DeepLOB/TLOB standard)
+stride = 10              # 90% overlap between sequences (balance data volume vs redundancy)
+max_buffer_size = 50000  # Memory limit for sequence buffer
+
+# =============================================================================
+# MULTI-HORIZON TLOB LABELING
+# =============================================================================
+#
+# TLOB (Trend LOB) labels based on smoothed average mid-price change.
+# Multiple horizons enable analysis of signal decay over time.
+#
+# Label formula (per horizon h):
+#   m_smooth(t+h) = (1/k) * Σ_{i=0}^{k-1} mid_price(t+h-i)
+#   return = (m_smooth(t+h) - mid_price(t)) / mid_price(t)
+#
+#   Label = Up (+1)    if return > threshold
+#           Down (-1)  if return < -threshold
+#           Stable (0) otherwise
+#
+# Reference: Zhang et al. (2019), "DeepLOB: Deep Convolutional Neural Networks
+#            for Limit Order Books", §3.1
+
+[labels]
+strategy = "tlob"
+
+# Multiple prediction horizons for signal decay analysis
+# With event_count=1000 sampling (~1 sample/sec):
+#   - h=10:  ~10 seconds ahead (very short-term, highest noise)
+#   - h=20:  ~20 seconds ahead (short-term HFT typical)
+#   - h=50:  ~50 seconds ahead (medium-term, cleaner signal)
+#   - h=100: ~100 seconds ahead (longer-term, most stable)
+horizons = [10, 20, 50, 100]
+
+# Smoothing window for noise reduction (k in formula)
+# 10 samples = ~10 seconds of averaging
+smoothing_window = 10
+
+# Classification threshold (θ)
+# 0.0008 = 8 basis points = typical HFT significance threshold
+# Adjust based on market volatility analysis
+threshold = 0.0008
+
+[split]
+# Temporal split for proper time-series cross-validation
+# No data leakage: test set is always AFTER training data
+#
+# With 234 trading days:
+#   - Train: ~164 days (Feb 2025 - Aug 2025)
+#   - Val:   ~35 days  (Sep 2025 - Oct 2025)
+#   - Test:  ~35 days  (Nov 2025 - Jan 2026)
+#
+# Test set includes recent market conditions for realistic evaluation
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+# Error handling: continue on per-day errors, report at end
+error_mode = "collect_errors"
+verbose = true  # Show progress for each day processed
+
+# =============================================================================
+# EXPECTED OUTPUTS
+# =============================================================================
+#
+# Output directory structure:
+#   nvda_11month_complete/
+#   ├── train/
+#   │   ├── 20250203_sequences.npy   # Shape: [N, 100, 98]
+#   │   ├── 20250203_labels.npy      # Shape: [N, 4] (4 horizons)
+#   │   ├── 20250203_normalization.json
+#   │   ├── 20250203_metadata.json
+#   │   └── ...
+#   ├── val/
+#   │   └── ...
+#   ├── test/
+#   │   └── ...
+#   ├── dataset_manifest.json
+#   └── export_config.toml  (copy of this file)
+#
+# Labels encoding: -1=Down, 0=Stable, 1=Up (raw export)
+# Python dataset typically adds +1: 0=Down, 1=Stable, 2=Up
+#
+# =============================================================================
+# TRAINING RECOMMENDATIONS
+# =============================================================================
+#
+# 1. START WITH:
+#    - Horizon h=50 as primary target (best signal-to-noise ratio)
+#    - Analyze label distribution before training
+#
+# 2. MODEL SELECTION:
+#    - TLOB/TransLOB: Best for multi-horizon prediction
+#    - DeepLOB: CNN baseline, faster training
+#    - PatchTST: For longer sequence modeling
+#
+# 3. LOSS FUNCTION:
+#    - CrossEntropyLoss with class weights if imbalanced
+#    - FocalLoss (gamma=2.0) for hard-example mining
+#
+# 4. EXPECTED CLASS DISTRIBUTION (threshold=0.0008):
+#    - Up: ~30-35%
+#    - Stable: ~30-40%  
+#    - Down: ~30-35%
+#    Distribution varies by market regime and horizon.
+#
+# 5. CROSS-VALIDATION:
+#    - Use walk-forward validation for robust evaluation
+#    - Never train on future data relative to test set
+#
+# =============================================================================

@@ -190,13 +190,17 @@ use feature_extractor::prelude::*;
 pub enum Preset {
     DeepLOB,   // 40 raw + Z-score, seq_len=100
     TLOB,      // 40 raw + bilinear normalization
-    FI2010,    // 120 features (40 raw + 80 handcrafted)
+    FI2010,    // 48 features (40 raw + 8 derived) - NOTE: fi2010.rs module has 80 additional features but not yet integrated
     TransLOB,  // 40 raw + multi-horizon
     LiT,       // 80 features (20 levels × 4)
     Minimal,   // 40 raw LOB only
     Full,      // All available features (84)
 }
 ```
+
+> **Note on FI-2010 Preset**: The current `Preset::FI2010` provides only 48 features (40 raw + 8 derived).
+> The standalone `fi2010.rs` module implements 80 additional handcrafted features but is NOT yet integrated
+> into `FeatureConfig`. See `TODO.md` for tracking integration status.
 
 ## Performance Characteristics
 

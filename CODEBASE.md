@@ -342,6 +342,10 @@ Extracted in `mbo_features.rs` using multi-timescale windows:
 | 26-29 | Institutional | 4 | Large order detection |
 | 30-35 | Core MBO | 6 | Lifecycle metrics |
 
+> **⚠️ Placeholder Feature**: `median_order_lifetime` (index 31 within MBO, absolute index 79)
+> always returns 0.0. This is documented in `TODO.md`. Implementation would require
+> tracking completed orders which is not currently done.
+
 **MboAggregator Memory**: ~8 MB per symbol
 
 **Tick Size Configuration**:
@@ -668,11 +672,126 @@ pub struct AdaptiveVolumeThreshold {
 }
 ```
 
+### TimeBasedSampler (⚠️ NOT YET IMPLEMENTED)
+
+The `SamplingStrategy::TimeBased` enum variant is declared but **not implemented**.
+Attempting to use it will result in an explicit error:
+
+```rust
+// This will return an error at runtime:
+let config = SamplingConfig {
+    strategy: SamplingStrategy::TimeBased,
+    min_time_interval_ns: Some(100_000_000),  // 100ms
+    ..Default::default()
+};
+// Error: "TimeBased sampling strategy is not yet implemented.
+//         Please use VolumeBased or EventBased sampling instead."
+```
+
+**Workaround**: Use `SamplingStrategy::VolumeBased` (recommended) or `SamplingStrategy::EventBased`.
+
+**Tracking**: See `TODO.md` for implementation status.
+
 ---
 
 ## 7. Normalization System
 
-### Normalizer Trait
+### Overview
+
+The normalization system provides **per-feature-group configuration** for flexible preprocessing
+that matches requirements from different research papers (TLOB, DeepLOB, LOBench, FI-2010).
+
+### Feature Groups (98-feature mode)
+
+| Group | Indices | Count | Description |
+|-------|---------|-------|-------------|
+| LOB Prices | 0-9, 20-29 | 20 | Ask/Bid prices at 10 levels |
+| LOB Sizes | 10-19, 30-39 | 20 | Ask/Bid sizes at 10 levels |
+| Derived | 40-47 | 8 | Mid-price, spread, imbalance, etc. |
+| MBO | 48-83 | 36 | Order flow microstructure features |
+| Signals | 84-97 | 14 | Trading signals (**includes categoricals - NEVER normalize**) |
+
+### NormalizationConfig
+
+Configuration-driven normalization for each feature group:
+
+```rust
+use feature_extractor::export::dataset_config::{NormalizationConfig, FeatureNormStrategy};
+
+// For TLOB paper (raw export - model handles normalization via BiN)
+let config = NormalizationConfig::raw();  // or NormalizationConfig::tlob_paper()
+
+// For official TLOB repository preprocessing
+let config = NormalizationConfig::tlob_repo();  // Global Z-score before BiN
+
+// For DeepLOB
+let config = NormalizationConfig::deeplob();  // Per-feature Z-score
+
+// Custom configuration
+let config = NormalizationConfig::default()
+    .with_lob_prices(FeatureNormStrategy::GlobalZScore)
+    .with_lob_sizes(FeatureNormStrategy::ZScore)
+    .with_derived(FeatureNormStrategy::None)
+    .with_signals(FeatureNormStrategy::None);  // CRITICAL: Never normalize categoricals
+```
+
+### FeatureNormStrategy Options
+
+| Strategy | Formula | Use Case |
+|----------|---------|----------|
+| `None` | Raw value | TLOB paper (BiN handles normalization) |
+| `ZScore` | `(x - μ_i) / σ_i` per feature | DeepLOB, per-feature independence |
+| `GlobalZScore` | `(x - μ) / σ` shared across group | TLOB repo, LOBench (preserves relationships) |
+| `MarketStructure` | Ask+Bid share stats per level | Preserves ask > bid ordering |
+| `PercentageChange` | `(x - ref) / ref` | HLOB, cross-instrument generalization |
+| `MinMax` | `(x - min) / (max - min)` | Bounded output required |
+| `Bilinear` | `(price - mid) / (k × tick)` | LOB structure |
+
+### Research Paper Presets
+
+| Preset | LOB Prices | LOB Sizes | Derived | MBO | Signals |
+|--------|------------|-----------|---------|-----|---------|
+| `raw()` / `tlob_paper()` | None | None | None | None | None |
+| `tlob_repo()` | GlobalZScore | GlobalZScore | None | None | None |
+| `deeplob()` | ZScore | ZScore | None | None | None |
+| `lobench()` | GlobalZScore | GlobalZScore | GlobalZScore | GlobalZScore | None |
+| `fi2010()` | ZScore | ZScore | ZScore | None | None |
+
+### TOML Configuration
+
+```toml
+[normalization]
+# Option 1: Use defaults (all None = raw export for TLOB paper)
+# Just omit the section or leave fields empty
+
+# Option 2: Explicit configuration
+lob_prices = "global_z_score"  # or: none, z_score, market_structure, percentage_change, min_max, bilinear
+lob_sizes = "z_score"
+derived = "none"
+mbo = "none"
+signals = "none"  # CRITICAL: Always "none" for signals (categoricals)
+
+# Additional options
+reference_price = "mid_price"  # For percentage_change: mid_price, first_ask, first_bid
+bilinear_scale_factor = 50.0   # For bilinear normalization
+```
+
+### Categorical Signal Protection
+
+Signals at indices 92, 93, 94, 97 are **categorical** and MUST NOT be normalized:
+
+| Index | Signal | Type | Values |
+|-------|--------|------|--------|
+| 92 | book_valid | Binary | 0, 1 |
+| 93 | time_regime | Categorical | 0, 1, 2, 3, 4 |
+| 94 | mbo_ready | Binary | 0, 1 |
+| 97 | schema_version | Constant | 2.1 |
+
+The system always skips normalization for signals regardless of configuration.
+
+### Legacy Normalizer Trait
+
+For streaming normalization (per-value updates):
 
 ```rust
 pub trait Normalizer: Send + Sync {
@@ -684,7 +803,7 @@ pub trait Normalizer: Send + Sync {
 }
 ```
 
-### Available Normalizers
+### Available Streaming Normalizers
 
 | Normalizer | Formula | Use Case |
 |------------|---------|----------|
@@ -695,20 +814,6 @@ pub trait Normalizer: Send + Sync {
 | `MinMaxNormalizer` | `(x - min) / (max - min)` | Bounded features |
 | `GlobalZScoreNormalizer` | All features together | LOBench method |
 | `PerFeatureNormalizer` | Separate stats per feature | Multi-feature |
-
-### GlobalZScoreNormalizer (LOBench)
-
-Normalizes ALL features in a snapshot together, preserving LOB constraints:
-
-```rust
-pub fn normalize_snapshot(&self, features: &[f64]) -> Vec<f64> {
-    let mean: f64 = features.iter().sum::<f64>() / features.len() as f64;
-    let variance: f64 = features.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
-    let std = variance.sqrt().max(self.min_std);
-    
-    features.iter().map(|&x| (x - mean) / std).collect()
-}
-```
 
 ---
 

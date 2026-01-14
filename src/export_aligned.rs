@@ -18,6 +18,7 @@
 //! - Label corresponds to the prediction target for that sequence
 //! - Exported arrays have matching lengths: len(sequences) == len(labels)
 
+use crate::export::dataset_config::{FeatureNormStrategy, NormalizationConfig};
 use crate::export::tensor_format::{FeatureMapping, TensorFormat};
 use crate::labeling::{
     LabelConfig, MultiHorizonConfig, MultiHorizonLabelGenerator, OpportunityConfig,
@@ -233,6 +234,9 @@ pub struct AlignedBatchExporter {
     multi_horizon_config: Option<MultiHorizonConfig>,
     /// Optional opportunity config for big-move detection labeling
     opportunity_configs: Option<Vec<OpportunityConfig>>,
+    /// Normalization configuration for per-feature-group strategies.
+    /// Default: raw (no normalization) for TLOB paper compatibility.
+    normalization_config: NormalizationConfig,
 }
 
 impl AlignedBatchExporter {
@@ -258,7 +262,48 @@ impl AlignedBatchExporter {
             feature_mapping: None,
             multi_horizon_config: None,
             opportunity_configs: None,
+            normalization_config: NormalizationConfig::default(), // Raw by default
         }
+    }
+
+    /// Set normalization configuration (builder pattern).
+    ///
+    /// Controls how each feature group is normalized during export.
+    /// Default is raw (no normalization) for TLOB paper compatibility.
+    ///
+    /// # Arguments
+    /// * `config` - Normalization configuration
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::export::dataset_config::{NormalizationConfig, FeatureNormStrategy};
+    ///
+    /// // For TLOB paper (raw data, model handles normalization via BiN)
+    /// let exporter = AlignedBatchExporter::new("output/", config, 100, 10)
+    ///     .with_normalization(NormalizationConfig::raw());
+    ///
+    /// // For DeepLOB (per-feature z-score)
+    /// let exporter = AlignedBatchExporter::new("output/", config, 100, 10)
+    ///     .with_normalization(NormalizationConfig::deeplob());
+    ///
+    /// // Custom configuration
+    /// let exporter = AlignedBatchExporter::new("output/", config, 100, 10)
+    ///     .with_normalization(
+    ///         NormalizationConfig::default()
+    ///             .with_lob_prices(FeatureNormStrategy::GlobalZScore)
+    ///             .with_lob_sizes(FeatureNormStrategy::ZScore)
+    ///     );
+    /// ```
+    pub fn with_normalization(mut self, config: NormalizationConfig) -> Self {
+        self.normalization_config = config;
+        self
+    }
+
+    /// Get the current normalization configuration.
+    #[inline]
+    pub fn normalization_config(&self) -> &NormalizationConfig {
+        &self.normalization_config
     }
 
     /// Enable tensor formatting for model-specific shapes (builder pattern).
@@ -1763,24 +1808,31 @@ impl AlignedBatchExporter {
         Ok(())
     }
 
-    /// Apply market-structure preserving Z-score normalization
+    /// Apply configurable normalization based on NormalizationConfig.
     ///
-    /// CRITICAL FIX: Normalizes ask+bid prices TOGETHER per level to preserve ordering.
+    /// This method applies different normalization strategies to each feature group
+    /// based on the configured settings. Supports multiple strategies to match
+    /// requirements from different research papers (TLOB, DeepLOB, LOBench, etc.).
     ///
-    /// # Feature Layout
+    /// # Feature Layout (98-feature mode)
     ///
-    /// Standard 40-feature LOB:
     /// - `[0..10]`: Ask prices (levels 1-10)
     /// - `[10..20]`: Ask sizes (levels 1-10)
     /// - `[20..30]`: Bid prices (levels 1-10)
     /// - `[30..40]`: Bid sizes (levels 1-10)
+    /// - `[40..48]`: Derived features
+    /// - `[48..84]`: MBO features
+    /// - `[84..98]`: Signal features (includes categoricals - NEVER normalize)
     ///
-    /// # Normalization Strategy
+    /// # Strategies
     ///
-    /// - **Prices**: Shared mean/std per level (ask_L and bid_L use same stats)
-    /// - **Sizes**: Independent mean/std per feature
-    ///
-    /// This ensures: if `ask > bid` in raw data, then `ask_norm > bid_norm` (market structure preserved!)
+    /// - `None`: Raw values (no normalization) - default for TLOB paper
+    /// - `ZScore`: Per-feature z-score: (x - mean) / std
+    /// - `GlobalZScore`: Shared mean/std across all features in group
+    /// - `MarketStructure`: Ask+bid share stats per level (preserves ordering)
+    /// - `PercentageChange`: (x - reference) / reference
+    /// - `MinMax`: Scale to [0, 1] range
+    /// - `Bilinear`: (price - mid) / (k * tick)
     ///
     /// # Returns
     ///
@@ -1789,109 +1841,91 @@ impl AlignedBatchExporter {
         &self,
         sequences: &[Vec<Vec<f64>>],
     ) -> Result<(Vec<Vec<Vec<f64>>>, NormalizationParams)> {
+        let levels = 10; // Standard LOB levels
+        
         if sequences.is_empty() {
-            // Return empty with default params
             let empty_params = NormalizationParams::new(
-                vec![0.0; 10],
-                vec![1.0; 10],
-                vec![0.0; 20],
-                vec![1.0; 20],
+                vec![0.0; levels],
+                vec![1.0; levels],
+                vec![0.0; levels * 2],
+                vec![1.0; levels * 2],
                 0,
-                10,
+                levels,
             );
             return Ok((Vec::new(), empty_params));
         }
 
         let n_features = sequences[0][0].len();
+        let config = &self.normalization_config;
+
+        // Check if no normalization is needed (raw export for TLOB paper)
+        if !config.any_normalization() {
+            println!("  🔧 Normalization: NONE (raw export for TLOB paper compatibility)");
+            
+            // Return sequences as-is with placeholder params
+            let norm_params = NormalizationParams {
+                strategy: NormalizationStrategy::None,
+                price_means: vec![0.0; levels],
+                price_stds: vec![1.0; levels],
+                size_means: vec![0.0; levels * 2],
+                size_stds: vec![1.0; levels * 2],
+                sample_count: sequences.len() * sequences[0].len(),
+                feature_layout: format!(
+                    "raw_ask_prices_{}_ask_sizes_{}_bid_prices_{}_bid_sizes_{}",
+                    levels, levels, levels, levels
+                ),
+                levels,
+            };
+            
+            // Deep copy sequences (no transformation)
+            let copied: Vec<Vec<Vec<f64>>> = sequences
+                .iter()
+                .map(|seq| seq.iter().map(|ts| ts.clone()).collect())
+                .collect();
+            
+            println!("    ✓ Raw values preserved (model handles normalization internally)");
+            return Ok((copied, norm_params));
+        }
+
+        println!("  🔧 Applying configurable normalization:");
+        println!("     LOB prices: {}", config.lob_prices.description());
+        println!("     LOB sizes: {}", config.lob_sizes.description());
+        println!("     Derived: {}", config.derived.description());
+        println!("     MBO: {}", config.mbo.description());
+        println!("     Signals: {}", config.signals.description());
+
         let epsilon = 1e-8;
-        let levels = 10; // Standard LOB levels
 
-        println!("  🔧 Applying market-structure preserving Z-score normalization...");
+        // Step 1: Compute statistics for each feature group
+        let (price_stats, size_stats, derived_stats, mbo_stats, total_samples) = 
+            self.compute_feature_statistics(sequences, levels)?;
 
-        // Step 1: Compute statistics
-        // For prices (ask+bid per level): shared mean/std
-        // For sizes: independent mean/std
+        // Step 2: Create normalization params (for metadata export)
+        let strategy = if config.lob_prices == FeatureNormStrategy::MarketStructure {
+            NormalizationStrategy::MarketStructureZScore
+        } else if config.lob_prices == FeatureNormStrategy::GlobalZScore {
+            NormalizationStrategy::GlobalZScore
+        } else if config.lob_prices == FeatureNormStrategy::ZScore {
+            NormalizationStrategy::PerFeatureZScore
+        } else {
+            NormalizationStrategy::None
+        };
 
-        // Collect all values per feature for statistics
-        let mut price_level_values: Vec<Vec<f64>> = vec![Vec::new(); levels];
-        let mut size_values: Vec<Vec<f64>> = vec![Vec::new(); levels * 2];
-        let mut total_samples = 0usize;
-
-        for seq in sequences {
-            for timestep in seq {
-                total_samples += 1;
-
-                // Collect ask prices (0-9) and bid prices (20-29) together per level
-                for level in 0..levels {
-                    let ask_price = timestep[level];
-                    let bid_price = timestep[20 + level];
-
-                    // Combine ask+bid for this level
-                    price_level_values[level].push(ask_price);
-                    price_level_values[level].push(bid_price);
-                }
-
-                // Collect sizes independently
-                for i in 0..levels {
-                    size_values[i].push(timestep[10 + i]); // Ask sizes
-                    size_values[levels + i].push(timestep[30 + i]); // Bid sizes
-                }
-            }
-        }
-
-        // Compute mean/std for each price level (shared across ask+bid)
-        let mut price_means = vec![0.0; levels];
-        let mut price_stds = vec![1.0; levels];
-
-        for level in 0..levels {
-            let values = &price_level_values[level];
-            if !values.is_empty() {
-                let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
-                let variance: f64 = values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>()
-                    / values.len() as f64;
-                let std = if variance > epsilon {
-                    variance.sqrt()
-                } else {
-                    1.0
-                };
-
-                price_means[level] = mean;
-                price_stds[level] = std;
-            }
-        }
-
-        // Compute mean/std for each size feature (independent)
-        let mut size_means = vec![0.0; levels * 2];
-        let mut size_stds = vec![1.0; levels * 2];
-
-        for i in 0..(levels * 2) {
-            let values = &size_values[i];
-            if !values.is_empty() {
-                let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
-                let variance: f64 = values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>()
-                    / values.len() as f64;
-                let std = if variance > epsilon {
-                    variance.sqrt()
-                } else {
-                    1.0
-                };
-
-                size_means[i] = mean;
-                size_stds[i] = std;
-            }
-        }
-
-        // Create normalization params for export
-        let norm_params = NormalizationParams::new(
-            price_means.clone(),
-            price_stds.clone(),
-            size_means.clone(),
-            size_stds.clone(),
-            total_samples,
+        let norm_params = NormalizationParams {
+            strategy,
+            price_means: price_stats.0.clone(),
+            price_stds: price_stats.1.clone(),
+            size_means: size_stats.0.clone(),
+            size_stds: size_stats.1.clone(),
+            sample_count: total_samples,
+            feature_layout: format!(
+                "ask_prices_{}_ask_sizes_{}_bid_prices_{}_bid_sizes_{}",
+                levels, levels, levels, levels
+            ),
             levels,
-        );
+        };
 
-        // Step 2: Normalize all sequences using computed statistics
+        // Step 3: Normalize all sequences
         let mut normalized = Vec::with_capacity(sequences.len());
 
         for seq in sequences {
@@ -1899,44 +1933,95 @@ impl AlignedBatchExporter {
             for timestep in seq {
                 let mut norm_timestep = Vec::with_capacity(n_features);
 
-                // Normalize ask prices (0-9) using shared level stats
-                for level in 0..10 {
+                // === LOB Prices (0-9, 20-29) ===
+                // Ask prices (0-9)
+                for level in 0..levels {
                     let value = timestep[level];
-                    let norm_value = (value - price_means[level]) / (price_stds[level] + epsilon);
+                    let norm_value = self.apply_normalization(
+                        value,
+                        &config.lob_prices,
+                        price_stats.0[level],
+                        price_stats.1[level],
+                        epsilon,
+                    );
                     norm_timestep.push(norm_value);
                 }
 
-                // Normalize ask sizes (10-19) independently
-                for i in 0..10 {
+                // Ask sizes (10-19)
+                for i in 0..levels {
                     let value = timestep[10 + i];
-                    let norm_value = (value - size_means[i]) / (size_stds[i] + epsilon);
+                    let norm_value = self.apply_normalization(
+                        value,
+                        &config.lob_sizes,
+                        size_stats.0[i],
+                        size_stats.1[i],
+                        epsilon,
+                    );
                     norm_timestep.push(norm_value);
                 }
 
-                // Normalize bid prices (20-29) using shared level stats
-                for level in 0..10 {
+                // Bid prices (20-29)
+                for level in 0..levels {
                     let value = timestep[20 + level];
-                    let norm_value = (value - price_means[level]) / (price_stds[level] + epsilon);
+                    let norm_value = self.apply_normalization(
+                        value,
+                        &config.lob_prices,
+                        price_stats.0[level], // Same stats as ask for MarketStructure
+                        price_stats.1[level],
+                        epsilon,
+                    );
                     norm_timestep.push(norm_value);
                 }
 
-                // Normalize bid sizes (30-39) independently
-                for i in 0..10 {
+                // Bid sizes (30-39)
+                for i in 0..levels {
                     let value = timestep[30 + i];
-                    let norm_value = (value - size_means[10 + i]) / (size_stds[10 + i] + epsilon);
+                    let norm_value = self.apply_normalization(
+                        value,
+                        &config.lob_sizes,
+                        size_stats.0[levels + i],
+                        size_stats.1[levels + i],
+                        epsilon,
+                    );
                     norm_timestep.push(norm_value);
                 }
 
-                // CRITICAL FIX: Copy remaining features (40+) as-is
-                // These include:
-                // - Derived features (40-47): already in appropriate ranges
-                // - MBO features (48-83): pre-normalized or ratio-based
-                // - Signal features (84-97): includes categoricals that MUST NOT be normalized
-                //   (book_valid, time_regime, mbo_ready, schema_version)
-                //
-                // The model architecture handles feature scaling internally, and
-                // normalizing categorical features would destroy their semantics.
-                for i in 40..n_features {
+                // === Derived features (40-47) ===
+                for i in 0..8 {
+                    let idx = 40 + i;
+                    if idx < n_features {
+                        let value = timestep[idx];
+                        let norm_value = self.apply_normalization(
+                            value,
+                            &config.derived,
+                            derived_stats.0.get(i).copied().unwrap_or(0.0),
+                            derived_stats.1.get(i).copied().unwrap_or(1.0),
+                            epsilon,
+                        );
+                        norm_timestep.push(norm_value);
+                    }
+                }
+
+                // === MBO features (48-83) ===
+                for i in 0..36 {
+                    let idx = 48 + i;
+                    if idx < n_features {
+                        let value = timestep[idx];
+                        let norm_value = self.apply_normalization(
+                            value,
+                            &config.mbo,
+                            mbo_stats.0.get(i).copied().unwrap_or(0.0),
+                            mbo_stats.1.get(i).copied().unwrap_or(1.0),
+                            epsilon,
+                        );
+                        norm_timestep.push(norm_value);
+                    }
+                }
+
+                // === Signal features (84-97) ===
+                // CRITICAL: Signals include categorical features (book_valid, time_regime, etc.)
+                // that MUST NOT be normalized. Always copy as-is regardless of config.
+                for i in 84..n_features {
                     norm_timestep.push(timestep[i]);
                 }
 
@@ -1945,10 +2030,246 @@ impl AlignedBatchExporter {
             normalized.push(norm_seq);
         }
 
-        println!("    ✓ Market-structure preserved (ask > bid maintained)");
+        println!("    ✓ Normalization applied successfully");
         println!("    📊 Stats: {} samples, {} levels", total_samples, levels);
 
         Ok((normalized, norm_params))
+    }
+
+    /// Compute statistics for each feature group.
+    ///
+    /// Returns ((price_means, price_stds), (size_means, size_stds), (derived_means, derived_stds), (mbo_means, mbo_stds), sample_count)
+    #[allow(clippy::type_complexity)]
+    fn compute_feature_statistics(
+        &self,
+        sequences: &[Vec<Vec<f64>>],
+        levels: usize,
+    ) -> Result<(
+        (Vec<f64>, Vec<f64>),  // price (means, stds)
+        (Vec<f64>, Vec<f64>),  // size (means, stds)
+        (Vec<f64>, Vec<f64>),  // derived (means, stds)
+        (Vec<f64>, Vec<f64>),  // mbo (means, stds)
+        usize,                 // sample count
+    )> {
+        let n_features = sequences[0][0].len();
+        let epsilon = 1e-8;
+        let config = &self.normalization_config;
+
+        // Collect values per feature group
+        let mut price_level_values: Vec<Vec<f64>> = vec![Vec::new(); levels];
+        let mut size_values: Vec<Vec<f64>> = vec![Vec::new(); levels * 2];
+        let mut derived_values: Vec<Vec<f64>> = vec![Vec::new(); 8];
+        let mut mbo_values: Vec<Vec<f64>> = vec![Vec::new(); 36];
+        
+        // For GlobalZScore: collect ALL prices/sizes into single containers
+        let mut all_prices: Vec<f64> = Vec::new();
+        let mut all_sizes: Vec<f64> = Vec::new();
+        
+        let mut total_samples = 0usize;
+
+        for seq in sequences {
+            for timestep in seq {
+                total_samples += 1;
+
+                // Collect LOB prices based on strategy
+                match config.lob_prices {
+                    FeatureNormStrategy::GlobalZScore => {
+                        // GlobalZScore: ALL prices share ONE mean/std (TLOB repo style)
+                        for level in 0..levels {
+                            all_prices.push(timestep[level]);       // Ask price
+                            all_prices.push(timestep[20 + level]);  // Bid price
+                        }
+                    }
+                    FeatureNormStrategy::MarketStructure => {
+                        // MarketStructure: Ask/Bid at same level share stats
+                        for level in 0..levels {
+                            let ask_price = timestep[level];
+                            let bid_price = timestep[20 + level];
+                            price_level_values[level].push(ask_price);
+                            price_level_values[level].push(bid_price);
+                        }
+                    }
+                    _ => {
+                        // Per-feature: each level has independent stats
+                        for level in 0..levels {
+                            price_level_values[level].push(timestep[level]);
+                        }
+                    }
+                }
+
+                // Collect LOB sizes based on strategy
+                match config.lob_sizes {
+                    FeatureNormStrategy::GlobalZScore => {
+                        // GlobalZScore: ALL sizes share ONE mean/std (TLOB repo style)
+                        for i in 0..levels {
+                            all_sizes.push(timestep[10 + i]);   // Ask sizes
+                            all_sizes.push(timestep[30 + i]);   // Bid sizes
+                        }
+                    }
+                    _ => {
+                        // Per-feature: each size column has independent stats
+                        for i in 0..levels {
+                            size_values[i].push(timestep[10 + i]);           // Ask sizes
+                            size_values[levels + i].push(timestep[30 + i]);  // Bid sizes
+                        }
+                    }
+                }
+
+                // Collect derived features
+                for i in 0..8 {
+                    let idx = 40 + i;
+                    if idx < n_features {
+                        derived_values[i].push(timestep[idx]);
+                    }
+                }
+
+                // Collect MBO features
+                for i in 0..36 {
+                    let idx = 48 + i;
+                    if idx < n_features {
+                        mbo_values[i].push(timestep[idx]);
+                    }
+                }
+            }
+        }
+
+        // Compute statistics for prices
+        let mut price_means = vec![0.0; levels];
+        let mut price_stds = vec![1.0; levels];
+        
+        if config.lob_prices == FeatureNormStrategy::GlobalZScore && !all_prices.is_empty() {
+            // GlobalZScore: ONE mean/std for ALL prices (TLOB repo style)
+            let global_mean: f64 = all_prices.iter().sum::<f64>() / all_prices.len() as f64;
+            let global_variance: f64 = all_prices.iter()
+                .map(|v| (v - global_mean).powi(2))
+                .sum::<f64>() / all_prices.len() as f64;
+            let global_std = if global_variance > epsilon { global_variance.sqrt() } else { 1.0 };
+            
+            // Fill all levels with the same global stats
+            for level in 0..levels {
+                price_means[level] = global_mean;
+                price_stds[level] = global_std;
+            }
+            println!("    📊 GlobalZScore prices: mean={:.6}, std={:.6} (shared across all {} price columns)",
+                global_mean, global_std, levels * 2);
+        } else {
+            // Per-level or MarketStructure stats
+            for level in 0..levels {
+                let values = &price_level_values[level];
+                if !values.is_empty() {
+                    let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
+                    let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                        / values.len() as f64;
+                    price_means[level] = mean;
+                    price_stds[level] = if variance > epsilon { variance.sqrt() } else { 1.0 };
+                }
+            }
+        }
+
+        // Compute statistics for sizes
+        let mut size_means = vec![0.0; levels * 2];
+        let mut size_stds = vec![1.0; levels * 2];
+        
+        if config.lob_sizes == FeatureNormStrategy::GlobalZScore && !all_sizes.is_empty() {
+            // GlobalZScore: ONE mean/std for ALL sizes (TLOB repo style)
+            let global_mean: f64 = all_sizes.iter().sum::<f64>() / all_sizes.len() as f64;
+            let global_variance: f64 = all_sizes.iter()
+                .map(|v| (v - global_mean).powi(2))
+                .sum::<f64>() / all_sizes.len() as f64;
+            let global_std = if global_variance > epsilon { global_variance.sqrt() } else { 1.0 };
+            
+            // Fill all size indices with the same global stats
+            for i in 0..(levels * 2) {
+                size_means[i] = global_mean;
+                size_stds[i] = global_std;
+            }
+            println!("    📊 GlobalZScore sizes: mean={:.6}, std={:.6} (shared across all {} size columns)",
+                global_mean, global_std, levels * 2);
+        } else {
+            // Per-feature stats
+            for i in 0..(levels * 2) {
+                let values = &size_values[i];
+                if !values.is_empty() {
+                    let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
+                    let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                        / values.len() as f64;
+                    size_means[i] = mean;
+                    size_stds[i] = if variance > epsilon { variance.sqrt() } else { 1.0 };
+                }
+            }
+        }
+
+        // Compute statistics for derived
+        let mut derived_means = vec![0.0; 8];
+        let mut derived_stds = vec![1.0; 8];
+        for i in 0..8 {
+            let values = &derived_values[i];
+            if !values.is_empty() {
+                let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
+                let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                    / values.len() as f64;
+                derived_means[i] = mean;
+                derived_stds[i] = if variance > epsilon { variance.sqrt() } else { 1.0 };
+            }
+        }
+
+        // Compute statistics for MBO
+        let mut mbo_means = vec![0.0; 36];
+        let mut mbo_stds = vec![1.0; 36];
+        for i in 0..36 {
+            let values = &mbo_values[i];
+            if !values.is_empty() {
+                let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
+                let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                    / values.len() as f64;
+                mbo_means[i] = mean;
+                mbo_stds[i] = if variance > epsilon { variance.sqrt() } else { 1.0 };
+            }
+        }
+
+        Ok((
+            (price_means, price_stds),
+            (size_means, size_stds),
+            (derived_means, derived_stds),
+            (mbo_means, mbo_stds),
+            total_samples,
+        ))
+    }
+
+    /// Apply a single normalization strategy to a value.
+    #[inline]
+    fn apply_normalization(
+        &self,
+        value: f64,
+        strategy: &FeatureNormStrategy,
+        mean: f64,
+        std: f64,
+        epsilon: f64,
+    ) -> f64 {
+        match strategy {
+            FeatureNormStrategy::None => value,
+            FeatureNormStrategy::ZScore | FeatureNormStrategy::GlobalZScore | FeatureNormStrategy::MarketStructure => {
+                (value - mean) / (std + epsilon)
+            }
+            FeatureNormStrategy::PercentageChange => {
+                if mean.abs() > epsilon {
+                    (value - mean) / mean
+                } else {
+                    value
+                }
+            }
+            FeatureNormStrategy::MinMax => {
+                // MinMax requires min/max, not mean/std - simplified to z-score for now
+                // TODO: Implement proper min/max tracking if needed
+                (value - mean) / (std + epsilon)
+            }
+            FeatureNormStrategy::Bilinear => {
+                // Bilinear: (price - mid) / (k * tick)
+                // Simplified: use mean as mid, std as scale
+                // TODO: Implement proper bilinear with tick_size from config
+                (value - mean) / (self.normalization_config.bilinear_scale_factor * 0.01)
+            }
+        }
     }
 
     /// Export sequences as 3D numpy array
