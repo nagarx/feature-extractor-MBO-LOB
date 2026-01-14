@@ -76,8 +76,8 @@ test_ratio = 0.15
 [normalization]
 # Global Z-score: all prices normalized together, all sizes normalized together
 # This is what the official TLOB repository does before feeding to BiN
-lob_prices = "global_z_score"
-lob_sizes = "global_z_score"
+lob_prices = "global_zscore"
+lob_sizes = "global_zscore"
 
 # Derived/MBO can use per-feature z-score or none
 derived = "none"

@@ -36,9 +36,9 @@ filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
 tick_size = 0.01
 
 [data]
-input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
-hot_store_dir = "../data/hot_store"
-output_dir = "../data/exports/nvda_tlob_repo"
+input_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/NVDA_2025-02-03_to_2026-01-07"
+hot_store_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/hot_store"
+output_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/exports/nvda_tlob_repo_v1"
 
 [dates]
 start_date = "2025-02-03"
@@ -119,8 +119,8 @@ verbose = true
 # =============================================================================
 
 [normalization]
-lob_prices = "global_z_score"   # All prices share same mean/std (LIKE OFFICIAL REPO)
-lob_sizes = "global_z_score"    # All sizes share same mean/std (LIKE OFFICIAL REPO)
+lob_prices = "global_zscore"    # All prices share same mean/std (LIKE OFFICIAL REPO)
+lob_sizes = "global_zscore"     # All sizes share same mean/std (LIKE OFFICIAL REPO)
 derived = "none"                # Not used (include_derived = false)
 mbo = "none"                    # Not used (include_mbo = false)
 signals = "none"                # Not used (include_signals = false)
