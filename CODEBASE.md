@@ -342,11 +342,15 @@ Extracted in `mbo_features.rs` using multi-timescale windows:
 | 26-29 | Institutional | 4 | Large order detection |
 | 30-35 | Core MBO | 6 | Lifecycle metrics |
 
-> **⚠️ Placeholder Feature**: `median_order_lifetime` (index 31 within MBO, absolute index 79)
-> always returns 0.0. This is documented in `TODO.md`. Implementation would require
-> tracking completed orders which is not currently done.
+> **✅ Fixed in v2.2**: `median_order_lifetime` (index 31 within MBO, absolute index 79)
+> now returns the true median lifetime of completed orders. Implementation uses rolling
+> buffers (`completed_lifetimes`, `completed_fill_ratios`, `completed_modifications`)
+> to track order outcomes.
 
-**MboAggregator Memory**: ~8 MB per symbol
+**MboAggregator Memory**: ~8 MB per symbol (bounded via order eviction)
+
+**Order Eviction**: Orders are evicted from tracking after 1 hour (`MAX_ORDER_AGE_NS`)
+or when tracker exceeds 50K orders (`MAX_ORDER_TRACKER_SIZE`) to prevent unbounded memory growth.
 
 **Tick Size Configuration**:
 
@@ -454,7 +458,7 @@ impl OfiComputer {
 | 94 | `mbo_ready` | Warmup status | {0, 1} |
 | 95 | `dt_seconds` | Time since last sample | [0, ∞) |
 | 96 | `invalidity_delta` | Quote anomalies since last sample | [0, ∞) |
-| 97 | `schema_version` | Always 2.1 | {2.1} |
+| 97 | `schema_version` | Always 2.2 | {2.2} |
 
 **Signal Index Constants Module**:
 
@@ -692,6 +696,26 @@ let config = SamplingConfig {
 
 **Tracking**: See `TODO.md` for implementation status.
 
+### Critical Design Constraints
+
+The preprocessing module enforces several constraints to prevent numerical bugs:
+
+| Component | Constraint | Reason |
+|-----------|------------|--------|
+| `VolatilityEstimator` | `window_size >= 2` | Variance calculation requires n≥2. Welford's reverse formula uses `(n-1)` denominator. |
+| `RollingZScoreNormalizer` | Eager computation | Rolling stats are computed immediately on `add_day_stats()`, not lazily on `normalize()`. Prevents stale-cache bugs. |
+| `AdaptiveVolumeThreshold` | `total_cmp()` for f64 sorting | Handles NaN/Inf safely. Filters non-finite values with diagnostic logging per RULE.md. |
+| `AdaptiveVolumeThreshold` | `volatility_window >= 2` | Propagated from `VolatilityEstimator` constraint. |
+
+**Example: VolatilityEstimator constraint**
+```rust
+// Panics - window_size=1 causes division by zero in variance removal
+let estimator = VolatilityEstimator::new(1);  // PANICS
+
+// Valid - minimum window size is 2
+let estimator = VolatilityEstimator::new(2);  // OK
+```
+
 ---
 
 ## 7. Normalization System
@@ -785,7 +809,7 @@ Signals at indices 92, 93, 94, 97 are **categorical** and MUST NOT be normalized
 | 92 | book_valid | Binary | 0, 1 |
 | 93 | time_regime | Categorical | 0, 1, 2, 3, 4 |
 | 94 | mbo_ready | Binary | 0, 1 |
-| 97 | schema_version | Constant | 2.1 |
+| 97 | schema_version | Constant | 2.2 |
 
 The system always skips normalization for signals regardless of configuration.
 

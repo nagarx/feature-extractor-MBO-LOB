@@ -684,7 +684,7 @@ pub struct MboAggregator {
 | Index | Feature | Description |
 |-------|---------|-------------|
 | 30 | avg_order_age | Average age of active orders (seconds) |
-| 31 | median_order_lifetime | **Placeholder (always 0.0)** - pending implementation |
+| 31 | median_order_lifetime | Median lifetime of completed orders (seconds) |
 | 32 | avg_fill_ratio | Average `filled_size / original_size` |
 | 33 | avg_time_to_first_fill | Average seconds to first execution |
 | 34 | cancel_to_add_ratio | `cancels / adds` ratio |
@@ -857,7 +857,7 @@ Handles DST using calendar-based approximation:
 | 94 | `mbo_ready` | `state_changes >= 100` | {0, 1} | Safety |
 | 95 | `dt_seconds` | Time since last sample | [0, ∞) | Meta |
 | 96 | `invalidity_delta` | `crossed_quotes_delta + locked_quotes_delta` | [0, ∞) | Meta |
-| 97 | `schema_version` | Always `2.1` | {2.1} | Meta |
+| 97 | `schema_version` | Always `2.2` | {2.2} | Meta |
 
 ¹ `fragility_score`: Falls back to `level_concentration` when `avg_depth ≤ 1`. Higher values = more fragile book.
 
@@ -2135,7 +2135,7 @@ The `LobState` struct (`MBO-LOB-reconstructor/src/types.rs`) provides rich analy
 | 94 | `mbo_ready` | `1` if warmup complete, `0` otherwise | {0, 1} |
 | 95 | `dt_seconds` | Time since last sample | [0, ∞) |
 | 96 | `invalidity_delta` | Quote anomaly count since last sample | [0, ∞) |
-| 97 | `schema_version` | Always `2.1` | {2.1} |
+| 97 | `schema_version` | Always `2.2` | {2.2} |
 
 **Signal Index Constants Module**:
 
