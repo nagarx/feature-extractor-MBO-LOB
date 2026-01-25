@@ -27,6 +27,7 @@
 //! ```
 
 pub mod derived_features;
+pub mod experimental;
 pub mod fi2010;
 pub mod lob_features;
 pub mod market_impact;
@@ -112,6 +113,23 @@ pub struct FeatureConfig {
     ///
     /// Default: false (disabled for performance)
     pub include_queue_tracking: bool,
+
+    /// Experimental features configuration.
+    ///
+    /// Experimental features are opt-in and NOT part of the main schema.
+    /// They are designed for analysis and experimentation before promotion.
+    ///
+    /// Available groups:
+    /// - `institutional_v2`: Enhanced institutional detection (8 features)
+    /// - `volatility`: Realized volatility features (6 features)
+    /// - `seasonality`: Enhanced time-of-day features (4 features)
+    ///
+    /// # Schema Note
+    ///
+    /// Experimental features are appended AFTER standard features (index 98+).
+    /// Their indices may change without schema version bumps.
+    #[serde(default)]
+    pub experimental: experimental::ExperimentalConfig,
 }
 
 impl FeatureConfig {
@@ -191,6 +209,31 @@ impl FeatureConfig {
         self
     }
 
+    /// Enable or disable experimental features.
+    ///
+    /// Experimental features are appended after standard features (index 98+).
+    /// Use this for analysis and experimentation before schema promotion.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Experimental configuration specifying which groups to enable
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use feature_extractor::features::experimental::ExperimentalConfig;
+    ///
+    /// let config = FeatureConfig::default()
+    ///     .with_derived(true)
+    ///     .with_mbo(true)
+    ///     .with_signals(true)
+    ///     .with_experimental(ExperimentalConfig::new().with_all_groups());
+    /// ```
+    pub fn with_experimental(mut self, config: experimental::ExperimentalConfig) -> Self {
+        self.experimental = config;
+        self
+    }
+
     /// Compute the total number of features based on configuration.
     ///
     /// This is the authoritative source for feature count calculation.
@@ -202,6 +245,8 @@ impl FeatureConfig {
     /// - Base: `lob_levels * 4` (ask_price, ask_size, bid_price, bid_size per level)
     /// - If `include_derived`: + 8 derived features
     /// - If `include_mbo`: + 36 MBO features
+    /// - If `include_signals`: + 14 signals
+    /// - If `experimental.enabled`: + experimental features (varies by groups)
     #[inline]
     pub fn feature_count(&self) -> usize {
         let base = self.lob_levels * 4;
@@ -220,7 +265,8 @@ impl FeatureConfig {
         } else {
             0
         };
-        base + derived + mbo + signals
+        let experimental = self.experimental.feature_count();
+        base + derived + mbo + signals + experimental
     }
 
     /// Get the number of raw LOB features.
@@ -303,6 +349,15 @@ impl FeatureConfig {
                 self.lob_levels
             ));
         }
+        // Validate experimental config
+        self.experimental.validate()?;
+        
+        // Experimental requires base features to be meaningful
+        if self.experimental.enabled && !self.include_mbo {
+            return Err(
+                "experimental features require include_mbo to be enabled".to_string(),
+            );
+        }
         Ok(())
     }
 }
@@ -317,6 +372,7 @@ impl Default for FeatureConfig {
             mbo_window_size: 1000,
             include_signals: false,
             include_queue_tracking: false,
+            experimental: experimental::ExperimentalConfig::default(),
         }
     }
 }
@@ -330,6 +386,10 @@ pub struct FeatureExtractor {
     /// Signals are "streaming" features that accumulate state across
     /// multiple LOB transitions, unlike the other "point-in-time" features.
     ofi_computer: Option<signals::OfiComputer>,
+    /// Experimental feature extractor (opt-in).
+    ///
+    /// Experimental features are appended after standard features (index 98+).
+    experimental_extractor: Option<experimental::ExperimentalExtractor>,
 }
 
 impl FeatureExtractor {
@@ -342,6 +402,7 @@ impl FeatureExtractor {
             },
             mbo_aggregator: None,
             ofi_computer: None,
+            experimental_extractor: None,
         }
     }
 
@@ -359,10 +420,19 @@ impl FeatureExtractor {
             None
         };
 
+        let experimental_extractor = if config.experimental.enabled {
+            Some(experimental::ExperimentalExtractor::new(
+                config.experimental.clone(),
+            ))
+        } else {
+            None
+        };
+
         Self {
             config,
             mbo_aggregator,
             ofi_computer,
+            experimental_extractor,
         }
     }
 
@@ -592,7 +662,11 @@ impl FeatureExtractor {
     #[inline]
     pub fn process_mbo_event(&mut self, event: mbo_features::MboEvent) {
         if let Some(ref mut aggregator) = self.mbo_aggregator {
-            aggregator.process_event(event);
+            aggregator.process_event(event.clone());
+        }
+        // Also pass to experimental extractor if enabled
+        if let Some(ref mut exp) = self.experimental_extractor {
+            exp.process_event(&event);
         }
     }
 
@@ -785,6 +859,11 @@ impl FeatureExtractor {
         if let Some(ref mut ofi) = self.ofi_computer {
             ofi.reset_on_clear(); // Full reset including warmup counter
         }
+
+        // Reset experimental extractor if present
+        if let Some(ref mut exp) = self.experimental_extractor {
+            exp.reset();
+        }
     }
 
     /// Check if MBO features are enabled.
@@ -797,6 +876,52 @@ impl FeatureExtractor {
     #[inline]
     pub fn has_derived(&self) -> bool {
         self.config.include_derived
+    }
+
+    /// Check if experimental features are enabled.
+    #[inline]
+    pub fn has_experimental(&self) -> bool {
+        self.config.experimental.enabled
+    }
+
+    /// Update experimental volatility features with a new mid-price sample.
+    ///
+    /// This should be called on every sample to maintain accurate volatility tracking.
+    /// This is a no-op if experimental features are disabled or volatility group
+    /// is not included.
+    ///
+    /// # Arguments
+    ///
+    /// * `mid_price` - Current mid-price in dollars
+    /// * `timestamp_ns` - Current timestamp in nanoseconds
+    #[inline]
+    pub fn update_experimental_price(&mut self, mid_price: f64, timestamp_ns: u64) {
+        if let Some(ref mut exp) = self.experimental_extractor {
+            exp.update_price(mid_price, timestamp_ns);
+        }
+    }
+
+    /// Extract experimental features into the output buffer.
+    ///
+    /// This is called internally by `extract_with_signals` when experimental
+    /// features are enabled. You can also call it directly to append experimental
+    /// features to an existing feature vector.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp_ns` - Current timestamp in nanoseconds
+    /// * `output` - Output buffer to append features to
+    #[inline]
+    pub fn extract_experimental_into(&mut self, timestamp_ns: u64, output: &mut Vec<f64>) {
+        if let Some(ref mut exp) = self.experimental_extractor {
+            exp.extract_into(timestamp_ns, output);
+        }
+    }
+
+    /// Get the experimental feature count (0 if disabled).
+    #[inline]
+    pub fn experimental_feature_count(&self) -> usize {
+        self.config.experimental.feature_count()
     }
 }
 

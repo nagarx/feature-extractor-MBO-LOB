@@ -516,6 +516,7 @@ impl FeatureSetConfig {
             mbo_window_size: self.mbo_window_size,
             include_signals: self.include_signals,
             include_queue_tracking: self.include_queue_tracking,
+            experimental: Default::default(), // Experimental features via separate config
         }
     }
 
