@@ -704,6 +704,18 @@ impl Pipeline {
                     feature_buffer.extend(signals.to_vec());
                 }
 
+                // Extract experimental features if enabled (indices 98-115)
+                // Must be called AFTER signals (index 84-97) to maintain correct order
+                if self.feature_extractor.has_experimental() {
+                    // Update price for volatility features
+                    if let Some(mid) = lob_state.mid_price() {
+                        self.feature_extractor.update_experimental_price(mid, ts);
+                    }
+                    // Extract and append experimental features
+                    self.feature_extractor
+                        .extract_experimental_into(ts, &mut feature_buffer);
+                }
+
                 features_extracted += 1;
 
                 let features: FeatureVec = Arc::new(std::mem::take(&mut feature_buffer));
