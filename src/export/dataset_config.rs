@@ -418,6 +418,15 @@ pub struct FeatureSetConfig {
     /// MBO window size (number of messages for rolling statistics)
     #[serde(default = "default_mbo_window_size")]
     pub mbo_window_size: usize,
+
+    /// Enable queue position tracking for MBO features.
+    ///
+    /// When enabled, queue-related features (avg_queue_position, queue_size_ahead)
+    /// will contain actual computed values. When disabled, they return 0.0.
+    ///
+    /// **Note**: Requires `include_mbo` to be enabled. Disabled by default.
+    #[serde(default)]
+    pub include_queue_tracking: bool,
 }
 
 fn default_lob_levels() -> usize {
@@ -436,6 +445,7 @@ impl Default for FeatureSetConfig {
             include_mbo: false,
             include_signals: false,
             mbo_window_size: 1000,
+            include_queue_tracking: false,
         }
     }
 }
@@ -451,6 +461,7 @@ impl FeatureSetConfig {
             include_mbo: true,
             include_signals: true,
             mbo_window_size: 1000,
+            include_queue_tracking: false, // Disabled by default for performance
         }
     }
 
@@ -464,6 +475,7 @@ impl FeatureSetConfig {
             include_mbo: true,
             include_signals: false,
             mbo_window_size: 1000,
+            include_queue_tracking: false,
         }
     }
 
@@ -503,6 +515,7 @@ impl FeatureSetConfig {
             include_mbo: self.include_mbo,
             mbo_window_size: self.mbo_window_size,
             include_signals: self.include_signals,
+            include_queue_tracking: self.include_queue_tracking,
         }
     }
 
@@ -612,12 +625,21 @@ pub enum FeatureNormStrategy {
     ///
     /// Formula: `(value - min) / (max - min)`
     /// Use when bounded output is required.
+    ///
+    /// **NOTE: NOT YET IMPLEMENTED** - Currently falls back to Z-score.
+    /// Full implementation requires tracking min/max per feature.
+    /// Use ZScore or GlobalZScore instead until this is implemented.
     MinMax,
 
     /// Bilinear normalization (TLOB paper style).
     ///
     /// Formula: `(price - mid_price) / (k * tick_size)`
     /// Focuses on distance from mid-price in tick units.
+    ///
+    /// **NOTE: NOT YET IMPLEMENTED** - Currently uses simplified approximation.
+    /// Full implementation requires per-timestep mid_price access.
+    /// For TLOB training, use `NormalizationConfig::raw()` to let the model's
+    /// BiN layer handle normalization internally.
     Bilinear,
 }
 
@@ -645,9 +667,18 @@ impl FeatureNormStrategy {
             Self::GlobalZScore => "Global Z-score: shared mean/std across all features",
             Self::MarketStructure => "Market-structure preserving (ask/bid level sharing)",
             Self::PercentageChange => "Percentage change: (x - ref) / ref",
-            Self::MinMax => "Min-max scaling to [0, 1]",
-            Self::Bilinear => "Bilinear: (price - mid) / (k * tick)",
+            Self::MinMax => "Min-max scaling to [0, 1] (NOT FULLY IMPLEMENTED - uses Z-score fallback)",
+            Self::Bilinear => "Bilinear: (price - mid) / (k * tick) (NOT FULLY IMPLEMENTED - uses approximation)",
         }
+    }
+
+    /// Check if this strategy is fully implemented.
+    ///
+    /// MinMax and Bilinear are declared but use fallback implementations.
+    /// Users should prefer fully implemented strategies for production use.
+    #[inline]
+    pub fn is_fully_implemented(&self) -> bool {
+        !matches!(self, Self::MinMax | Self::Bilinear)
     }
 }
 
@@ -1376,6 +1407,46 @@ pub enum ExportThresholdStrategy {
         /// Fallback threshold when insufficient data
         fallback: f64,
     },
+
+    /// TLOB paper dynamic threshold (global computation).
+    ///
+    /// Computes threshold from the **entire** price series as:
+    /// `alpha = mean(|percentage_change|) / divisor`
+    ///
+    /// This is a two-pass approach:
+    /// 1. First pass: Compute all smoothed percentage changes l(t,h,k)
+    /// 2. Compute alpha from the full distribution
+    /// 3. Second pass: Apply threshold for classification
+    ///
+    /// # Research Reference
+    ///
+    /// TLOB repository: `utils/utils_data.py::labeling()`
+    /// ```python
+    /// alpha = np.abs(percentage_change).mean() / 2
+    /// labels = np.where(percentage_change < -alpha, 2,
+    ///                   np.where(percentage_change > alpha, 0, 1))
+    /// ```
+    ///
+    /// # TOML Configuration
+    ///
+    /// ```toml
+    /// [labels.threshold_strategy]
+    /// type = "tlob_dynamic"
+    /// fallback = 0.0008         # Used when insufficient data
+    /// divisor = 2.0             # Default per TLOB paper
+    /// ```
+    TlobDynamic {
+        /// Fallback threshold when insufficient data
+        fallback: f64,
+        /// Divisor for mean absolute change (default: 2.0 per TLOB paper)
+        /// alpha = mean(|percentage_change|) / divisor
+        #[serde(default = "default_tlob_divisor")]
+        divisor: f64,
+    },
+}
+
+fn default_tlob_divisor() -> f64 {
+    2.0
 }
 
 impl Default for ExportThresholdStrategy {
@@ -1428,6 +1499,48 @@ impl ExportThresholdStrategy {
         }
     }
 
+    /// Create a TLOB paper dynamic threshold strategy.
+    ///
+    /// Computes threshold from the entire price series as:
+    /// `alpha = mean(|percentage_change|) / divisor`
+    ///
+    /// # Arguments
+    /// * `fallback` - Fallback threshold when insufficient data
+    /// * `divisor` - Divisor for mean (default: 2.0 per TLOB paper)
+    ///
+    /// # Research Reference
+    ///
+    /// TLOB repository: `utils/utils_data.py::labeling()`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::ExportThresholdStrategy;
+    ///
+    /// // Match official TLOB repository labeling
+    /// let strategy = ExportThresholdStrategy::tlob_dynamic(0.0008, 2.0);
+    /// ```
+    pub fn tlob_dynamic(fallback: f64, divisor: f64) -> Self {
+        Self::TlobDynamic { fallback, divisor }
+    }
+
+    /// Create a TLOB paper dynamic threshold with default divisor (2.0).
+    ///
+    /// # Arguments
+    /// * `fallback` - Fallback threshold when insufficient data
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use feature_extractor::export::ExportThresholdStrategy;
+    ///
+    /// // Match official TLOB repository labeling with default divisor
+    /// let strategy = ExportThresholdStrategy::tlob_dynamic_default(0.0008);
+    /// ```
+    pub fn tlob_dynamic_default(fallback: f64) -> Self {
+        Self::tlob_dynamic(fallback, 2.0)
+    }
+
     /// Convert to internal ThresholdStrategy for label generation.
     pub fn to_internal(&self) -> crate::labeling::ThresholdStrategy {
         match self {
@@ -1450,6 +1563,12 @@ impl ExportThresholdStrategy {
                 window_size: *window_size,
                 fallback: *fallback,
             },
+            Self::TlobDynamic { fallback, divisor } => {
+                crate::labeling::ThresholdStrategy::TlobDynamic {
+                    fallback: *fallback,
+                    divisor: *divisor,
+                }
+            }
         }
     }
 
@@ -1496,6 +1615,14 @@ impl ExportThresholdStrategy {
                     return Err("Quantile fallback must be > 0".to_string());
                 }
             }
+            Self::TlobDynamic { fallback, divisor } => {
+                if *fallback <= 0.0 {
+                    return Err("TlobDynamic fallback must be > 0".to_string());
+                }
+                if *divisor <= 0.0 {
+                    return Err("TlobDynamic divisor must be > 0".to_string());
+                }
+            }
         }
         Ok(())
     }
@@ -1521,7 +1648,18 @@ impl ExportThresholdStrategy {
                 target_proportion * 100.0,
                 window_size
             ),
+            Self::TlobDynamic { divisor, .. } => format!(
+                "TLOB Dynamic: mean(|pct_change|) / {} (global)",
+                divisor
+            ),
         }
+    }
+
+    /// Check if this strategy requires global (full dataset) computation.
+    ///
+    /// Returns `true` for strategies that need all data before threshold can be computed.
+    pub fn needs_global_computation(&self) -> bool {
+        matches!(self, Self::TlobDynamic { .. })
     }
 }
 
@@ -1803,6 +1941,7 @@ impl ExportLabelConfig {
             ExportThresholdStrategy::Fixed { value } => *value,
             ExportThresholdStrategy::RollingSpread { fallback, .. } => *fallback,
             ExportThresholdStrategy::Quantile { fallback, .. } => *fallback,
+            ExportThresholdStrategy::TlobDynamic { fallback, .. } => *fallback,
         };
         Self {
             strategy: LabelingStrategy::Tlob,
@@ -3179,6 +3318,20 @@ threshold = 0.0008
     }
 
     #[test]
+    fn test_feature_norm_strategy_is_fully_implemented() {
+        // Fully implemented strategies
+        assert!(FeatureNormStrategy::None.is_fully_implemented());
+        assert!(FeatureNormStrategy::ZScore.is_fully_implemented());
+        assert!(FeatureNormStrategy::GlobalZScore.is_fully_implemented());
+        assert!(FeatureNormStrategy::MarketStructure.is_fully_implemented());
+        assert!(FeatureNormStrategy::PercentageChange.is_fully_implemented());
+
+        // Strategies with fallback implementations (not fully implemented)
+        assert!(!FeatureNormStrategy::MinMax.is_fully_implemented());
+        assert!(!FeatureNormStrategy::Bilinear.is_fully_implemented());
+    }
+
+    #[test]
     fn test_feature_norm_strategy_description() {
         let strat = FeatureNormStrategy::ZScore;
         assert!(strat.description().contains("Z-score"));
@@ -3333,6 +3486,134 @@ bilinear_scale_factor = 75.0
             let _loaded: NormalizationConfig = toml::from_str(&toml_str)
                 .expect(&format!("Should deserialize strategy {:?}", strat));
         }
+    }
+
+    // ========================================================================
+    // TlobDynamic Threshold Strategy Tests
+    // ========================================================================
+
+    #[test]
+    fn test_threshold_strategy_tlob_dynamic_creation() {
+        let strategy = ExportThresholdStrategy::tlob_dynamic(0.0008, 2.0);
+        assert!(matches!(
+            strategy,
+            ExportThresholdStrategy::TlobDynamic { fallback, divisor }
+            if (fallback - 0.0008).abs() < 1e-10 && (divisor - 2.0).abs() < 1e-10
+        ));
+
+        // Test default divisor helper
+        let strategy_default = ExportThresholdStrategy::tlob_dynamic_default(0.001);
+        assert!(matches!(
+            strategy_default,
+            ExportThresholdStrategy::TlobDynamic { fallback, divisor }
+            if (fallback - 0.001).abs() < 1e-10 && (divisor - 2.0).abs() < 1e-10
+        ));
+    }
+
+    #[test]
+    fn test_threshold_strategy_tlob_dynamic_to_internal() {
+        let export_strategy = ExportThresholdStrategy::tlob_dynamic(0.0008, 2.5);
+        let internal = export_strategy.to_internal();
+
+        assert!(matches!(
+            internal,
+            crate::labeling::ThresholdStrategy::TlobDynamic { fallback, divisor }
+            if (fallback - 0.0008).abs() < 1e-10 && (divisor - 2.5).abs() < 1e-10
+        ));
+    }
+
+    #[test]
+    fn test_threshold_strategy_tlob_dynamic_validation() {
+        // Valid
+        let valid = ExportThresholdStrategy::tlob_dynamic(0.0008, 2.0);
+        assert!(valid.validate().is_ok());
+
+        // Invalid fallback
+        let invalid_fallback = ExportThresholdStrategy::tlob_dynamic(0.0, 2.0);
+        assert!(invalid_fallback.validate().is_err());
+
+        // Invalid divisor
+        let invalid_divisor = ExportThresholdStrategy::tlob_dynamic(0.0008, 0.0);
+        assert!(invalid_divisor.validate().is_err());
+    }
+
+    #[test]
+    fn test_threshold_strategy_tlob_dynamic_description() {
+        let strategy = ExportThresholdStrategy::tlob_dynamic(0.0008, 2.0);
+        let desc = strategy.description();
+        assert!(desc.contains("TLOB Dynamic"));
+        assert!(desc.contains("2"));
+    }
+
+    #[test]
+    fn test_threshold_strategy_tlob_dynamic_needs_global() {
+        let fixed = ExportThresholdStrategy::fixed(0.002);
+        let rolling = ExportThresholdStrategy::rolling_spread(100, 1.0, 0.002);
+        let quantile = ExportThresholdStrategy::quantile(0.33, 5000, 0.002);
+        let tlob_dynamic = ExportThresholdStrategy::tlob_dynamic_default(0.002);
+
+        assert!(!fixed.needs_global_computation());
+        assert!(!rolling.needs_global_computation());
+        assert!(!quantile.needs_global_computation());
+        assert!(tlob_dynamic.needs_global_computation(), "TlobDynamic should need global computation");
+    }
+
+    #[test]
+    fn test_threshold_strategy_tlob_dynamic_toml_serialization() {
+        let strategy = ExportThresholdStrategy::tlob_dynamic(0.0008, 2.0);
+        let toml_str = toml::to_string(&strategy).expect("Should serialize TlobDynamic");
+        
+        // Verify it contains expected fields
+        assert!(toml_str.contains("tlob_dynamic") || toml_str.contains("type"));
+        assert!(toml_str.contains("fallback"));
+        assert!(toml_str.contains("divisor"));
+    }
+
+    #[test]
+    fn test_threshold_strategy_tlob_dynamic_toml_deserialization() {
+        let toml_str = r#"
+            type = "tlob_dynamic"
+            fallback = 0.0008
+            divisor = 2.0
+        "#;
+        
+        let strategy: ExportThresholdStrategy = toml::from_str(toml_str)
+            .expect("Should deserialize TlobDynamic");
+        
+        assert!(matches!(
+            strategy,
+            ExportThresholdStrategy::TlobDynamic { fallback, divisor }
+            if (fallback - 0.0008).abs() < 1e-10 && (divisor - 2.0).abs() < 1e-10
+        ));
+    }
+
+    #[test]
+    fn test_threshold_strategy_tlob_dynamic_toml_roundtrip() {
+        let original = ExportThresholdStrategy::tlob_dynamic(0.0005, 3.0);
+        let toml_str = toml::to_string(&original).expect("Should serialize");
+        let loaded: ExportThresholdStrategy = toml::from_str(&toml_str).expect("Should deserialize");
+        
+        assert_eq!(original, loaded);
+    }
+
+    #[test]
+    fn test_label_config_with_tlob_dynamic_strategy() {
+        let config = ExportLabelConfig::multi_with_strategy(
+            vec![10, 20, 50],
+            5,
+            ExportThresholdStrategy::tlob_dynamic_default(0.0008),
+        );
+
+        assert!(config.is_multi_horizon());
+        assert_eq!(config.horizons.len(), 3);
+        
+        // Check the threshold strategy was set correctly
+        let thresh_strategy = config.effective_threshold_strategy();
+        assert!(matches!(
+            thresh_strategy,
+            ExportThresholdStrategy::TlobDynamic { divisor, .. }
+            if (divisor - 2.0).abs() < 1e-10
+        ));
     }
 }
 

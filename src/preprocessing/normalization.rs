@@ -568,14 +568,18 @@ pub struct RollingZScoreNormalizer {
     /// Day statistics: (sample_count, mean, mean_of_squares)
     day_stats: VecDeque<DayStatistics>,
 
-    /// Cached rolling mean
-    cached_mean: f64,
+    /// Rolling mean (eagerly computed, always up-to-date)
+    ///
+    /// This value is recomputed immediately whenever day_stats changes.
+    /// Eager computation eliminates the stale-cache bug where `normalize()`
+    /// could use outdated values if called after `add_day_stats()` without
+    /// first calling `mean()` or `std()`.
+    rolling_mean: f64,
 
-    /// Cached rolling std
-    cached_std: f64,
-
-    /// Whether cache is valid
-    cache_valid: bool,
+    /// Rolling standard deviation (eagerly computed, always up-to-date)
+    ///
+    /// See `rolling_mean` for rationale.
+    rolling_std: f64,
 
     /// Minimum std to avoid division by zero
     min_std: f64,
@@ -606,14 +610,16 @@ impl RollingZScoreNormalizer {
         Self {
             max_days,
             day_stats: VecDeque::with_capacity(max_days),
-            cached_mean: 0.0,
-            cached_std: 1.0,
-            cache_valid: false,
+            rolling_mean: 0.0,
+            rolling_std: 1.0,
             min_std: 1e-8,
         }
     }
 
     /// Add statistics for a new day.
+    ///
+    /// Rolling statistics are computed eagerly after adding the day,
+    /// ensuring `normalize()` always uses up-to-date values.
     ///
     /// # Arguments
     ///
@@ -635,12 +641,15 @@ impl RollingZScoreNormalizer {
             self.day_stats.pop_front();
         }
         self.day_stats.push_back(stats);
-        self.cache_valid = false;
+
+        // Eagerly compute rolling stats to prevent stale-cache bugs
+        self.recompute_rolling_stats();
     }
 
     /// Add statistics from raw data (mean and mean of squares).
     ///
     /// This is more numerically stable when aggregating from streaming data.
+    /// Rolling statistics are computed eagerly after adding the day.
     ///
     /// # Arguments
     ///
@@ -665,21 +674,21 @@ impl RollingZScoreNormalizer {
             self.day_stats.pop_front();
         }
         self.day_stats.push_back(stats);
-        self.cache_valid = false;
+
+        // Eagerly compute rolling stats to prevent stale-cache bugs
+        self.recompute_rolling_stats();
     }
 
-    /// Compute rolling statistics from all days.
-    fn compute_rolling_stats(&mut self) {
-        if self.cache_valid {
-            return;
-        }
-
+    /// Recompute rolling statistics from all days.
+    ///
+    /// Called automatically after any modification to day_stats.
+    /// Uses sample-count-weighted averaging for proper aggregation.
+    fn recompute_rolling_stats(&mut self) {
         let total_samples: u64 = self.day_stats.iter().map(|d| d.sample_count).sum();
 
         if total_samples == 0 {
-            self.cached_mean = 0.0;
-            self.cached_std = 1.0;
-            self.cache_valid = true;
+            self.rolling_mean = 0.0;
+            self.rolling_std = 1.0;
             return;
         }
 
@@ -703,21 +712,22 @@ impl RollingZScoreNormalizer {
         let variance = weighted_mean_squared - weighted_mean * weighted_mean;
         let std = variance.max(0.0).sqrt().max(self.min_std);
 
-        self.cached_mean = weighted_mean;
-        self.cached_std = std;
-        self.cache_valid = true;
+        self.rolling_mean = weighted_mean;
+        self.rolling_std = std;
     }
 
     /// Get the rolling mean.
-    pub fn mean(&mut self) -> f64 {
-        self.compute_rolling_stats();
-        self.cached_mean
+    ///
+    /// Always returns up-to-date value (computed eagerly when day_stats changes).
+    pub fn mean(&self) -> f64 {
+        self.rolling_mean
     }
 
     /// Get the rolling standard deviation.
-    pub fn std(&mut self) -> f64 {
-        self.compute_rolling_stats();
-        self.cached_std
+    ///
+    /// Always returns up-to-date value (computed eagerly when day_stats changes).
+    pub fn std(&self) -> f64 {
+        self.rolling_std
     }
 
     /// Get the number of days in the rolling window.
@@ -730,10 +740,11 @@ impl RollingZScoreNormalizer {
         self.day_stats.iter().map(|d| d.sample_count).sum()
     }
 
-    /// Clear all day statistics.
+    /// Clear all day statistics and reset rolling stats to defaults.
     pub fn clear(&mut self) {
         self.day_stats.clear();
-        self.cache_valid = false;
+        self.rolling_mean = 0.0;
+        self.rolling_std = 1.0;
     }
 }
 
@@ -750,12 +761,13 @@ impl Normalizer for RollingZScoreNormalizer {
     }
 
     fn normalize(&self, value: f64) -> f64 {
-        // Use cached values (caller should ensure compute_rolling_stats was called)
+        // Rolling stats are eagerly computed when day_stats changes,
+        // so we can safely use them without checking validity.
         if self.day_stats.is_empty() {
             return value; // No normalization if no historical data
         }
 
-        (value - self.cached_mean) / self.cached_std
+        (value - self.rolling_mean) / self.rolling_std
     }
 
     fn normalize_batch(&self, values: &[f64]) -> Vec<f64> {
@@ -765,15 +777,14 @@ impl Normalizer for RollingZScoreNormalizer {
 
         values
             .iter()
-            .map(|&v| (v - self.cached_mean) / self.cached_std)
+            .map(|&v| (v - self.rolling_mean) / self.rolling_std)
             .collect()
     }
 
     fn reset(&mut self) {
         self.day_stats.clear();
-        self.cached_mean = 0.0;
-        self.cached_std = 1.0;
-        self.cache_valid = false;
+        self.rolling_mean = 0.0;
+        self.rolling_std = 1.0;
     }
 
     fn is_ready(&self) -> bool {

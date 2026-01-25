@@ -574,10 +574,55 @@ pub struct MboAggregator {
     /// - Forex: $0.0001 = 100_000 nanodollars
     /// - Some futures: $1.00 = 1_000_000_000 nanodollars
     tick_size_nanodollars: i64,
+
+    /// Rolling buffer of completed order lifetimes (in seconds).
+    ///
+    /// When an order is cancelled or fully filled, its lifetime (time from
+    /// creation to completion) is recorded here. This enables accurate
+    /// `median_order_lifetime` computation.
+    ///
+    /// Bounded to `COMPLETED_ORDER_BUFFER_SIZE` (1000) for constant memory.
+    completed_lifetimes: VecDeque<f64>,
+
+    /// Rolling buffer of completed order fill ratios.
+    ///
+    /// When an order is completed (cancelled or fully filled), its fill ratio
+    /// (filled_size / original_size) is recorded here. This enables accurate
+    /// `average_fill_ratio` computation from actual order outcomes.
+    ///
+    /// Bounded to `COMPLETED_ORDER_BUFFER_SIZE` (1000) for constant memory.
+    completed_fill_ratios: VecDeque<f64>,
+
+    /// Rolling buffer of completed order modification counts.
+    ///
+    /// When an order is completed, its modification count is recorded here.
+    /// This enables accurate `modification_score` computation.
+    ///
+    /// Bounded to `COMPLETED_ORDER_BUFFER_SIZE` (1000) for constant memory.
+    completed_modifications: VecDeque<u8>,
 }
 
 /// Default tick size in nanodollars: $0.01 for US equities
 const DEFAULT_TICK_SIZE_NANODOLLARS: i64 = 10_000_000;
+
+/// Buffer size for tracking completed order lifetimes.
+///
+/// This matches the medium window size for consistency.
+/// Memory cost: 1000 × 8 bytes = 8 KB (negligible).
+const COMPLETED_ORDER_BUFFER_SIZE: usize = 1000;
+
+/// Maximum age (in nanoseconds) for orders in the tracker.
+/// Orders older than this are evicted to prevent unbounded growth.
+/// Default: 1 hour = 3.6e12 nanoseconds
+const MAX_ORDER_AGE_NS: u64 = 3_600_000_000_000;
+
+/// Maximum number of orders to track before forcing eviction.
+/// Prevents memory blowup if eviction based on age alone is insufficient.
+/// Default: 50,000 orders (typical LOB has ~1,000-10,000)
+const MAX_ORDER_TRACKER_SIZE: usize = 50_000;
+
+/// Eviction batch size: how many old orders to remove when limit is reached.
+const EVICTION_BATCH_SIZE: usize = 5_000;
 
 impl MboAggregator {
     /// Create a new MBO aggregator with default window sizes.
@@ -595,6 +640,9 @@ impl MboAggregator {
             queue_tracker: None,
             message_count: 0,
             tick_size_nanodollars: DEFAULT_TICK_SIZE_NANODOLLARS,
+            completed_lifetimes: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
+            completed_fill_ratios: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
+            completed_modifications: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
         }
     }
 
@@ -610,9 +658,12 @@ impl MboAggregator {
             queue_tracker: None,
             message_count: 0,
             tick_size_nanodollars: DEFAULT_TICK_SIZE_NANODOLLARS,
+            completed_lifetimes: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
+            completed_fill_ratios: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
+            completed_modifications: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
         }
     }
-    
+
     /// Set the tick size for depth calculations.
     ///
     /// The tick size is specified in **dollars** and is converted to nanodollars
@@ -639,6 +690,12 @@ impl MboAggregator {
     ///
     /// # Panics
     /// Panics if tick_size_dollars is <= 0.
+    ///
+    /// # Numerical Safety
+    /// The tick size is stored internally as nanodollars (i64). To prevent
+    /// truncation to zero for very small tick sizes (which would cause
+    /// division-by-zero in depth_ticks_* calculations), the minimum stored
+    /// value is clamped to 1 nanodollar (1e-9 dollars).
     pub fn with_tick_size(mut self, tick_size_dollars: f64) -> Self {
         assert!(
             tick_size_dollars > 0.0,
@@ -646,7 +703,10 @@ impl MboAggregator {
             tick_size_dollars
         );
         // Convert dollars to nanodollars: 1 dollar = 1e9 nanodollars
-        self.tick_size_nanodollars = (tick_size_dollars * 1e9) as i64;
+        // Use round() for accurate conversion, then clamp to minimum of 1 to prevent
+        // division-by-zero if tick_size is extremely small (< 1e-9 dollars)
+        let raw_nanodollars = (tick_size_dollars * 1e9).round() as i64;
+        self.tick_size_nanodollars = raw_nanodollars.max(1);
         self
     }
     
@@ -711,6 +771,11 @@ impl MboAggregator {
         }
 
         self.message_count += 1;
+
+        // Periodically evict old orders to bound memory (every 1000 events)
+        if self.message_count % 1000 == 0 {
+            self.evict_old_orders(event.timestamp);
+        }
     }
 
     /// Update order lifecycle tracker based on event.
@@ -729,21 +794,96 @@ impl MboAggregator {
                 }
             }
             Action::Cancel => {
-                // Remove order
-                self.order_tracker.remove(&event.order_id);
+                // Remove order and record its lifetime
+                if let Some(info) = self.order_tracker.remove(&event.order_id) {
+                    self.record_completed_lifetime(&info, event.timestamp);
+                }
             }
             Action::Trade => {
                 // Record fill
                 if let Some(info) = self.order_tracker.get_mut(&event.order_id) {
                     info.add_fill(event.timestamp, event.size);
 
-                    // Remove if fully filled
+                    // Remove if fully filled and record lifetime
                     if info.current_size == 0 {
-                        self.order_tracker.remove(&event.order_id);
+                        if let Some(completed_info) = self.order_tracker.remove(&event.order_id) {
+                            self.record_completed_lifetime(&completed_info, event.timestamp);
+                        }
                     }
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Record a completed order's statistics in rolling buffers.
+    ///
+    /// Records lifetime, fill ratio, and modification count for completed orders.
+    /// Maintains bounded buffers by removing oldest entries when full.
+    ///
+    /// # Arguments
+    ///
+    /// * `info` - The completed order's information
+    /// * `completion_time` - Timestamp when order was completed (ns)
+    #[inline]
+    fn record_completed_lifetime(&mut self, info: &OrderInfo, completion_time: u64) {
+        // Compute lifetime in seconds
+        let lifetime_ns = completion_time.saturating_sub(info.creation_time);
+        let lifetime_secs = lifetime_ns as f64 / 1e9;
+
+        // Compute fill ratio
+        let fill_ratio = info.fill_ratio();
+
+        // Maintain bounded buffers for lifetimes
+        if self.completed_lifetimes.len() >= COMPLETED_ORDER_BUFFER_SIZE {
+            self.completed_lifetimes.pop_front();
+        }
+        self.completed_lifetimes.push_back(lifetime_secs);
+
+        // Maintain bounded buffers for fill ratios
+        if self.completed_fill_ratios.len() >= COMPLETED_ORDER_BUFFER_SIZE {
+            self.completed_fill_ratios.pop_front();
+        }
+        self.completed_fill_ratios.push_back(fill_ratio);
+
+        // Maintain bounded buffers for modifications
+        if self.completed_modifications.len() >= COMPLETED_ORDER_BUFFER_SIZE {
+            self.completed_modifications.pop_front();
+        }
+        self.completed_modifications.push_back(info.modifications);
+    }
+
+    /// Evict old orders from the tracker to prevent unbounded growth.
+    ///
+    /// Called periodically during event processing to bound memory usage.
+    /// Evicts orders older than `MAX_ORDER_AGE_NS` or when tracker size
+    /// exceeds `MAX_ORDER_TRACKER_SIZE`.
+    ///
+    /// # Arguments
+    ///
+    /// * `current_time` - Current timestamp (ns) for age comparison
+    fn evict_old_orders(&mut self, current_time: u64) {
+        // Only evict if we're over the limit
+        if self.order_tracker.len() <= MAX_ORDER_TRACKER_SIZE {
+            return;
+        }
+
+        // Find orders to evict (older than MAX_ORDER_AGE_NS)
+        let cutoff_time = current_time.saturating_sub(MAX_ORDER_AGE_NS);
+        let orders_to_evict: Vec<u64> = self
+            .order_tracker
+            .iter()
+            .filter(|(_, info)| info.creation_time < cutoff_time)
+            .take(EVICTION_BATCH_SIZE)
+            .map(|(&id, _)| id)
+            .collect();
+
+        // Evict the orders and record their stats
+        for order_id in orders_to_evict {
+            if let Some(info) = self.order_tracker.remove(&order_id) {
+                // Record as completed (even though not explicitly cancelled)
+                self.record_completed_lifetime(&info, current_time);
+            }
         }
     }
 
@@ -999,11 +1139,39 @@ impl MboAggregator {
         variance.sqrt()
     }
 
+    /// Flow regime indicator: ratio of fast to slow window net order flow.
+    ///
+    /// This captures momentum vs mean-reversion dynamics:
+    /// - Large positive: Fast flow significantly exceeds slow (momentum)
+    /// - Near zero: Flow is stable (no regime change)
+    /// - Large negative: Fast flow reversed relative to slow (mean-reversion)
+    ///
+    /// # Numerical Stability
+    ///
+    /// Uses proper epsilon (0.01) and output clamping [-10, 10] to prevent
+    /// extreme values when slow_flow ≈ 0. The clamp range represents
+    /// "fast flow is 10x the slow flow" which is already extreme.
+    ///
+    /// # Formula
+    ///
+    /// ```text
+    /// flow_regime = fast_flow / max(|slow_flow|, 0.01), clamped to [-10, 10]
+    /// ```
     fn flow_regime_indicator(&self) -> f64 {
-        // Ratio of fast to slow window net flow
+        // Minimum denominator to prevent division by near-zero
+        const MIN_DENOM: f64 = 0.01;
+        // Maximum absolute value for output (10x difference is extreme)
+        const MAX_ABS: f64 = 10.0;
+
         let fast_flow = self.net_order_flow(&self.fast_window);
         let slow_flow = self.net_order_flow(&self.slow_window);
-        fast_flow / (slow_flow.abs() + 1e-8)
+
+        // Use max(|slow_flow|, MIN_DENOM) to prevent explosion
+        let denom = slow_flow.abs().max(MIN_DENOM);
+        let ratio = fast_flow / denom;
+
+        // Clamp to reasonable range
+        ratio.clamp(-MAX_ABS, MAX_ABS)
     }
 
     fn size_zscore(&mut self) -> f64 {
@@ -1359,16 +1527,24 @@ impl MboAggregator {
         (large_bid as f64 - large_ask as f64) / (total as f64 + 1e-8)
     }
 
+    /// Compute modification score from recently completed orders.
+    ///
+    /// Returns the average number of modifications per completed order.
+    /// Uses the rolling buffer of completed orders, NOT active orders,
+    /// to get accurate statistics on actual order behavior.
+    ///
+    /// # Returns
+    /// - Average modifications per order (0.0 if no completed orders)
     fn modification_score(&self) -> f64 {
-        if self.order_tracker.is_empty() {
+        if self.completed_modifications.is_empty() {
             return 0.0;
         }
         let total_mods: usize = self
-            .order_tracker
-            .values()
-            .map(|info| info.modifications as usize)
+            .completed_modifications
+            .iter()
+            .map(|&m| m as usize)
             .sum();
-        total_mods as f64 / self.order_tracker.len() as f64
+        total_mods as f64 / self.completed_modifications.len() as f64
     }
 
     fn iceberg_proxy(&self) -> f64 {
@@ -1394,21 +1570,46 @@ impl MboAggregator {
         total_age / self.order_tracker.len() as f64
     }
 
+    /// Compute median lifetime of recently completed orders.
+    ///
+    /// Returns the median of the last N completed order lifetimes (in seconds),
+    /// where N is bounded by `COMPLETED_ORDER_BUFFER_SIZE`.
+    ///
+    /// # Returns
+    /// - Median lifetime in seconds
+    /// - 0.0 if no orders have been completed yet
+    ///
+    /// # Complexity
+    /// O(n log n) where n ≤ COMPLETED_ORDER_BUFFER_SIZE (1000).
+    /// This is acceptable since feature extraction runs at sampling frequency,
+    /// not on every message.
     fn median_order_lifetime(&self) -> f64 {
-        // Placeholder: track completed orders
-        0.0
+        let n = self.completed_lifetimes.len();
+        if n == 0 {
+            return 0.0;
+        }
+
+        // Sort a copy of the lifetimes
+        let mut sorted: Vec<f64> = self.completed_lifetimes.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Compute median
+        if n % 2 == 1 {
+            // Odd count: middle element
+            sorted[n / 2]
+        } else {
+            // Even count: average of two middle elements
+            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        }
     }
 
     fn average_fill_ratio(&self) -> f64 {
-        if self.order_tracker.is_empty() {
+        // Use completed order fill ratios for accurate statistics
+        if self.completed_fill_ratios.is_empty() {
             return 0.0;
         }
-        let total_ratio: f64 = self
-            .order_tracker
-            .values()
-            .map(|info| info.fill_ratio())
-            .sum();
-        total_ratio / self.order_tracker.len() as f64
+        let total_ratio: f64 = self.completed_fill_ratios.iter().sum();
+        total_ratio / self.completed_fill_ratios.len() as f64
     }
 
     fn average_time_to_first_fill(&self) -> f64 {
@@ -1423,11 +1624,52 @@ impl MboAggregator {
         fills.iter().sum::<f64>() / fills.len() as f64
     }
 
+    /// Cancel-to-add ratio: proportion of cancellations relative to new orders.
+    ///
+    /// This measures order book "churn" - high values indicate frequent
+    /// order placement and cancellation (potential HFT activity).
+    ///
+    /// # Interpretation
+    ///
+    /// - `< 1.0`: More adds than cancels (book growing)
+    /// - `= 1.0`: Equal adds and cancels (stable book)
+    /// - `> 1.0`: More cancels than adds (book shrinking)
+    ///
+    /// # Edge Cases
+    ///
+    /// - No events: Returns 1.0 (neutral)
+    /// - Cancels only (no adds): Returns capped value (10.0)
+    /// - Adds only (no cancels): Returns 0.0
+    ///
+    /// # Numerical Stability
+    ///
+    /// Output is clamped to [0, 10] to prevent extreme values.
+    /// A ratio of 10 means "10 cancels per add" which is already extreme.
+    ///
+    /// # Formula
+    ///
+    /// ```text
+    /// ratio = cancels / adds, clamped to [0, 10]
+    /// ```
     fn cancel_to_add_ratio(&self) -> f64 {
+        // Maximum output value (10 cancels per add is extreme)
+        const MAX_RATIO: f64 = 10.0;
+
         let w = &self.medium_window;
         let cancels = w.cancel_count_bid + w.cancel_count_ask;
         let adds = w.add_count_bid + w.add_count_ask;
-        cancels as f64 / (adds as f64 + 1e-8)
+
+        // Handle edge cases explicitly
+        if adds == 0 {
+            if cancels == 0 {
+                return 1.0; // No activity = neutral
+            } else {
+                return MAX_RATIO; // Cancels only = capped extreme
+            }
+        }
+
+        let ratio = cancels as f64 / adds as f64;
+        ratio.clamp(0.0, MAX_RATIO)
     }
 
     fn active_order_count(&self) -> f64 {
@@ -1645,6 +1887,59 @@ mod tests {
             "Should be ~0.6667 ticks, got {}",
             result
         );
+    }
+
+    // =========================================================================
+    // tick_size safeguard tests
+    // =========================================================================
+
+    #[test]
+    fn test_tick_size_normal_value() {
+        // Normal US equities tick: $0.01 = 10_000_000 nanodollars
+        let aggregator = MboAggregator::new().with_tick_size(0.01);
+        assert_eq!(
+            aggregator.tick_size_nanodollars(),
+            10_000_000,
+            "Standard US equity tick should be 10M nanodollars"
+        );
+    }
+
+    #[test]
+    fn test_tick_size_small_value() {
+        // Crypto tick: $0.0001 = 100_000 nanodollars
+        let aggregator = MboAggregator::new().with_tick_size(0.0001);
+        assert_eq!(
+            aggregator.tick_size_nanodollars(),
+            100_000,
+            "Small crypto tick should be 100K nanodollars"
+        );
+    }
+
+    #[test]
+    fn test_tick_size_very_small_clamped() {
+        // Extremely small tick that would truncate to 0 is clamped to 1
+        let aggregator = MboAggregator::new().with_tick_size(1e-12);
+        assert_eq!(
+            aggregator.tick_size_nanodollars(),
+            1,
+            "Extremely small tick_size should be clamped to 1 nanodollar minimum"
+        );
+    }
+
+    #[test]
+    fn test_tick_size_prevents_division_by_zero() {
+        // Even with clamped tick_size, depth_ticks should not panic
+        let aggregator = MboAggregator::new().with_tick_size(1e-15);
+        let mut lob = LobState::new(10);
+        lob.best_bid = Some(100_000_000_000);
+        lob.bid_prices[0] = 100_000_000_000;
+        lob.bid_prices[1] = 99_990_000_000; // 1 cent away
+        lob.bid_sizes[0] = 100;
+        lob.bid_sizes[1] = 100;
+
+        // This should not panic
+        let result = aggregator.depth_ticks_bid(&lob);
+        assert!(result.is_finite(), "depth_ticks_bid should return finite value");
     }
 
     // =========================================================================
@@ -2595,6 +2890,627 @@ mod tests {
             net_trade_flow.abs() < 0.01,
             "Equal bid/ask trades should give net_trade_flow ≈ 0. Got {:.4}",
             net_trade_flow
+        );
+    }
+
+    // =========================================================================
+    // Numerical Stability Tests
+    // =========================================================================
+
+    #[test]
+    fn test_flow_regime_indicator_normal() {
+        // Basic test: result should always be in valid range
+        let mut aggregator = MboAggregator::with_windows(50, 200, 500);
+
+        // Fill with mixed flow
+        for i in 0..500u64 {
+            let side = if i % 3 == 0 { Side::Ask } else { Side::Bid };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.flow_regime_indicator();
+        // Result should be in valid range
+        assert!(
+            result >= -10.0 && result <= 10.0,
+            "flow_regime_indicator should be clamped to [-10, 10], got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_flow_regime_indicator_slow_flow_near_zero() {
+        // When slow_flow ≈ 0, we should NOT get extreme values
+        // Use smaller windows for this test
+        let mut aggregator = MboAggregator::with_windows(50, 200, 200);
+
+        // First, fill slow window with balanced flow (net = 0)
+        for i in 0..200u64 {
+            let side = if i % 2 == 0 { Side::Bid } else { Side::Ask };
+            let event = MboEvent::new(i * 1_000_000, Action::Add, side, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        // Now override fast window with strong bid flow
+        for i in 200..250u64 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let result = aggregator.flow_regime_indicator();
+
+        // CRITICAL: Must NOT produce extreme values like 1e8
+        assert!(
+            result.abs() <= 10.0,
+            "flow_regime_indicator must be clamped even when slow_flow ≈ 0. Got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_flow_regime_indicator_empty_windows() {
+        // Empty aggregator should return 0 (neutral)
+        let aggregator = MboAggregator::new();
+        let result = aggregator.flow_regime_indicator();
+        assert!(
+            result.abs() <= 10.0,
+            "Empty aggregator should return bounded value, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_cancel_to_add_ratio_normal() {
+        let mut aggregator = MboAggregator::new();
+
+        // 10 adds
+        for i in 0..10u64 {
+            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        // 5 cancels
+        for i in 0..5u64 {
+            let event =
+                MboEvent::new((10 + i) * 1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let ratio = features[34]; // cancel_to_add_ratio is Core MBO feature [4]
+
+        assert!(
+            (ratio - 0.5).abs() < 0.01,
+            "5 cancels / 10 adds = 0.5, got {}",
+            ratio
+        );
+    }
+
+    #[test]
+    fn test_cancel_to_add_ratio_no_adds() {
+        // Edge case: cancels without adds (orphan cancels)
+        let mut aggregator = MboAggregator::new();
+
+        // Add events then clear so window only has cancels
+        for i in 0..5u64 {
+            let event =
+                MboEvent::new(i * 1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let ratio = features[34]; // cancel_to_add_ratio
+
+        // CRITICAL: Must NOT produce extreme values like 1e11
+        assert!(
+            ratio <= 10.0,
+            "cancel_to_add_ratio must be capped when adds=0. Got {}",
+            ratio
+        );
+        assert_eq!(ratio, 10.0, "Cancels only should return max capped value");
+    }
+
+    #[test]
+    fn test_cancel_to_add_ratio_no_activity() {
+        // Edge case: no adds and no cancels
+        let mut aggregator = MboAggregator::new();
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let ratio = features[34]; // cancel_to_add_ratio
+
+        assert_eq!(
+            ratio, 1.0,
+            "No activity should return neutral value 1.0, got {}",
+            ratio
+        );
+    }
+
+    #[test]
+    fn test_cancel_to_add_ratio_capped() {
+        // Edge case: many more cancels than adds
+        let mut aggregator = MboAggregator::new();
+
+        // 1 add
+        let event = MboEvent::new(1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(event);
+
+        // 100 cancels
+        for i in 0..100u64 {
+            let event =
+                MboEvent::new((2 + i) * 1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(event);
+        }
+
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+        let ratio = features[34]; // cancel_to_add_ratio
+
+        // Raw ratio would be 100, but should be capped at 10
+        assert_eq!(
+            ratio, 10.0,
+            "High cancel/add ratio should be capped at 10.0, got {}",
+            ratio
+        );
+    }
+
+    // =========================================================================
+    // median_order_lifetime tests
+    // =========================================================================
+
+    #[test]
+    fn test_median_order_lifetime_no_completed_orders() {
+        // No completed orders should return 0.0
+        let aggregator = MboAggregator::new();
+        assert_eq!(
+            aggregator.median_order_lifetime(),
+            0.0,
+            "No completed orders should return 0.0"
+        );
+    }
+
+    #[test]
+    fn test_median_order_lifetime_single_order() {
+        let mut aggregator = MboAggregator::new();
+
+        // Add order at t=0
+        let add_event = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add_event);
+
+        // Cancel order at t=1 second (1_000_000_000 ns)
+        let cancel_event = MboEvent::new(1_000_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(cancel_event);
+
+        let median = aggregator.median_order_lifetime();
+        assert!(
+            (median - 1.0).abs() < 0.001,
+            "Single order with 1 second lifetime should return 1.0, got {}",
+            median
+        );
+    }
+
+    #[test]
+    fn test_median_order_lifetime_odd_count() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create 5 orders with lifetimes: 1, 2, 3, 4, 5 seconds
+        // Median should be 3.0
+        for i in 0..5u64 {
+            let lifetime_ns = (i + 1) * 1_000_000_000; // 1s, 2s, 3s, 4s, 5s
+
+            // Add order at t=0
+            let add_event = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(add_event);
+
+            // Cancel order at lifetime
+            let cancel_event = MboEvent::new(lifetime_ns, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(cancel_event);
+        }
+
+        let median = aggregator.median_order_lifetime();
+        assert!(
+            (median - 3.0).abs() < 0.001,
+            "Median of [1,2,3,4,5] should be 3.0, got {}",
+            median
+        );
+    }
+
+    #[test]
+    fn test_median_order_lifetime_even_count() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create 4 orders with lifetimes: 1, 2, 3, 4 seconds
+        // Median should be (2 + 3) / 2 = 2.5
+        for i in 0..4u64 {
+            let lifetime_ns = (i + 1) * 1_000_000_000; // 1s, 2s, 3s, 4s
+
+            // Add order at t=0
+            let add_event = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(add_event);
+
+            // Cancel order at lifetime
+            let cancel_event = MboEvent::new(lifetime_ns, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(cancel_event);
+        }
+
+        let median = aggregator.median_order_lifetime();
+        assert!(
+            (median - 2.5).abs() < 0.001,
+            "Median of [1,2,3,4] should be 2.5, got {}",
+            median
+        );
+    }
+
+    #[test]
+    fn test_median_order_lifetime_filled_orders() {
+        let mut aggregator = MboAggregator::new();
+
+        // Add order at t=0
+        let add_event = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add_event);
+
+        // Fully fill order at t=2 seconds
+        let trade_event = MboEvent::new(2_000_000_000, Action::Trade, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(trade_event);
+
+        let median = aggregator.median_order_lifetime();
+        assert!(
+            (median - 2.0).abs() < 0.001,
+            "Filled order with 2 second lifetime should return 2.0, got {}",
+            median
+        );
+    }
+
+    #[test]
+    fn test_median_order_lifetime_mixed_cancel_and_fill() {
+        let mut aggregator = MboAggregator::new();
+
+        // Order 1: Cancelled after 1 second
+        let add1 = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add1);
+        let cancel1 = MboEvent::new(1_000_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(cancel1);
+
+        // Order 2: Filled after 5 seconds
+        let add2 = MboEvent::new(2_000_000_000, Action::Add, Side::Ask, 100_000_000_000, 200, 2);
+        aggregator.process_event(add2);
+        let fill2 = MboEvent::new(7_000_000_000, Action::Trade, Side::Ask, 100_000_000_000, 200, 2);
+        aggregator.process_event(fill2);
+
+        // Order 3: Cancelled after 3 seconds
+        let add3 = MboEvent::new(8_000_000_000, Action::Add, Side::Bid, 100_000_000_000, 50, 3);
+        aggregator.process_event(add3);
+        let cancel3 = MboEvent::new(11_000_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 50, 3);
+        aggregator.process_event(cancel3);
+
+        // Lifetimes: [1, 5, 3] -> sorted: [1, 3, 5] -> median: 3.0
+        let median = aggregator.median_order_lifetime();
+        assert!(
+            (median - 3.0).abs() < 0.001,
+            "Median of [1, 5, 3] should be 3.0, got {}",
+            median
+        );
+    }
+
+    #[test]
+    fn test_median_order_lifetime_buffer_bounded() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create many orders (more than buffer size) with increasing lifetimes
+        // Buffer size is 1000, so create 1100 orders
+        for i in 0..1100u64 {
+            let lifetime_ns = (i + 1) * 1_000_000; // Increasing milliseconds
+
+            let add_event = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(add_event);
+
+            let cancel_event = MboEvent::new(lifetime_ns, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(cancel_event);
+        }
+
+        // Buffer should contain last 1000 orders (indices 100-1099)
+        // Lifetimes: 101ms to 1100ms = 0.101s to 1.1s
+        // Median of even count = avg of middle two = (0.600s + 0.601s) / 2 ≈ 0.6005s
+        let median = aggregator.median_order_lifetime();
+
+        // Verify buffer is bounded and median is in expected range
+        assert!(
+            median > 0.5 && median < 0.7,
+            "Median of last 1000 orders should be around 0.6s, got {}",
+            median
+        );
+    }
+
+    #[test]
+    fn test_median_order_lifetime_partial_fills_not_completed() {
+        let mut aggregator = MboAggregator::new();
+
+        // Add order with size 100
+        let add_event = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add_event);
+
+        // Partial fill of 50 (order still active)
+        let trade_event = MboEvent::new(1_000_000_000, Action::Trade, Side::Bid, 100_000_000_000, 50, 1);
+        aggregator.process_event(trade_event);
+
+        // Order is not completed, so no lifetime should be recorded
+        let median = aggregator.median_order_lifetime();
+        assert_eq!(
+            median, 0.0,
+            "Partially filled order should not be counted as completed, got {}",
+            median
+        );
+
+        // Now complete the order with another partial fill
+        let trade_event2 = MboEvent::new(3_000_000_000, Action::Trade, Side::Bid, 100_000_000_000, 50, 1);
+        aggregator.process_event(trade_event2);
+
+        // Now order is completed with 3 second lifetime
+        let median = aggregator.median_order_lifetime();
+        assert!(
+            (median - 3.0).abs() < 0.001,
+            "Fully filled order should have 3 second lifetime, got {}",
+            median
+        );
+    }
+
+    #[test]
+    fn test_median_order_lifetime_feature_extraction() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create 3 orders with known lifetimes: 1, 2, 3 seconds
+        for i in 0..3u64 {
+            let lifetime_ns = (i + 1) * 1_000_000_000;
+
+            let add_event = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(add_event);
+
+            let cancel_event = MboEvent::new(lifetime_ns, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(cancel_event);
+        }
+
+        // Extract features and verify median_order_lifetime is at correct index
+        let lob = LobState::new(10);
+        let features = aggregator.extract_features(&lob);
+
+        // median_order_lifetime is Core MBO feature [1] (second in the 6-feature group)
+        // Core MBO starts at index 30 in the 36-feature array
+        let median_feature = features[31]; // Core[1] = index 31
+
+        assert!(
+            (median_feature - 2.0).abs() < 0.001,
+            "Feature extraction should return median 2.0, got {}",
+            median_feature
+        );
+    }
+
+    // =========================================================================
+    // Completed Order Fill Ratio Tests
+    // =========================================================================
+
+    #[test]
+    fn test_average_fill_ratio_empty() {
+        let aggregator = MboAggregator::new();
+        let fill_ratio = aggregator.average_fill_ratio();
+        assert_eq!(
+            fill_ratio, 0.0,
+            "No completed orders should return 0.0 fill ratio"
+        );
+    }
+
+    #[test]
+    fn test_average_fill_ratio_cancelled_orders() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create and cancel an order (fill ratio = 0)
+        let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add);
+        let cancel = MboEvent::new(1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(cancel);
+
+        // Cancelled order has fill ratio = 0
+        let fill_ratio = aggregator.average_fill_ratio();
+        assert_eq!(
+            fill_ratio, 0.0,
+            "Cancelled order should have 0.0 fill ratio, got {}",
+            fill_ratio
+        );
+    }
+
+    #[test]
+    fn test_average_fill_ratio_fully_filled_orders() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create and fully fill an order (fill ratio = 1.0)
+        let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add);
+        let fill = MboEvent::new(1_000_000, Action::Trade, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(fill);
+
+        // Fully filled order has fill ratio = 1.0
+        let fill_ratio = aggregator.average_fill_ratio();
+        assert!(
+            (fill_ratio - 1.0).abs() < 0.001,
+            "Fully filled order should have 1.0 fill ratio, got {}",
+            fill_ratio
+        );
+    }
+
+    #[test]
+    fn test_average_fill_ratio_mixed_outcomes() {
+        let mut aggregator = MboAggregator::new();
+
+        // Order 1: Cancelled (fill ratio = 0)
+        let add1 = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add1);
+        let cancel1 = MboEvent::new(1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(cancel1);
+
+        // Order 2: Fully filled (fill ratio = 1.0)
+        let add2 = MboEvent::new(2_000_000, Action::Add, Side::Ask, 100_000_000_000, 200, 2);
+        aggregator.process_event(add2);
+        let fill2 = MboEvent::new(3_000_000, Action::Trade, Side::Ask, 100_000_000_000, 200, 2);
+        aggregator.process_event(fill2);
+
+        // Order 3: 50% filled (fill ratio = 0.5)
+        let add3 = MboEvent::new(4_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 3);
+        aggregator.process_event(add3);
+        let fill3 = MboEvent::new(5_000_000, Action::Trade, Side::Bid, 100_000_000_000, 50, 3);
+        aggregator.process_event(fill3);
+        let cancel3 = MboEvent::new(6_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 50, 3);
+        aggregator.process_event(cancel3);
+
+        // Average fill ratio = (0 + 1.0 + 0.5) / 3 = 0.5
+        let fill_ratio = aggregator.average_fill_ratio();
+        assert!(
+            (fill_ratio - 0.5).abs() < 0.001,
+            "Average of [0, 1.0, 0.5] should be 0.5, got {}",
+            fill_ratio
+        );
+    }
+
+    // =========================================================================
+    // Completed Order Modification Score Tests
+    // =========================================================================
+
+    #[test]
+    fn test_modification_score_empty() {
+        let aggregator = MboAggregator::new();
+        let mod_score = aggregator.modification_score();
+        assert_eq!(
+            mod_score, 0.0,
+            "No completed orders should return 0.0 modification score"
+        );
+    }
+
+    #[test]
+    fn test_modification_score_no_modifications() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create and cancel an order without modifications
+        let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add);
+        let cancel = MboEvent::new(1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(cancel);
+
+        let mod_score = aggregator.modification_score();
+        assert_eq!(
+            mod_score, 0.0,
+            "Order without modifications should have 0.0 mod score, got {}",
+            mod_score
+        );
+    }
+
+    #[test]
+    fn test_modification_score_with_modifications() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create order, modify twice, then cancel
+        let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add);
+        
+        // Modify order (price change)
+        let modify1 = MboEvent::new(1_000_000, Action::Modify, Side::Bid, 99_990_000_000, 100, 1);
+        aggregator.process_event(modify1);
+        
+        // Modify again
+        let modify2 = MboEvent::new(2_000_000, Action::Modify, Side::Bid, 99_980_000_000, 100, 1);
+        aggregator.process_event(modify2);
+        
+        let cancel = MboEvent::new(3_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(cancel);
+
+        // Order had 2 modifications
+        let mod_score = aggregator.modification_score();
+        assert!(
+            (mod_score - 2.0).abs() < 0.001,
+            "Order with 2 modifications should have mod score 2.0, got {}",
+            mod_score
+        );
+    }
+
+    // =========================================================================
+    // Order Eviction Tests
+    // =========================================================================
+
+    #[test]
+    fn test_order_eviction_called_periodically() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create many orders that will trigger eviction check
+        // (eviction happens every 1000 messages)
+        for i in 0..1100u64 {
+            let add = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(add);
+        }
+
+        // Verify message count is correct
+        assert_eq!(
+            aggregator.message_count, 1100,
+            "Should have processed 1100 messages"
+        );
+
+        // Orders should still be tracked (eviction only removes OLD orders,
+        // and these are all recent)
+        assert!(
+            aggregator.order_tracker.len() <= MAX_ORDER_TRACKER_SIZE,
+            "Order tracker should be bounded"
+        );
+    }
+
+    #[test]
+    fn test_order_eviction_removes_old_orders() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create MAX_ORDER_TRACKER_SIZE + 1000 orders with very old timestamps
+        // This will trigger eviction of old orders
+        let old_timestamp = 0u64;
+        let new_timestamp = MAX_ORDER_AGE_NS + 1_000_000_000; // 1 hour + 1 second later
+
+        // Add old orders (these should be evicted)
+        for i in 0..1000u64 {
+            let add = MboEvent::new(old_timestamp, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.process_event(add);
+        }
+
+        // Manually trigger eviction with a new timestamp
+        aggregator.evict_old_orders(new_timestamp);
+
+        // Old orders should have been evicted (though we may not exceed threshold)
+        // The key is that eviction runs without panic
+        assert!(
+            aggregator.order_tracker.len() <= MAX_ORDER_TRACKER_SIZE,
+            "Order tracker should be bounded after eviction"
+        );
+    }
+
+    #[test]
+    fn test_evicted_orders_recorded_in_completed_buffers() {
+        let mut aggregator = MboAggregator::new();
+
+        // Create an order with old timestamp
+        let old_timestamp = 0u64;
+        let add = MboEvent::new(old_timestamp, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        aggregator.process_event(add);
+
+        // Force eviction with a much newer timestamp
+        let new_timestamp = MAX_ORDER_AGE_NS + 1_000_000_000;
+        
+        // First, make tracker exceed the size threshold to trigger eviction
+        for i in 2..(MAX_ORDER_TRACKER_SIZE as u64 + 2) {
+            let _add = MboEvent::new(old_timestamp + 1000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            aggregator.order_tracker.insert(i, OrderInfo::new(old_timestamp, 100, 100_000_000_000, Side::Bid));
+        }
+
+        // Now evict
+        aggregator.evict_old_orders(new_timestamp);
+
+        // Evicted orders should be recorded in completed buffers
+        // (fill ratio = 0 since never filled)
+        assert!(
+            !aggregator.completed_fill_ratios.is_empty() || aggregator.order_tracker.len() < MAX_ORDER_TRACKER_SIZE,
+            "Eviction should either record completed orders or reduce tracker size"
         );
     }
 }

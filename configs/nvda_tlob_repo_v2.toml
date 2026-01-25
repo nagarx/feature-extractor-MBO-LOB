@@ -17,15 +17,15 @@
 # =============================================================================
 
 [experiment]
-name = "NVDA TLOB-Repo Matching (GlobalZScore)"
-description = "234-day dataset matching official TLOB repository preprocessing"
-version = "5.0.0"
+name = "NVDA TLOB-Repo V2 (Dynamic Threshold)"
+description = "234-day dataset with TLOB dynamic threshold: alpha = mean(|pct_change|) / 2"
+version = "6.0.0"
 tags = [
     "nvda",
     "40-features",
     "multi-horizon",
     "tlob-repo-match",
-    "global-zscore",
+    "tlob-dynamic-threshold",
     "production",
 ]
 
@@ -38,7 +38,7 @@ tick_size = 0.01
 [data]
 input_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/NVDA_2025-02-03_to_2026-01-07"
 hot_store_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/hot_store"
-output_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/exports/nvda_tlob_repo_v1"
+output_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/exports/nvda_tlob_repo_v2"
 
 [dates]
 start_date = "2025-02-03"
@@ -82,10 +82,16 @@ stride = 10
 max_buffer_size = 50000
 
 # =============================================================================
-# LABELS - Multi-horizon with FIXED Threshold (Baseline)
+# LABELS - Multi-horizon with TLOB Dynamic Threshold
 # =============================================================================
-# This config uses FIXED threshold for baseline comparison.
-# For official TLOB dynamic threshold, use nvda_tlob_repo_v2.toml
+# Official TLOB uses DYNAMIC threshold: alpha = mean(|percentage_change|) / 2
+# This is now fully supported via threshold_strategy = "tlob_dynamic"
+#
+# Research Reference:
+# TLOB/utils/utils_data.py::labeling()
+#   alpha = np.abs(percentage_change).mean() / 2
+#   labels = np.where(percentage_change < -alpha, 2,
+#                     np.where(percentage_change > alpha, 0, 1))
 # =============================================================================
 
 [labels]
@@ -93,7 +99,12 @@ strategy = "tlob"
 horizon = 50
 horizons = [10, 20, 50, 100]
 smoothing_window = 10
-threshold = 0.0008  # Fixed threshold (8 bps)
+threshold = 0.0008  # Fallback only - threshold_strategy takes precedence
+
+[labels.threshold_strategy]
+type = "tlob_dynamic"
+fallback = 0.0008   # Used when insufficient data
+divisor = 2.0       # Per TLOB paper: alpha = mean(|pct_change|) / 2
 
 [split]
 train_ratio = 0.7

@@ -282,3 +282,25 @@ pub enum Preset {
 - [ ] crates.io publication
 - [ ] Additional paper presets (ViT-LOB)
 - [ ] Weighted MLOFI (depth-aware OFI scalar per Xu et al.)
+
+## Related Projects
+
+### LOB-Dataset-Analyzer (Python)
+
+Python library for statistical analysis of exported data. See `../lob-dataset-analyzer/` for:
+
+- **Unified Analyzer Protocol**: Consistent interface (`BaseAnalyzer`, `BaseReportMixin`) for all analysis
+- **Full 98-Feature Analysis**: Analyze predictive power of ALL features (not just signals)
+- **Centralized Configuration**: `FullAnalysisConfig` with JSON/YAML serialization for experiment tracking
+- **Memory-Efficient Streaming**: Process multi-day datasets one day at a time
+
+**Key Analyzers**:
+| Analyzer | Purpose |
+|----------|---------|
+| `PredictivePowerAnalyzer` | 6-metric analysis per feature (Pearson, Spearman, MI, F-score, Kruskal-H, consensus) |
+| `SignalCorrelationAnalyzer` | Cross-category, multi-horizon correlation analysis |
+| `TemporalDynamicsAnalyzer` | Autocorrelation, lead-lag, predictive decay |
+| `GeneralizationAnalyzer` | Walk-forward validation, stability scoring |
+| `MultiHorizonAnalyzer` | Horizon-aware feature ranking |
+
+Documentation: `../lob-dataset-analyzer/CODEBASE.md`, `../lob-dataset-analyzer/README.md`

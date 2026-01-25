@@ -683,6 +683,29 @@ cargo test --features parallel --test parallel_processing_tests
 
 - [Usage Guide](docs/USAGE_GUIDE.md) - Comprehensive usage documentation
 - [Architecture](ARCHITECTURE.md) - Design documentation
+- [Full Data Pipeline](docs/full-data-pipeline.md) - End-to-end pipeline specification
+
+## Related Projects
+
+### lob-dataset-analyzer (Python)
+
+Python library for statistical analysis of exported datasets. Provides:
+
+- **Unified Analyzer Protocol**: Consistent interface across all analyzers with `BaseAnalyzer`, `BaseReportMixin`
+- **Full 98-Feature Analysis**: Analyze predictive power of ALL features (LOB + Derived + MBO + Signals)
+- **Centralized Configuration**: `FullAnalysisConfig` with JSON/YAML serialization for experiment tracking
+- **6 Predictive Metrics**: Pearson, Spearman, Mutual Info, F-score, Kruskal-Wallis H, Consensus Rank
+
+```python
+from lobanalyzer.analysis import PredictivePowerAnalyzer, AnalysisConfig
+
+# Analyze all 93 continuous features
+config = AnalysisConfig(data_dir=Path("data"), feature_groups=['all'])
+report = PredictivePowerAnalyzer(config=config).run()
+print(report.summary())  # Human-readable output
+```
+
+See `../lob-dataset-analyzer/README.md` for full documentation.
 
 ## Research Papers
 

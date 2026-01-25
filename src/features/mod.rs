@@ -97,6 +97,21 @@ pub struct FeatureConfig {
     /// Requires `include_derived` and `include_mbo` to be enabled.
     /// Adds signals: true_ofi, depth_norm_ofi, executed_pressure, etc.
     pub include_signals: bool,
+
+    /// Whether to enable queue position tracking for MBO features.
+    ///
+    /// When enabled, queue-related features (avg_queue_position, queue_size_ahead)
+    /// will contain actual computed values. When disabled, they return 0.0.
+    ///
+    /// Requires `include_mbo` to be enabled.
+    ///
+    /// # Performance Note
+    ///
+    /// Queue tracking adds memory overhead (~O(active_orders)) and
+    /// per-event processing cost. Only enable when queue features are needed.
+    ///
+    /// Default: false (disabled for performance)
+    pub include_queue_tracking: bool,
 }
 
 impl FeatureConfig {
@@ -157,6 +172,22 @@ impl FeatureConfig {
     /// **Note**: Signals require both `include_derived` and `include_mbo` to be enabled.
     pub fn with_signals(mut self, enabled: bool) -> Self {
         self.include_signals = enabled;
+        self
+    }
+
+    /// Enable or disable queue position tracking for MBO features.
+    ///
+    /// When enabled, queue-related features (avg_queue_position, queue_size_ahead)
+    /// will contain actual computed values. When disabled, they return 0.0.
+    ///
+    /// Requires `include_mbo` to be enabled.
+    ///
+    /// # Performance Note
+    ///
+    /// Queue tracking adds memory overhead (~O(active_orders)) and
+    /// per-event processing cost. Only enable when queue features are needed.
+    pub fn with_queue_tracking(mut self, enabled: bool) -> Self {
+        self.include_queue_tracking = enabled;
         self
     }
 
@@ -257,6 +288,9 @@ impl FeatureConfig {
         if self.include_signals && !self.include_mbo {
             return Err("include_signals requires include_mbo to be enabled".to_string());
         }
+        if self.include_queue_tracking && !self.include_mbo {
+            return Err("include_queue_tracking requires include_mbo to be enabled".to_string());
+        }
         // Signal indices are hardcoded for 10 levels (per signals.rs):
         // - derived_indices::MID_PRICE = 40 (assumes 10 × 4 = 40 raw features)
         // - mbo_indices::CANCEL_RATE_BID = 50 (assumes MBO starts at 48)
@@ -282,6 +316,7 @@ impl Default for FeatureConfig {
             include_mbo: false,
             mbo_window_size: 1000,
             include_signals: false,
+            include_queue_tracking: false,
         }
     }
 }
@@ -313,14 +348,7 @@ impl FeatureExtractor {
     /// Create a new feature extractor with custom configuration.
     pub fn with_config(config: FeatureConfig) -> Self {
         let mbo_aggregator = if config.include_mbo {
-            Some(
-                mbo_features::MboAggregator::with_windows(
-                    100,                    // fast window
-                    config.mbo_window_size, // medium window (customizable)
-                    5000,                   // slow window
-                )
-                .with_tick_size(config.tick_size), // Propagate tick_size from config
-            )
+            Some(Self::build_mbo_aggregator(&config))
         } else {
             None
         };
@@ -335,6 +363,37 @@ impl FeatureExtractor {
             config,
             mbo_aggregator,
             ofi_computer,
+        }
+    }
+
+    /// Build an MBO aggregator with the given configuration.
+    ///
+    /// This is a helper method used by both `with_config()` and `reset()`
+    /// to ensure consistent aggregator construction.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Feature configuration to use for aggregator settings
+    ///
+    /// # Returns
+    ///
+    /// A configured `MboAggregator` with:
+    /// - Window sizes: fast=100, medium=config.mbo_window_size, slow=5000
+    /// - Tick size from config
+    /// - Queue tracking if enabled in config
+    fn build_mbo_aggregator(config: &FeatureConfig) -> mbo_features::MboAggregator {
+        let aggregator = mbo_features::MboAggregator::with_windows(
+            100,                   // fast window
+            config.mbo_window_size, // medium window (customizable)
+            5000,                  // slow window
+        )
+        .with_tick_size(config.tick_size);
+
+        // Enable queue tracking if configured
+        if config.include_queue_tracking {
+            aggregator.with_queue_tracking()
+        } else {
+            aggregator
         }
     }
 
@@ -718,13 +777,8 @@ impl FeatureExtractor {
     pub fn reset(&mut self) {
         // Reset MBO aggregator if present
         if let Some(ref mut aggregator) = self.mbo_aggregator {
-            // Re-create the aggregator to clear all state, preserving tick_size from config
-            *aggregator = mbo_features::MboAggregator::with_windows(
-                100,                         // fast window
-                self.config.mbo_window_size, // medium window
-                5000,                        // slow window
-            )
-            .with_tick_size(self.config.tick_size); // Preserve tick_size from config
+            // Re-create the aggregator to clear all state, using shared construction logic
+            *aggregator = Self::build_mbo_aggregator(&self.config);
         }
 
         // Reset OFI computer if present
@@ -791,8 +845,7 @@ mod tests {
             tick_size: 0.01,
             include_derived: false,
             include_mbo: false,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let extractor = FeatureExtractor::with_config(config);
         assert_eq!(extractor.feature_count(), 40); // 40 raw only
@@ -808,11 +861,9 @@ mod tests {
     fn test_feature_count_with_derived() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let extractor = FeatureExtractor::with_config(config);
         assert_eq!(extractor.feature_count(), 48); // 40 raw + 8 derived
@@ -822,11 +873,9 @@ mod tests {
     fn test_feature_count_with_mbo() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: true,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let extractor = FeatureExtractor::with_config(config);
         assert_eq!(extractor.feature_count(), 84); // 40 raw + 8 derived + 36 MBO
@@ -836,11 +885,9 @@ mod tests {
     fn test_feature_count_mbo_only() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: true,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let extractor = FeatureExtractor::with_config(config);
         assert_eq!(extractor.feature_count(), 76); // 40 raw + 36 MBO
@@ -868,11 +915,9 @@ mod tests {
     fn test_extract_lob_features_with_derived_count_matches() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -890,11 +935,9 @@ mod tests {
     fn test_extract_all_features_count_matches() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: true,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -913,11 +956,9 @@ mod tests {
     fn test_extract_all_features_mbo_only_count_matches() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: true,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -936,11 +977,9 @@ mod tests {
         // Test that LOB features (without MBO) are always finite
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false, // No MBO - those can have NaN when empty
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -962,11 +1001,10 @@ mod tests {
         // MBO features should be finite after processing enough events
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: true,
             mbo_window_size: 100,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1030,11 +1068,9 @@ mod tests {
     fn test_process_mbo_event_when_disabled() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: false, // MBO disabled
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
 
@@ -1055,11 +1091,9 @@ mod tests {
     fn test_process_mbo_event_when_enabled() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: true, // MBO enabled
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1090,11 +1124,9 @@ mod tests {
     fn test_reset_clears_mbo_state() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: true,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1134,11 +1166,9 @@ mod tests {
     fn test_reset_when_mbo_disabled() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false, // MBO disabled
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
 
@@ -1155,19 +1185,15 @@ mod tests {
     fn test_has_mbo() {
         let config_with_mbo = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: true,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let config_without_mbo = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: false,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
 
         let extractor_with = FeatureExtractor::with_config(config_with_mbo);
@@ -1181,19 +1207,15 @@ mod tests {
     fn test_has_derived() {
         let config_with_derived = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let config_without_derived = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false,
             include_mbo: false,
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
 
         let extractor_with = FeatureExtractor::with_config(config_with_derived);
@@ -1226,11 +1248,9 @@ mod tests {
         // Test determinism for LOB + derived features (without MBO which can have NaN)
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false, // Exclude MBO for determinism test
-            mbo_window_size: 1000,
-            include_signals: false,
+            ..Default::default()
         };
         let extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1249,11 +1269,10 @@ mod tests {
         // Test determinism for full feature set after processing events
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: true,
             mbo_window_size: 100,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1333,11 +1352,10 @@ mod tests {
     fn test_extract_into_matches_extract_all_features() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: true,
             mbo_window_size: 100,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1383,11 +1401,10 @@ mod tests {
     fn test_extract_into_with_all_feature_types() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: true,
             mbo_window_size: 100,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1438,11 +1455,10 @@ mod tests {
     fn test_extract_arc_matches_extract_all_features() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 100,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1465,11 +1481,9 @@ mod tests {
     fn test_extract_into_numerical_precision() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false,
-            mbo_window_size: 100,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();
@@ -1502,11 +1516,9 @@ mod tests {
     fn test_extract_into_multiple_calls_consistency() {
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false,
-            mbo_window_size: 100,
-            include_signals: false,
+            ..Default::default()
         };
         let mut extractor = FeatureExtractor::with_config(config);
         let state = create_test_lob_state();

@@ -93,6 +93,13 @@ pub struct VolatilityEstimator {
 }
 
 impl VolatilityEstimator {
+    /// Minimum window size for valid variance calculation.
+    ///
+    /// Variance requires at least 2 data points by definition:
+    /// - Sample variance uses (n-1) denominator (Bessel's correction)
+    /// - Rolling window removal requires n ≥ 2 to avoid division by zero
+    pub const MIN_WINDOW_SIZE: usize = 2;
+
     /// Create a new volatility estimator with specified window size.
     ///
     /// # Arguments
@@ -101,7 +108,10 @@ impl VolatilityEstimator {
     ///
     /// # Panics
     ///
-    /// Panics if `window_size` is 0.
+    /// Panics if `window_size < 2`. Variance calculation requires at least 2 data points.
+    /// This is a mathematical requirement: the reverse Welford's algorithm for removing
+    /// values from a rolling window computes `new_mean = (n × old_mean - value) / (n - 1)`,
+    /// which is undefined when n = 1.
     ///
     /// # Example
     ///
@@ -111,8 +121,22 @@ impl VolatilityEstimator {
     /// // Keep last 1000 returns for volatility calculation
     /// let estimator = VolatilityEstimator::new(1000);
     /// ```
+    ///
+    /// ```should_panic
+    /// use feature_extractor::preprocessing::VolatilityEstimator;
+    ///
+    /// // This panics: window_size=1 is invalid for variance calculation
+    /// let estimator = VolatilityEstimator::new(1);
+    /// ```
     pub fn new(window_size: usize) -> Self {
-        assert!(window_size > 0, "window_size must be > 0");
+        assert!(
+            window_size >= Self::MIN_WINDOW_SIZE,
+            "window_size must be >= {} for variance calculation. \
+             Rolling window removal requires n ≥ 2 to compute (n × mean - value) / (n - 1). \
+             Got window_size = {}",
+            Self::MIN_WINDOW_SIZE,
+            window_size
+        );
 
         Self {
             window_size,
@@ -383,9 +407,26 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "window_size must be > 0")]
+    #[should_panic(expected = "window_size must be >= 2")]
     fn test_new_zero_window() {
         VolatilityEstimator::new(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "window_size must be >= 2")]
+    fn test_new_window_size_one() {
+        // window_size=1 is invalid because:
+        // - Variance requires at least 2 data points
+        // - Rolling window removal computes (n × mean - value) / (n - 1)
+        // - When n = 1, this becomes division by zero
+        VolatilityEstimator::new(1);
+    }
+
+    #[test]
+    fn test_new_minimum_valid_window() {
+        // window_size=2 is the minimum valid configuration
+        let estimator = VolatilityEstimator::new(2);
+        assert_eq!(estimator.window_size(), 2);
     }
 
     #[test]

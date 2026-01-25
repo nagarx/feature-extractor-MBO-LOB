@@ -2082,11 +2082,11 @@ impl AlignedBatchExporter {
                     }
                     FeatureNormStrategy::MarketStructure => {
                         // MarketStructure: Ask/Bid at same level share stats
-                        for level in 0..levels {
-                            let ask_price = timestep[level];
-                            let bid_price = timestep[20 + level];
-                            price_level_values[level].push(ask_price);
-                            price_level_values[level].push(bid_price);
+                for level in 0..levels {
+                    let ask_price = timestep[level];
+                    let bid_price = timestep[20 + level];
+                    price_level_values[level].push(ask_price);
+                    price_level_values[level].push(bid_price);
                         }
                     }
                     _ => {
@@ -2101,7 +2101,7 @@ impl AlignedBatchExporter {
                 match config.lob_sizes {
                     FeatureNormStrategy::GlobalZScore => {
                         // GlobalZScore: ALL sizes share ONE mean/std (TLOB repo style)
-                        for i in 0..levels {
+                for i in 0..levels {
                             all_sizes.push(timestep[10 + i]);   // Ask sizes
                             all_sizes.push(timestep[30 + i]);   // Bid sizes
                         }
@@ -2136,7 +2136,7 @@ impl AlignedBatchExporter {
         // Compute statistics for prices
         let mut price_means = vec![0.0; levels];
         let mut price_stds = vec![1.0; levels];
-        
+
         if config.lob_prices == FeatureNormStrategy::GlobalZScore && !all_prices.is_empty() {
             // GlobalZScore: ONE mean/std for ALL prices (TLOB repo style)
             let global_mean: f64 = all_prices.iter().sum::<f64>() / all_prices.len() as f64;
@@ -2154,13 +2154,13 @@ impl AlignedBatchExporter {
                 global_mean, global_std, levels * 2);
         } else {
             // Per-level or MarketStructure stats
-            for level in 0..levels {
-                let values = &price_level_values[level];
-                if !values.is_empty() {
-                    let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
+        for level in 0..levels {
+            let values = &price_level_values[level];
+            if !values.is_empty() {
+                let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
                     let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                        / values.len() as f64;
-                    price_means[level] = mean;
+                    / values.len() as f64;
+                price_means[level] = mean;
                     price_stds[level] = if variance > epsilon { variance.sqrt() } else { 1.0 };
                 }
             }
@@ -2169,7 +2169,7 @@ impl AlignedBatchExporter {
         // Compute statistics for sizes
         let mut size_means = vec![0.0; levels * 2];
         let mut size_stds = vec![1.0; levels * 2];
-        
+
         if config.lob_sizes == FeatureNormStrategy::GlobalZScore && !all_sizes.is_empty() {
             // GlobalZScore: ONE mean/std for ALL sizes (TLOB repo style)
             let global_mean: f64 = all_sizes.iter().sum::<f64>() / all_sizes.len() as f64;
@@ -2187,13 +2187,13 @@ impl AlignedBatchExporter {
                 global_mean, global_std, levels * 2);
         } else {
             // Per-feature stats
-            for i in 0..(levels * 2) {
-                let values = &size_values[i];
-                if !values.is_empty() {
-                    let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
+        for i in 0..(levels * 2) {
+            let values = &size_values[i];
+            if !values.is_empty() {
+                let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
                     let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                        / values.len() as f64;
-                    size_means[i] = mean;
+                    / values.len() as f64;
+                size_means[i] = mean;
                     size_stds[i] = if variance > epsilon { variance.sqrt() } else { 1.0 };
                 }
             }
@@ -2259,14 +2259,19 @@ impl AlignedBatchExporter {
                 }
             }
             FeatureNormStrategy::MinMax => {
-                // MinMax requires min/max, not mean/std - simplified to z-score for now
-                // TODO: Implement proper min/max tracking if needed
+                // FALLBACK: MinMax requires min/max tracking per feature, which is not implemented.
+                // Currently falls back to Z-score normalization.
+                // For production use, prefer ZScore, GlobalZScore, or MarketStructure strategies.
+                // See TODO.md section 3.3 for implementation plan.
                 (value - mean) / (std + epsilon)
             }
             FeatureNormStrategy::Bilinear => {
-                // Bilinear: (price - mid) / (k * tick)
-                // Simplified: use mean as mid, std as scale
-                // TODO: Implement proper bilinear with tick_size from config
+                // FALLBACK: Bilinear requires per-timestep mid_price access, which is not available
+                // in the batch normalization context. Currently uses an approximation:
+                // (value - mean) / (scale_factor * tick_size)
+                // For TLOB training, use NormalizationConfig::raw() to let the model's BiN layer
+                // handle normalization internally (which is the intended design).
+                // See TODO.md section 3.3 for implementation plan.
                 (value - mean) / (self.normalization_config.bilinear_scale_factor * 0.01)
             }
         }

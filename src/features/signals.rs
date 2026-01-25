@@ -54,7 +54,9 @@ const EPSILON: f64 = 1e-10;
 /// - 2.0: Initial signal layer implementation
 /// - 2.1: Fixed sign convention for net_trade_flow (index 56) and net_cancel_flow (index 55)
 ///        to follow RULE.md §9: > 0 = BULLISH, < 0 = BEARISH
-pub const SCHEMA_VERSION: f64 = 2.1;
+/// - 2.2: Fixed MBO Core feature names (indices 78-82) and implemented median_order_lifetime
+///        properly (was always 0.0 before). Python contract updated to match.
+pub const SCHEMA_VERSION: f64 = 2.2;
 
 /// Number of signals in the signal layer (indices 84-97)
 pub const SIGNAL_COUNT: usize = 14;
@@ -1537,7 +1539,7 @@ mod tests {
         // Signal 96: invalidity_delta = 0
         assert_eq!(signals.signals[12], 0.0);
 
-        // Signal 97: schema_version = 2.1
+        // Signal 97: schema_version = 2.2
         assert_eq!(signals.signals[13], SCHEMA_VERSION);
     }
 

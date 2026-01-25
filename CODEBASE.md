@@ -2345,4 +2345,38 @@ use feature_extractor::batch::{BatchProcessor, BatchConfig, CancellationToken};
 
 ---
 
-*Last updated: January 11, 2026*
+## Related Projects
+
+### lob-dataset-analyzer (Python)
+
+Python library for statistical analysis of exported datasets. Located at `../lob-dataset-analyzer/`.
+
+**Key Capabilities (v0.4.0)**:
+- **Unified Analyzer Protocol**: All analyzers inherit from `BaseAnalyzer` with consistent `.run()` interface
+- **Full 98-Feature Analysis**: Analyze predictive power of ALL features, not just 8 signals
+- **Centralized Configuration**: `FullAnalysisConfig` with JSON/YAML serialization for reproducibility
+- **6 Metrics Per Feature**: Pearson, Spearman, Mutual Information, F-score, Kruskal-Wallis H, Consensus Rank
+
+**Analyzer Classes**:
+```python
+from lobanalyzer.analysis import (
+    PredictivePowerAnalyzer,      # Multi-metric predictive power
+    SignalCorrelationAnalyzer,    # Cross-category correlations
+    MultiHorizonAnalyzer,         # Horizon-aware analysis
+    TemporalDynamicsAnalyzer,     # Autocorrelation, lead-lag
+    GeneralizationAnalyzer,       # Walk-forward validation
+    IntradaySeasonalityAnalyzer,  # Regime analysis
+)
+
+# All use consistent interface
+config = PredictivePowerAnalyzer.default_config(Path("data"))
+report = PredictivePowerAnalyzer(config=config).run()
+print(report.summary())  # Human-readable
+data = report.to_dict()  # With version metadata
+```
+
+**Documentation**: `../lob-dataset-analyzer/CODEBASE.md`, `../lob-dataset-analyzer/README.md`
+
+---
+
+*Last updated: January 25, 2026*

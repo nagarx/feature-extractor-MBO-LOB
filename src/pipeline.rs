@@ -93,7 +93,31 @@ use std::sync::Arc;
 /// Output from pipeline processing
 #[derive(Debug, Clone)]
 pub struct PipelineOutput {
-    /// Generated sequences [N_sequences, window_size, features]
+    /// Generated sequences [N_sequences, window_size, features].
+    ///
+    /// # Multiscale Mode Behavior
+    ///
+    /// When multiscale windowing is enabled via `PipelineBuilder::with_multiscale()`,
+    /// this field is **empty** (`Vec::new()`). All sequences are stored in
+    /// [`multiscale_sequences`](Self::multiscale_sequences) instead.
+    ///
+    /// To access sequences in multiscale mode:
+    ///
+    /// ```ignore
+    /// if let Some(ref ms) = output.multiscale_sequences {
+    ///     let fast = ms.fast();    // Fast-scale sequences (full resolution)
+    ///     let medium = ms.medium(); // Medium-scale sequences (2x decimation)
+    ///     let slow = ms.slow();    // Slow-scale sequences (4x decimation)
+    /// } else {
+    ///     // Standard mode: use output.sequences directly
+    ///     for seq in &output.sequences { /* ... */ }
+    /// }
+    /// ```
+    ///
+    /// # Standard Mode
+    ///
+    /// When multiscale is disabled (default), this field contains all generated
+    /// sequences with the configured window size and stride.
     pub sequences: Vec<Sequence>,
 
     /// Mid-prices extracted (for labeling)
@@ -117,7 +141,18 @@ pub struct PipelineOutput {
     /// Window size used for sequence generation (from SequenceConfig)
     pub window_size: usize,
 
-    /// Phase 1: Multi-scale sequences (if enabled)
+    /// Multi-scale sequences at three temporal resolutions.
+    ///
+    /// When multiscale windowing is enabled via `PipelineBuilder::with_multiscale()`,
+    /// this field contains `Some(MultiScaleSequence)` with:
+    /// - **Fast**: Full resolution (every sample)
+    /// - **Medium**: 2x decimation (every 2nd sample)
+    /// - **Slow**: 4x decimation (every 4th sample)
+    ///
+    /// When multiscale is disabled (default), this field is `None` and all
+    /// sequences are in [`sequences`](Self::sequences) instead.
+    ///
+    /// See [`sequences`](Self::sequences) documentation for usage examples.
     pub multiscale_sequences: Option<MultiScaleSequence>,
 
     /// Phase 1: Adaptive sampling statistics (if enabled)
@@ -917,11 +952,10 @@ mod tests {
 
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: true,
-            mbo_window_size: 1000,
             include_signals: true,
+            ..Default::default()
         };
 
         // 40 + 8 + 36 + 14 = 98
@@ -934,11 +968,10 @@ mod tests {
 
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: false, // Missing!
             include_mbo: true,
-            mbo_window_size: 1000,
             include_signals: true,
+            ..Default::default()
         };
 
         let result = config.validate();
@@ -954,11 +987,10 @@ mod tests {
 
         let config = FeatureConfig {
             lob_levels: 10,
-            tick_size: 0.01,
             include_derived: true,
             include_mbo: false, // Missing!
-            mbo_window_size: 1000,
             include_signals: true,
+            ..Default::default()
         };
 
         let result = config.validate();

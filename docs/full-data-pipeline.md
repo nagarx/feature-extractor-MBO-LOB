@@ -2,7 +2,7 @@
 
 > **Purpose**: Single source of truth for all data transformations from raw Databento MBO files to model-ready LOB feature datasets. This document describes the preprocessing pipeline capabilities independent of any specific model architecture.  
 > **Audience**: LLMs and developers needing exact technical details for debugging, extending, or reproducing the pipeline.  
-> **Last Updated**: 2025-12-28 (Per-horizon quantile threshold fix documented)
+> **Last Updated**: 2026-01-25 (Added lob-dataset-analyzer integration, Full 98-Feature Analysis)
 
 ---
 
@@ -30,9 +30,10 @@
 13. [Stage 12: Train-Stats Renormalization (P0.2)](#13-stage-12-train-stats-renormalization-p02)
 14. [Data Type Summary](#14-data-type-summary)
 15. [Known Issues & Contracts](#15-known-issues--contracts)
-16. [File Reference Index](#16-file-reference-index)
-17. [Appendix A: LobState Analytics](#17-appendix-a-lobstate-analytics)
-18. [Appendix B: Feature Set Summary](#18-appendix-b-feature-set-summary)
+16. [Statistical Analysis with lob-dataset-analyzer](#16-statistical-analysis-with-lob-dataset-analyzer)
+17. [File Reference Index](#17-file-reference-index)
+18. [Appendix A: LobState Analytics](#18-appendix-a-lobstate-analytics)
+19. [Appendix B: Feature Set Summary](#19-appendix-b-feature-set-summary)
 
 ---
 
@@ -1793,7 +1794,129 @@ dataset.transform = compose_transforms(existing_renorm, layout_transform)
 
 ---
 
-## 16. File Reference Index
+## 16. Statistical Analysis with lob-dataset-analyzer
+
+After exporting data, use the `lob-dataset-analyzer` Python library for comprehensive statistical analysis.
+
+### Installation
+
+```bash
+cd ../lob-dataset-analyzer
+pip install -e ".[dev]"
+```
+
+### Unified Analyzer Protocol (v0.4.0)
+
+All analyzers follow a consistent interface:
+
+```python
+from pathlib import Path
+from lobanalyzer.analysis import (
+    PredictivePowerAnalyzer,
+    SignalCorrelationAnalyzer,
+    AnalysisConfig,
+)
+
+# Standard pattern for all analyzers
+config = PredictivePowerAnalyzer.default_config(Path("data/exports/nvda"))
+analyzer = PredictivePowerAnalyzer(config=config)
+report = analyzer.run()
+
+# Consistent output
+print(report.summary())  # Human-readable
+data = report.to_dict()  # Includes _meta with version info
+```
+
+### Full 98-Feature Predictive Power Analysis
+
+Analyze ALL continuous features (not just 8 signals):
+
+```python
+from lobanalyzer.analysis import PredictivePowerAnalyzer, AnalysisConfig
+
+# Feature groups: lob (40) + derived (8) + mbo (36) + signals (8) = 92 continuous
+# Plus special features = 93 total analyzed
+config = AnalysisConfig(
+    data_dir=Path("data/exports/nvda"),
+    feature_groups=['all'],  # Analyze all features
+    max_samples=50000,
+)
+report = PredictivePowerAnalyzer(config=config).run()
+
+# Report includes 6 metrics per feature:
+# - Pearson correlation (linear)
+# - Spearman correlation (monotonic)
+# - Mutual Information (non-linear)
+# - ANOVA F-score (class separation)
+# - Kruskal-Wallis H (non-parametric)
+# - Consensus rank across all metrics
+```
+
+### Available Analyzers
+
+| Analyzer | Purpose | Key Outputs |
+|----------|---------|-------------|
+| `PredictivePowerAnalyzer` | Multi-metric feature analysis | 6 metrics per feature, tier rankings |
+| `SignalCorrelationAnalyzer` | Cross-category correlations | Feature-feature and feature-label correlations |
+| `MultiHorizonAnalyzer` | Horizon-aware analysis | Per-horizon rankings, decay curves |
+| `TemporalDynamicsAnalyzer` | Time-series properties | Autocorrelation, lead-lag, half-life |
+| `GeneralizationAnalyzer` | Day-to-day stability | Walk-forward validation, stability scores |
+| `IntradaySeasonalityAnalyzer` | Regime analysis | Per-regime correlations, dependence flags |
+| `LabelAnalyzer` | Label statistics | Distribution, autocorrelation, transitions |
+
+### Centralized Configuration
+
+Save and load experiment configurations:
+
+```python
+from lobanalyzer.analysis import FullAnalysisConfig, StatisticalThresholds
+
+# Create comprehensive config
+config = FullAnalysisConfig.create_default(
+    Path("data/exports/nvda"),
+    thresholds=StatisticalThresholds.strict(),  # alpha=0.01
+    description="Experiment 1: Full feature analysis",
+)
+
+# Save for reproducibility
+config.to_yaml("experiment_config.yaml")
+
+# Load later
+loaded = FullAnalysisConfig.from_yaml("experiment_config.yaml")
+```
+
+### Feature Group Registry
+
+Query features by category:
+
+```python
+from lobanalyzer.analysis import get_feature_indices, get_feature_groups
+
+# Get indices for specific groups
+signals = get_feature_indices("signals")      # (84, 85, 86, 87, 88, 89, 90, 91)
+derived = get_feature_indices("derived")      # (40, 41, 42, 43, 44, 45, 46, 47)
+
+# Combine multiple groups
+combined = get_feature_groups("signals", "derived")  # Tuple of all indices
+
+# Available groups:
+# - lob (0-39): Raw LOB features
+# - derived (40-47): Derived features
+# - mbo (48-83): MBO features
+# - signals (84-91): Trading signals
+# - control (92-97): Safety/meta features
+# - all (0-97): Everything
+# - analysis_ready: All continuous (excludes control)
+```
+
+### Documentation
+
+- `../lob-dataset-analyzer/CODEBASE.md` - Technical reference
+- `../lob-dataset-analyzer/README.md` - Quick start guide
+
+---
+
+## 17. File Reference Index (Updated)
 
 ### MBO-LOB-reconstructor
 
@@ -1839,9 +1962,25 @@ dataset.transform = compose_transforms(existing_renorm, layout_transform)
 | `src/lob_trainer/evaluation/baselines.py` | `BaselineComparator` |
 | `src/lob_trainer/experiments/runner.py` | `ExperimentRunner` |
 
+### lob-dataset-analyzer (Statistical Analysis)
+
+| Path | Purpose |
+|------|---------|
+| `src/lobanalyzer/analysis/base.py` | `BaseAnalyzer`, `BaseReportMixin`, `AnalysisConfig` |
+| `src/lobanalyzer/analysis/config.py` | `GlobalDefaults`, `StatisticalThresholds`, `FullAnalysisConfig` |
+| `src/lobanalyzer/analysis/predictive_power.py` | `PredictivePowerAnalyzer`, multi-metric analysis |
+| `src/lobanalyzer/analysis/correlation_analysis.py` | `SignalCorrelationAnalyzer` |
+| `src/lobanalyzer/analysis/multi_horizon.py` | `MultiHorizonAnalyzer` |
+| `src/lobanalyzer/analysis/temporal_dynamics.py` | `TemporalDynamicsAnalyzer` |
+| `src/lobanalyzer/analysis/generalization.py` | `GeneralizationAnalyzer` |
+| `src/lobanalyzer/analysis/intraday_seasonality.py` | `IntradaySeasonalityAnalyzer` |
+| `src/lobanalyzer/analysis/label_analysis.py` | `LabelAnalyzer` |
+| `src/lobanalyzer/analysis/feature_groups.py` | `FeatureGroupRegistry` |
+| `src/lobanalyzer/streaming/iterators.py` | `iter_days`, `iter_days_aligned` |
+
 ---
 
-## 17. Appendix A: LobState Analytics
+## 18. Appendix A: LobState Analytics
 
 ### Full Method Reference
 
@@ -1890,7 +2029,7 @@ The `LobState` struct (`MBO-LOB-reconstructor/src/types.rs`) provides rich analy
 
 ---
 
-## 18. Appendix B: Feature Set Summary
+## 19. Appendix B: Feature Set Summary
 
 ### Complete Feature Inventory
 
@@ -1973,7 +2112,7 @@ The `LobState` struct (`MBO-LOB-reconstructor/src/types.rs`) provides rich analy
 | Index | Name | Description |
 |-------|------|-------------|
 | 78 | `avg_order_age` | Mean order lifetime |
-| 79 | `median_order_lifetime` | **Placeholder (always 0.0)** |
+| 79 | `median_order_lifetime` | Median lifetime of completed orders (seconds) |
 | 80 | `avg_fill_ratio` | Execution rate |
 | 81 | `avg_time_to_first_fill` | Execution speed |
 | 82 | `cancel_to_add_ratio` | Cancellation behavior |
@@ -2038,4 +2177,4 @@ let valid_idx = indices::BOOK_VALID;    // 92
 
 ---
 
-*This document reflects the actual implementation as of 2025-12-28. All formulas and code snippets are derived from source files in `MBO-LOB-reconstructor` and `feature-extractor-MBO-LOB`.*
+*This document reflects the actual implementation as of 2026-01-25. All formulas and code snippets are derived from source files in `MBO-LOB-reconstructor`, `feature-extractor-MBO-LOB`, and `lob-dataset-analyzer`.*

@@ -95,6 +95,45 @@ let mut labeler = MultiHorizonLabelGenerator::new(config);
 | `Fixed(0.001)` | Same threshold for all horizons | Simple, predictable |
 | `Quantile(0.33)` | Adaptive based on distribution | Balanced classes |
 | `Volatility(1.0)` | Scales with realized volatility | Regime-adaptive |
+| `TlobDynamic` | `mean(\|pct_change\|) / 2` (TLOB paper) | Match official TLOB repo |
+
+#### TLOB Dynamic Threshold (New)
+
+The `TlobDynamic` strategy computes the threshold from the **entire** price series as:
+
+```
+alpha = mean(|percentage_change|) / divisor
+```
+
+This matches the official TLOB repository's `labeling()` function:
+
+```python
+# From TLOB/utils/utils_data.py
+alpha = np.abs(percentage_change).mean() / 2
+labels = np.where(percentage_change < -alpha, 2,
+                  np.where(percentage_change > alpha, 0, 1))
+```
+
+**Configuration:**
+
+```rust
+use feature_extractor::labeling::ThresholdStrategy;
+
+// Match official TLOB repository
+let strategy = ThresholdStrategy::tlob_dynamic_default(0.0008); // fallback = 0.0008
+
+// Custom divisor
+let strategy = ThresholdStrategy::tlob_dynamic(0.0008, 3.0); // divisor = 3.0
+```
+
+**TOML Configuration:**
+
+```toml
+[labels.threshold_strategy]
+type = "tlob_dynamic"
+fallback = 0.0008    # Used when insufficient data
+divisor = 2.0        # Default per TLOB paper
+```
 
 ### When to Use
 

@@ -45,28 +45,23 @@ use it. Documentation should be updated to mark this as "planned" or "not implem
 
 ### 1.2 median_order_lifetime() Feature (P3)
 
-**Status**: ⚠️ Placeholder implementation (always returns 0.0)
+**Status**: ✅ Implemented
 
-**Location**: `src/features/mbo_features.rs:1397-1400`
+**Location**: `src/features/mbo_features.rs`
 
-```rust
-fn median_order_lifetime(&self) -> f64 {
-    // Placeholder: track completed orders
-    0.0
-}
-```
-
-**Feature Index**: 79 (within MBO features block, absolute index in 98-feature mode)
-
-**Impact**: MBO feature at index 79 is always 0.0, reducing feature set effectiveness.
-This does NOT affect TLOB training (TLOB uses 40 features without MBO).
-
-**Implementation Notes**:
-- Requires tracking completed orders (currently only active orders are tracked)
-- Would need a completed orders buffer with bounded size
-- Median computation on every extract_features() call could be expensive
-
-**Workaround**: Feature can be excluded from model training or treated as constant.
+**Implementation** (2026-01-25):
+- Added `completed_lifetimes: VecDeque<f64>` bounded buffer (size 1000)
+- When orders are cancelled or fully filled, their lifetime is recorded
+- Median computed via sorting on extraction (O(n log n), n ≤ 1000)
+- Memory cost: 8 KB (negligible)
+- 9 comprehensive tests added covering:
+  - No completed orders (returns 0.0)
+  - Single order, odd count, even count
+  - Cancelled vs filled orders
+  - Mixed cancel and fill
+  - Partial fills (only fully filled counts)
+  - Buffer bounding behavior
+  - Feature extraction index verification
 
 ---
 
@@ -211,6 +206,42 @@ Preset::FI2010 => {
 
 ---
 
+### 3.3 MinMax and Bilinear Normalization Strategies (P2)
+
+**Status**: ⚠️ Declared but using fallback implementations
+
+**Location**: `src/export_aligned.rs:2261-2278`, `src/export/dataset_config.rs`
+
+**Issue**: The `FeatureNormStrategy::MinMax` and `FeatureNormStrategy::Bilinear` variants are
+declared in the enum and can be configured via TOML, but their implementations are incomplete:
+
+| Strategy | Expected Behavior | Current Behavior |
+|----------|-------------------|------------------|
+| MinMax | `(x - min) / (max - min)` scaling to [0,1] | Falls back to Z-score |
+| Bilinear | `(price - mid_price) / (k * tick_size)` | Uses `(value - mean) / (k * 0.01)` approximation |
+
+**Implementation Requirements**:
+
+1. **MinMax**:
+   - Track min/max per feature during statistics collection (currently only mean/std)
+   - Store min/max in `NormalizationParams` for denormalization
+   - Handle edge case where min == max (avoid division by zero)
+
+2. **Bilinear**:
+   - Requires per-timestep mid_price (from feature index 40 or calculated from best bid/ask)
+   - tick_size should come from `FeatureConfig.tick_size` (currently hardcoded as 0.01)
+   - More complex because mid_price varies per timestep, not per feature
+
+**Impact**: Low - no presets use these strategies, and users are warned via description text.
+
+**Workarounds**:
+- For MinMax needs: Use `ZScore` (similar scaling properties)
+- For Bilinear needs: Use `NormalizationConfig::raw()` with TLOB model's BiN layer
+
+**Resolution Date**: Documented 2026-01-25, pending full implementation.
+
+---
+
 ## 4. Future Enhancements (P3)
 
 ### 4.1 Adaptive Sampling Based on Volatility
@@ -255,12 +286,14 @@ verifies that `Pipeline::reset()` properly clears ALL state for multi-day proces
 | ID | Item | Status | Resolved Date |
 |----|------|--------|---------------|
 | 2.1 | FI-2010 preset docstring | ✅ Fixed | 2026-01-14 |
+| 1.2 | median_order_lifetime | ✅ Implemented | 2026-01-25 |
+| 3.3 | MinMax/Bilinear normalization | ⏳ Documented + fallback | 2026-01-25 |
 | 1.1 | TimeBased sampling | ⏳ Documented | - |
 | 2.2 | Missing citations | ⏳ Pending | - |
-| 1.2 | median_order_lifetime | ⏳ Documented | - |
 | 1.3 | FI-2010 regression features | ⏳ Documented | - |
 | 3.1 | fi2010.rs integration | ⏳ Documented | - |
+| 3.2 | Triple Barrier export integration | ⏳ Documented | - |
 
 ---
 
-*Last Updated: 2026-01-14*
+*Last Updated: 2026-01-25*

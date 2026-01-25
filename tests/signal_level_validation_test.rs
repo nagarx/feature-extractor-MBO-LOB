@@ -33,8 +33,8 @@ fn test_signals_require_10_levels() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: true,
-        mbo_window_size: 1000,
         include_signals: true,
+        ..Default::default()
     };
     assert!(
         config_10.validate().is_ok(),
@@ -47,8 +47,8 @@ fn test_signals_require_10_levels() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: true,
-        mbo_window_size: 1000,
         include_signals: true,
+        ..Default::default()
     };
     let result = config_5.validate();
     assert!(
@@ -75,8 +75,7 @@ fn test_non_10_levels_without_signals_is_valid() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: true,
-        mbo_window_size: 1000,
-        include_signals: false, // No signals
+        ..Default::default()
     };
     assert!(
         config.validate().is_ok(),
@@ -92,8 +91,8 @@ fn test_20_levels_with_signals_rejected() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: true,
-        mbo_window_size: 1000,
         include_signals: true,
+        ..Default::default()
     };
     assert!(
         config.validate().is_err(),
@@ -110,8 +109,8 @@ fn test_exactly_10_levels_required_for_signals() {
             tick_size: 0.01,
             include_derived: true,
             include_mbo: true,
-            mbo_window_size: 1000,
             include_signals: true,
+            ..Default::default()
         };
         assert!(
             config.validate().is_err(),
@@ -126,8 +125,8 @@ fn test_exactly_10_levels_required_for_signals() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: true,
-        mbo_window_size: 1000,
         include_signals: true,
+        ..Default::default()
     };
     assert!(
         config_10.validate().is_ok(),
@@ -145,8 +144,8 @@ fn test_feature_layout_documentation() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: true,
-        mbo_window_size: 1000,
         include_signals: true,
+        ..Default::default()
     };
 
     // Verify expected layout

@@ -274,9 +274,11 @@ fn test_signals_have_correct_indices() {
     extractor.extract_with_signals(&lob, &ctx, &mut output).unwrap();
     
     // Verify schema_version at correct index
+    // Note: Hard-coded expected value is intentional for contract testing.
+    // If schema version changes, this test SHOULD fail to force conscious review.
     assert!(
-        (output[indices::SCHEMA_VERSION] - 2.1).abs() < 0.01,
-        "schema_version should be 2.1 at index {}, got {}",
+        (output[indices::SCHEMA_VERSION] - 2.2).abs() < 0.01,
+        "schema_version should be 2.2 at index {}, got {}",
         indices::SCHEMA_VERSION,
         output[indices::SCHEMA_VERSION]
     );
