@@ -1,0 +1,218 @@
+# =============================================================================
+# NVDA 116-Feature Complete Analysis Configuration
+# =============================================================================
+#
+# This configuration exports ALL available features for comprehensive stock
+# analysis and options intraday trading research:
+#
+# STANDARD FEATURES (98):
+# - Raw LOB (40 features): prices and sizes at 10 levels
+# - Derived (8 features): mid-price, spread, imbalances, microprice
+# - MBO (36 features): order flow rates, queue stats, institutional patterns
+# - Signals (14 features): OFI, pressure indicators, regime, safety gates
+#
+# EXPERIMENTAL FEATURES (18):
+# - institutional_v2 (8): Enhanced institutional/whale detection
+# - volatility (6): Realized volatility and regime features
+# - seasonality (4): Enhanced time-of-day features
+#
+# TOTAL: 116 features
+#
+# =============================================================================
+# PURPOSE: Full Analysis for Options Intraday Trading
+# =============================================================================
+#
+# This export is designed to:
+# 1. Understand NVIDIA's market microstructure deeply
+# 2. Detect institutional activity patterns
+# 3. Analyze volatility regimes for options pricing
+# 4. Identify profitable intraday trading patterns
+#
+# ANALYSIS WORKFLOW:
+# 1. Export with this config
+# 2. Run lob-dataset-analyzer/scripts/run_options_trading_analysis.py
+# 3. Run lob-dataset-analyzer/scripts/analyze_experimental_features.py
+# 4. Review recommendations and refine trading strategies
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA 116-Feature Complete Analysis"
+description = "Full feature export (98 standard + 18 experimental) for options trading analysis"
+version = "8.0.0"
+tags = [
+    "nvda",
+    "116-features",
+    "full-analysis",
+    "experimental",
+    "institutional-detection",
+    "volatility",
+    "options-trading",
+    "intraday",
+]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+# Input: Raw MBO data (11 months: Feb 2025 - Jan 2026)
+input_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/NVDA_2025-02-03_to_2026-01-07"
+
+# Hot store: Pre-decompressed files for faster processing
+hot_store_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/hot_store"
+
+# Output: Full 116-feature export for analysis
+output_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/exports/nvda_116feat_full_analysis"
+
+[dates]
+# Full date range: ~230 trading days
+start_date = "2025-02-03"
+end_date = "2026-01-07"
+
+# US Market Holidays 2025-2026
+exclude_dates = [
+    "2025-01-20",   # MLK Day
+    "2025-02-17",   # Presidents Day
+    "2025-04-18",   # Good Friday
+    "2025-05-26",   # Memorial Day
+    "2025-06-19",   # Juneteenth
+    "2025-07-04",   # Independence Day
+    "2025-09-01",   # Labor Day
+    "2025-11-27",   # Thanksgiving
+    "2025-12-25",   # Christmas
+    "2026-01-01",   # New Year's Day
+]
+
+# =============================================================================
+# FEATURE CONFIGURATION - FULL 116 FEATURES
+# =============================================================================
+
+[features]
+lob_levels = 10           # 10 levels × 4 = 40 raw features
+include_derived = true    # +8 features (mid_price, spread, imbalances)
+include_mbo = true        # +36 features (order flow, queue, institutional)
+include_signals = true    # +14 features (OFI, pressure, regime, gates)
+mbo_window_size = 1000    # Rolling window for MBO statistics
+
+# -----------------------------------------------------------------------------
+# EXPERIMENTAL FEATURES (indices 98-115)
+# -----------------------------------------------------------------------------
+# These features are for analysis and experimentation.
+# Strong performers may be promoted to main schema in future versions.
+
+[features.experimental]
+enabled = true
+groups = ["institutional_v2", "volatility", "seasonality"]
+
+# Volatility windows (samples)
+# With event_count=1000, fast window ≈ 5-25 seconds, slow ≈ 50-250 seconds
+volatility_fast_window = 50
+volatility_slow_window = 500
+
+# Institutional detection parameters
+institutional_window = 200      # Events to track for patterns
+large_order_percentile = 90.0   # Threshold for "large" orders
+round_lot_size = 100            # US equities round lot
+
+# =============================================================================
+# SAMPLING CONFIGURATION
+# =============================================================================
+
+[sampling]
+strategy = "event_based"
+event_count = 1000    # Sample every 1000 events (~0.1-0.5s during active trading)
+
+# Note: Volume-based sampling available but event-based is more consistent
+# volume_threshold = 1000
+
+# =============================================================================
+# SEQUENCE CONFIGURATION
+# =============================================================================
+
+[sequence]
+window_size = 100       # 100 snapshots per sequence
+stride = 10             # 90% overlap for rich training data
+max_buffer_size = 50000 # Memory limit
+
+# =============================================================================
+# LABEL CONFIGURATION - Multi-Horizon with TLOB Dynamic Threshold
+# =============================================================================
+#
+# Multi-horizon labels for different trading strategies:
+# - H10:  ~1-5 seconds    (ultra-short-term scalping)
+# - H20:  ~2-10 seconds   (short-term HFT)
+# - H50:  ~5-25 seconds   (short-term)
+# - H100: ~10-50 seconds  (medium-term, options friendly)
+# - H200: ~20-100 seconds (medium-term swing)
+#
+# Dynamic threshold: alpha = mean(|percentage_change|) / 2 (TLOB paper)
+
+[labels]
+strategy = "tlob"
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10
+threshold = 0.0008        # Fallback only
+
+[labels.threshold_strategy]
+type = "tlob_dynamic"
+fallback = 0.0008
+divisor = 2.0
+
+# =============================================================================
+# TRAIN/VAL/TEST SPLIT
+# =============================================================================
+#
+# Temporal split (no shuffling to prevent lookahead):
+# - Train: First 70% of days (~161 days)
+# - Val:   Next 15% of days (~35 days)
+# - Test:  Last 15% of days (~35 days)
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+# =============================================================================
+# PROCESSING
+# =============================================================================
+
+[processing]
+error_mode = "collect_errors"   # Continue on errors, report at end
+verbose = true                   # Show progress for each day
+
+# =============================================================================
+# NORMALIZATION
+# =============================================================================
+#
+# All features exported RAW. Python analyzer applies normalization using
+# TRAINING DATA ONLY to prevent leakage.
+#
+# NORMALIZATION STRATEGY (applied in Python):
+# | Range     | Features         | Strategy                                |
+# |-----------|------------------|-----------------------------------------|
+# | 0-39      | Raw LOB          | Global Z-score (prices pooled, sizes pooled) |
+# | 40-47     | Derived          | Per-feature Z-score                     |
+# | 48-83     | MBO              | Per-feature Z-score                     |
+# | 84-91     | Signals (core)   | Per-feature Z-score                     |
+# | 92        | BOOK_VALID       | EXCLUDE (binary 0/1)                    |
+# | 93        | TIME_REGIME      | EXCLUDE (categorical 0-4)               |
+# | 94        | MBO_READY        | EXCLUDE (binary 0/1)                    |
+# | 95        | DT_SECONDS       | Per-feature Z-score                     |
+# | 96        | INVALIDITY       | EXCLUDE (counter)                       |
+# | 97        | SCHEMA_VERSION   | EXCLUDE (constant 2.2)                  |
+# | 98-105    | institutional_v2 | Per-feature Z-score                     |
+# | 106-111   | volatility       | Per-feature Z-score                     |
+# | 112-115   | seasonality      | Per-feature Z-score                     |
+
+[normalization]
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"
+
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

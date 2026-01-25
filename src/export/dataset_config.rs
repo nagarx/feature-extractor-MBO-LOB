@@ -427,6 +427,93 @@ pub struct FeatureSetConfig {
     /// **Note**: Requires `include_mbo` to be enabled. Disabled by default.
     #[serde(default)]
     pub include_queue_tracking: bool,
+
+    /// Experimental feature configuration.
+    ///
+    /// Experimental features are opt-in and appended after standard features (index 98+).
+    /// Groups available: `institutional_v2`, `volatility`, `seasonality`.
+    ///
+    /// # Example
+    ///
+    /// ```toml
+    /// [features.experimental]
+    /// enabled = true
+    /// groups = ["institutional_v2", "volatility"]
+    /// ```
+    #[serde(default)]
+    pub experimental: ExperimentalFeatureConfig,
+}
+
+/// Configuration for experimental features in TOML.
+///
+/// Experimental features are designed for analysis and experimentation
+/// before promotion to the main schema.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExperimentalFeatureConfig {
+    /// Enable experimental features.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Which experimental groups to include.
+    /// Available: "institutional_v2", "volatility", "seasonality"
+    /// Empty = all groups when enabled.
+    #[serde(default)]
+    pub groups: Vec<String>,
+
+    /// Window size for volatility computation (samples).
+    #[serde(default = "default_volatility_fast_window")]
+    pub volatility_fast_window: usize,
+
+    /// Window size for slow volatility computation.
+    #[serde(default = "default_volatility_slow_window")]
+    pub volatility_slow_window: usize,
+
+    /// Window size for institutional pattern detection.
+    #[serde(default = "default_institutional_window")]
+    pub institutional_window: usize,
+
+    /// Threshold percentile for "large" orders.
+    #[serde(default = "default_large_order_percentile")]
+    pub large_order_percentile: f64,
+
+    /// Round lot size (default: 100 for US equities).
+    #[serde(default = "default_round_lot_size")]
+    pub round_lot_size: u32,
+}
+
+fn default_volatility_fast_window() -> usize {
+    50
+}
+
+fn default_volatility_slow_window() -> usize {
+    500
+}
+
+fn default_institutional_window() -> usize {
+    200
+}
+
+fn default_large_order_percentile() -> f64 {
+    90.0
+}
+
+fn default_round_lot_size() -> u32 {
+    100
+}
+
+impl ExperimentalFeatureConfig {
+    /// Convert to internal ExperimentalConfig.
+    pub fn to_internal(&self) -> crate::features::experimental::ExperimentalConfig {
+        crate::features::experimental::ExperimentalConfig {
+            enabled: self.enabled,
+            groups: self.groups.clone(),
+            volatility_fast_window: self.volatility_fast_window,
+            volatility_slow_window: self.volatility_slow_window,
+            institutional_window: self.institutional_window,
+            large_order_percentile: self.large_order_percentile,
+            round_lot_size: self.round_lot_size,
+        }
+    }
 }
 
 fn default_lob_levels() -> usize {
@@ -446,6 +533,7 @@ impl Default for FeatureSetConfig {
             include_signals: false,
             mbo_window_size: 1000,
             include_queue_tracking: false,
+            experimental: ExperimentalFeatureConfig::default(),
         }
     }
 }
@@ -453,7 +541,8 @@ impl Default for FeatureSetConfig {
 impl FeatureSetConfig {
     /// Create configuration for full 98-feature mode.
     ///
-    /// Enables all features: LOB + Derived + MBO + Signals.
+    /// Enables all standard features: LOB + Derived + MBO + Signals.
+    /// Experimental features are NOT enabled by default.
     pub fn full() -> Self {
         Self {
             lob_levels: 10,
@@ -462,6 +551,30 @@ impl FeatureSetConfig {
             include_signals: true,
             mbo_window_size: 1000,
             include_queue_tracking: false, // Disabled by default for performance
+            experimental: ExperimentalFeatureConfig::default(),
+        }
+    }
+
+    /// Create configuration with all features including experimental.
+    ///
+    /// Total: 98 standard + 18 experimental = 116 features.
+    pub fn full_with_experimental() -> Self {
+        Self {
+            lob_levels: 10,
+            include_derived: true,
+            include_mbo: true,
+            include_signals: true,
+            mbo_window_size: 1000,
+            include_queue_tracking: false,
+            experimental: ExperimentalFeatureConfig {
+                enabled: true,
+                groups: vec![
+                    "institutional_v2".to_string(),
+                    "volatility".to_string(),
+                    "seasonality".to_string(),
+                ],
+                ..Default::default()
+            },
         }
     }
 
@@ -476,6 +589,7 @@ impl FeatureSetConfig {
             include_signals: false,
             mbo_window_size: 1000,
             include_queue_tracking: false,
+            experimental: ExperimentalFeatureConfig::default(),
         }
     }
 
@@ -500,6 +614,11 @@ impl FeatureSetConfig {
             count += 14; // Trading signals
         }
 
+        // Experimental features (indices 98+)
+        if self.experimental.enabled {
+            count += self.experimental.to_internal().feature_count();
+        }
+
         count
     }
 
@@ -516,7 +635,7 @@ impl FeatureSetConfig {
             mbo_window_size: self.mbo_window_size,
             include_signals: self.include_signals,
             include_queue_tracking: self.include_queue_tracking,
-            experimental: Default::default(), // Experimental features via separate config
+            experimental: self.experimental.to_internal(),
         }
     }
 
