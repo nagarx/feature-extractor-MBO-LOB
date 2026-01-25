@@ -68,6 +68,7 @@ const EPSILON: f64 = 1e-10;
 struct OrderState {
     creation_time: u64,
     original_size: u32,
+    #[allow(dead_code)] // Reserved for future price-based clustering detection
     price: i64,
     side: Side,
     was_modified: bool,

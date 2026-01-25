@@ -116,6 +116,7 @@ impl RollingStats {
         self.variance().max(0.0).sqrt()
     }
 
+    #[allow(dead_code)] // Utility method for debugging/future use
     fn len(&self) -> usize {
         self.values.len()
     }
