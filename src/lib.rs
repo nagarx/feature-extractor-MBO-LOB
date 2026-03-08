@@ -31,8 +31,8 @@
 //! let mut pipeline = Pipeline::from_config(config)?;
 //! let output = pipeline.process("data/NVDA.mbo.dbn.zst")?;
 //!
-//! // Export to NumPy format
-//! let exporter = NumpyExporter::new("output/");
+//! // Export to NumPy format using AlignedBatchExporter
+//! let exporter = AlignedBatchExporter::new("output/", Default::default());
 //! exporter.export_day("2025-02-03", &output)?;
 //! ```
 //!
@@ -74,6 +74,7 @@
 
 pub mod builder;
 pub mod config;
+pub mod contract;
 pub mod export;
 pub mod export_aligned;
 pub mod features;
@@ -93,7 +94,9 @@ pub mod batch;
 pub use schema::{FeatureCategory, FeatureDef, FeatureSchema, Preset, PresetConfig};
 
 // Re-exports - Config
-pub use config::{ExperimentMetadata, PipelineConfig, SamplingConfig, SamplingStrategy};
+pub use config::{
+    ExperimentMetadata, MultiScaleSamplingConfig, PipelineConfig, SamplingConfig, SamplingStrategy,
+};
 
 // Re-exports - Features
 pub use features::fi2010::{FI2010Config, FI2010Extractor};
@@ -119,13 +122,10 @@ pub use sequence_builder::{
 
 // Re-exports - Export
 pub use export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
-#[allow(deprecated)] // Re-exporting deprecated types for backward compatibility
-pub use export::{
-    export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
-    ExportThresholdStrategy, NumpyExporter, SplitConfig,
-};
+pub use export::{ExportThresholdStrategy, SplitConfig};
 pub use export_aligned::{
-    AlignedBatchExporter, AlignedDayExport, NormalizationParams, NormalizationStrategy,
+    AlignedBatchExporter, AlignedDayExport, LabelEncoding, NormalizationParams,
+    NormalizationStrategy,
 };
 
 // Re-exports - Validation

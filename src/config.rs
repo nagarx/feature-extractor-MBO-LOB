@@ -80,7 +80,7 @@ pub struct SamplingConfig {
 
     /// Phase 1: Multi-scale window configuration (opt-in)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub multiscale: Option<MultiScaleConfig>,
+    pub multiscale: Option<MultiScaleSamplingConfig>,
 }
 
 /// Phase 1: Adaptive Sampling Configuration
@@ -140,7 +140,7 @@ pub struct AdaptiveSamplingConfig {
 /// # Example
 ///
 /// ```ignore
-/// let multiscale = MultiScaleConfig {
+/// let multiscale = MultiScaleSamplingConfig {
 ///     enabled: true,
 ///     fast_window: 100,
 ///     medium_window: 500,
@@ -150,7 +150,7 @@ pub struct AdaptiveSamplingConfig {
 /// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MultiScaleConfig {
+pub struct MultiScaleSamplingConfig {
     /// Enable multi-scale windowing
     pub enabled: bool,
 
@@ -247,7 +247,7 @@ impl Default for AdaptiveSamplingConfig {
     }
 }
 
-impl Default for MultiScaleConfig {
+impl Default for MultiScaleSamplingConfig {
     /// Default configuration based on TLOB paper recommendations.
     fn default() -> Self {
         Self {
@@ -397,10 +397,10 @@ impl PipelineConfig {
     /// ```
     pub fn enable_multiscale_windowing(mut self) -> Self {
         if let Some(ref mut sampling) = self.sampling {
-            sampling.multiscale = Some(MultiScaleConfig::default());
+            sampling.multiscale = Some(MultiScaleSamplingConfig::default());
         } else {
             let sampling = SamplingConfig {
-                multiscale: Some(MultiScaleConfig::default()),
+                multiscale: Some(MultiScaleSamplingConfig::default()),
                 ..Default::default()
             };
             self.sampling = Some(sampling);
@@ -600,7 +600,7 @@ impl AdaptiveSamplingConfig {
     }
 }
 
-impl MultiScaleConfig {
+impl MultiScaleSamplingConfig {
     /// Validate multi-scale configuration.
     pub fn validate(&self) -> Result<(), String> {
         if self.fast_window == 0 {
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn test_multiscale_config_default() {
-        let config = MultiScaleConfig::default();
+        let config = MultiScaleSamplingConfig::default();
         assert!(config.validate().is_ok());
         assert_eq!(config.fast_window, 100);
         assert_eq!(config.medium_window, 500);
@@ -806,7 +806,7 @@ mod tests {
     #[test]
     fn test_multiscale_validation() {
         // Valid config
-        let mut config = MultiScaleConfig::default();
+        let mut config = MultiScaleSamplingConfig::default();
         assert!(config.validate().is_ok());
 
         // Invalid: fast >= medium

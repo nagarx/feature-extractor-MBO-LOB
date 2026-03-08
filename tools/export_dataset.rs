@@ -246,20 +246,47 @@ fn print_config_summary(config: &DatasetConfig) {
             config.labels.horizon
         );
     }
-    if !config.labels.strategy.is_opportunity() {
+    // Triple Barrier specific display
+    if config.labels.strategy.is_triple_barrier() {
+        if let Some(pt) = config.labels.profit_target_pct {
+            println!(
+                "│   Profit Target:  {:.4}% ({:.1} bps)",
+                pt * 100.0,
+                pt * 10000.0
+            );
+        }
+        if let Some(sl) = config.labels.stop_loss_pct {
+            println!(
+                "│   Stop-Loss:      {:.4}% ({:.1} bps)",
+                sl * 100.0,
+                sl * 10000.0
+            );
+        }
+        if let (Some(pt), Some(sl)) = (config.labels.profit_target_pct, config.labels.stop_loss_pct) {
+            if sl > 0.0 {
+                println!("│   Risk/Reward:    {:.2}:1", pt / sl);
+            }
+        }
+        if let Some(ts) = &config.labels.timeout_strategy {
+            println!("│   Timeout:        {:?}", ts);
+        }
+    } else {
+        // TLOB/Opportunity display
+        if !config.labels.strategy.is_opportunity() {
+            println!(
+                "│   Smoothing:      {}",
+                config.labels.smoothing_window
+            );
+        }
         println!(
-            "│   Smoothing:      {}",
-            config.labels.smoothing_window
+            "│   Threshold:      {} ({:.1} bps)",
+            config.labels.threshold,
+            config.labels.threshold * 10000.0
         );
-    }
-    println!(
-        "│   Threshold:      {} ({:.1} bps)",
-        config.labels.threshold,
-        config.labels.threshold * 10000.0
-    );
-    if config.labels.strategy.is_opportunity() {
-        if let Some(priority) = &config.labels.conflict_priority {
-            println!("│   Conflict:       {:?}", priority);
+        if config.labels.strategy.is_opportunity() {
+            if let Some(priority) = &config.labels.conflict_priority {
+                println!("│   Conflict:       {:?}", priority);
+            }
         }
     }
     println!("│");
@@ -408,9 +435,8 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
             pipeline_config.sequence.window_size,
             pipeline_config.sequence.stride,
         )
-        // CRITICAL: Apply normalization config from TOML
-        // Without this, normalization settings are ignored!
-        .with_normalization(config.normalization.clone());
+        .with_normalization(config.normalization.clone())
+        .with_config_hash(compute_config_hash(config));
 
         // Log normalization strategy
         if config.normalization.any_normalization() {
@@ -423,7 +449,44 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
         }
 
         // Configure exporter based on labeling strategy
-        let exporter = if let Some((opp_configs, horizons)) = config.labels.to_opportunity_configs() {
+        // Priority: Triple Barrier > Opportunity > Multi-horizon TLOB > Single-horizon TLOB
+        let exporter = if let Some((tb_configs, horizons)) = config.labels.to_triple_barrier_configs() {
+            // Triple Barrier labeling (trade outcome prediction)
+            println!(
+                "    📊 Triple Barrier mode: {:?} horizons",
+                horizons
+            );
+            println!(
+                "       Base profit target: {:.4}% ({:.1} bps)",
+                tb_configs[0].profit_target_pct * 100.0,
+                tb_configs[0].profit_target_pct * 10000.0
+            );
+            println!(
+                "       Base stop-loss:     {:.4}% ({:.1} bps)",
+                tb_configs[0].stop_loss_pct * 100.0,
+                tb_configs[0].stop_loss_pct * 10000.0
+            );
+            println!(
+                "       Risk/Reward:        {:.2}:1",
+                tb_configs[0].risk_reward_ratio()
+            );
+
+            let mut tb_exporter = base_exporter.with_triple_barrier_labels(tb_configs, horizons);
+
+            // Apply volatility scaling if configured (Schema 3.3+)
+            if let Some((ref_vol, floor, cap)) = config.labels.volatility_scaling_params() {
+                println!(
+                    "       Volatility scaling: ref={:.6} ({:.2} bps), floor={:.2}x, cap={:.2}x",
+                    ref_vol,
+                    ref_vol * 10000.0,
+                    floor,
+                    cap
+                );
+                tb_exporter = tb_exporter.with_volatility_scaling(ref_vol, floor, cap);
+            }
+
+            tb_exporter
+        } else if let Some((opp_configs, horizons)) = config.labels.to_opportunity_configs() {
             // Opportunity labeling (big-move detection)
             println!(
                 "    📊 Opportunity mode: {:?} horizons, threshold={:.1} bps",
@@ -531,32 +594,38 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+/// Compute the config hash for provenance tracking.
+fn compute_config_hash(config: &DatasetConfig) -> String {
+    format!("{:x}", md5::compute(serde_json::to_string(config).unwrap_or_default()))
+}
+
 /// Save dataset manifest for reproducibility
 fn save_manifest(
     config: &DatasetConfig,
     days_processed: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    #[derive(serde::Serialize)]
-    struct DatasetManifest {
-        experiment: ExperimentInfo,
-        symbol: String,
-        feature_count: usize,
-        days_processed: usize,
-        export_timestamp: String,
-        config_hash: String,
-    }
+    let config_hash = compute_config_hash(config);
 
-    let manifest = DatasetManifest {
-        experiment: config.experiment.clone(),
-        symbol: config.symbol.name.clone(),
-        feature_count: config.feature_count(),
-        days_processed,
-        export_timestamp: chrono::Utc::now().to_rfc3339(),
-        config_hash: format!(
-            "{:x}",
-            md5::compute(serde_json::to_string(config)?)
-        ),
-    };
+    let labeling_strategy = format!("{:?}", config.labels.strategy).to_lowercase();
+
+    let manifest = serde_json::json!({
+        "experiment": config.experiment,
+        "symbol": config.symbol.name,
+        "feature_count": config.feature_count(),
+        "days_processed": days_processed,
+        "export_timestamp": chrono::Utc::now().to_rfc3339(),
+        "config_hash": config_hash,
+        "schema_version": feature_extractor::contract::SCHEMA_VERSION.to_string(),
+        "sequence_length": config.sequence.window_size,
+        "stride": config.sequence.stride,
+        "labeling_strategy": labeling_strategy,
+        "horizons": config.labels.horizons,
+        "provenance": {
+            "extractor_version": env!("CARGO_PKG_VERSION"),
+            "git_commit": env!("GIT_COMMIT_HASH"),
+            "git_dirty": env!("GIT_DIRTY") == "true",
+        },
+    });
 
     let manifest_path = config.data.output_dir.join("dataset_manifest.json");
     let file = fs::File::create(&manifest_path)?;

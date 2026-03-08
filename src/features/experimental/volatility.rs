@@ -49,8 +49,7 @@ pub mod indices {
     pub const VOL_OF_VOL: usize = 5;
 }
 
-/// Numerical stability constant.
-const EPSILON: f64 = 1e-10;
+use crate::contract::FLOAT_CMP_EPS;
 
 /// Annualization factor for intraday data.
 /// Assumes ~6.5 hours of trading, 252 days per year.
@@ -155,8 +154,14 @@ pub struct VolatilityComputer {
     /// Maximum returns to track.
     returns_capacity: usize,
 
-    /// Previous fast volatility (for momentum).
+    /// Previous fast volatility snapshot (for momentum calculation).
+    /// This is the volatility from TWO update cycles ago.
     prev_fast_vol: f64,
+
+    /// Current fast volatility snapshot (for momentum calculation).
+    /// This is the volatility from ONE update cycle ago.
+    /// Momentum = (current_fast_vol - prev_fast_vol) / prev_fast_vol
+    current_fast_vol: f64,
 
     /// Sample count.
     sample_count: usize,
@@ -179,6 +184,7 @@ impl VolatilityComputer {
             returns: std::collections::VecDeque::with_capacity(100),
             returns_capacity: 100,
             prev_fast_vol: 0.0,
+            current_fast_vol: 0.0,
             sample_count: 0,
         }
     }
@@ -214,12 +220,18 @@ impl VolatilityComputer {
                         self.returns.pop_front();
                     }
 
-                    // Update vol history periodically
+                    // Update vol history and volatility snapshots periodically
+                    // Using sample_count % 10 provides momentum over ~10 update intervals
                     if self.sample_count % 10 == 0 {
-                        let current_vol = self.fast_window.std();
-                        if current_vol > EPSILON {
-                            self.vol_history.push(current_vol);
+                        let new_vol = self.fast_window.std();
+                        if new_vol > FLOAT_CMP_EPS {
+                            self.vol_history.push(new_vol);
                         }
+                        // Shift snapshots: prev <- current <- new
+                        // This gives us momentum = (current - prev) / prev
+                        // where current is from 10 samples ago and prev is from 20 samples ago
+                        self.prev_fast_vol = self.current_fast_vol;
+                        self.current_fast_vol = new_vol;
                     }
                 }
             }
@@ -240,16 +252,18 @@ impl VolatilityComputer {
         output.push(vol_slow);
 
         // Feature 2: Vol ratio (fast / slow)
-        let vol_ratio = if vol_slow > EPSILON {
+        let vol_ratio = if vol_slow > FLOAT_CMP_EPS {
             vol_fast / vol_slow
         } else {
             1.0
         };
         output.push(vol_ratio);
 
-        // Feature 3: Vol momentum (change in fast vol)
-        let vol_momentum = if self.prev_fast_vol > EPSILON {
-            (self.fast_window.std() - self.prev_fast_vol) / self.prev_fast_vol
+        // Feature 3: Vol momentum (change in fast vol between snapshot intervals)
+        // Compares current snapshot (~10 samples ago) vs previous snapshot (~20 samples ago)
+        // Positive = vol increasing, Negative = vol decreasing
+        let vol_momentum = if self.prev_fast_vol > FLOAT_CMP_EPS {
+            (self.current_fast_vol - self.prev_fast_vol) / self.prev_fast_vol
         } else {
             0.0
         };
@@ -290,7 +304,7 @@ impl VolatilityComputer {
             }
         }
 
-        if denominator > EPSILON {
+        if denominator > FLOAT_CMP_EPS {
             numerator / denominator
         } else {
             0.0
@@ -306,6 +320,7 @@ impl VolatilityComputer {
         self.prev_timestamp = None;
         self.returns.clear();
         self.prev_fast_vol = 0.0;
+        self.current_fast_vol = 0.0;
         self.sample_count = 0;
     }
 
@@ -383,5 +398,107 @@ mod tests {
 
         assert!(!computer.is_warm());
         assert!(computer.prev_price.is_none());
+    }
+
+    #[test]
+    fn test_vol_momentum_increases() {
+        // Test that vol_momentum captures volatility increases
+        let mut computer = VolatilityComputer::new(10, 100);
+
+        // Phase 1: Low volatility period (steady prices)
+        // Need at least 20 samples to establish prev_fast_vol (sample_count % 10 == 0)
+        for i in 0..30 {
+            // Small, consistent moves
+            let price = 100.0 + (i as f64 * 0.001);
+            computer.update(price, i * 1_000_000_000);
+        }
+
+        // At this point, prev_fast_vol should be set (at sample 10 and 20)
+        let mut output1 = Vec::new();
+        computer.extract_into(&mut output1);
+        let vol_fast_before = output1[indices::REALIZED_VOL_FAST];
+
+        // Phase 2: High volatility period (oscillating prices)
+        for i in 30..50 {
+            // Large oscillations = high vol
+            let price = 100.0 + if i % 2 == 0 { 0.5 } else { -0.5 };
+            computer.update(price, i * 1_000_000_000);
+        }
+
+        let mut output2 = Vec::new();
+        computer.extract_into(&mut output2);
+        let vol_fast_after = output2[indices::REALIZED_VOL_FAST];
+        let vol_momentum = output2[indices::VOL_MOMENTUM];
+
+        // Volatility should have increased
+        assert!(
+            vol_fast_after > vol_fast_before,
+            "Vol should increase: before={}, after={}",
+            vol_fast_before,
+            vol_fast_after
+        );
+
+        // Vol momentum should be positive (vol increased)
+        assert!(
+            vol_momentum > 0.0,
+            "Vol momentum should be positive when vol increases: {}",
+            vol_momentum
+        );
+    }
+
+    #[test]
+    fn test_vol_momentum_decreases() {
+        // Test that vol_momentum captures volatility decreases
+        let mut computer = VolatilityComputer::new(10, 100);
+
+        // Phase 1: High volatility period
+        for i in 0..30 {
+            let price = 100.0 + if i % 2 == 0 { 0.5 } else { -0.5 };
+            computer.update(price, i * 1_000_000_000);
+        }
+
+        // Phase 2: Low volatility period
+        for i in 30..50 {
+            let price = 100.0 + (i as f64 * 0.001);
+            computer.update(price, i * 1_000_000_000);
+        }
+
+        let mut output = Vec::new();
+        computer.extract_into(&mut output);
+        let vol_momentum = output[indices::VOL_MOMENTUM];
+
+        // Vol momentum should be negative (vol decreased)
+        assert!(
+            vol_momentum < 0.0,
+            "Vol momentum should be negative when vol decreases: {}",
+            vol_momentum
+        );
+    }
+
+    #[test]
+    fn test_vol_momentum_not_always_zero() {
+        // Critical regression test: vol_momentum should NOT always be zero
+        let mut computer = VolatilityComputer::new(10, 100);
+
+        // Varying volatility pattern
+        for i in 0..100 {
+            let vol_factor = if (i / 20) % 2 == 0 { 0.1 } else { 1.0 };
+            let price = 100.0 + (i as f64).sin() * vol_factor;
+            computer.update(price, i * 1_000_000_000);
+        }
+
+        let mut output = Vec::new();
+        computer.extract_into(&mut output);
+        let vol_momentum = output[indices::VOL_MOMENTUM];
+
+        // With varying volatility, momentum should not be exactly zero
+        // (It was always zero before the fix due to prev_fast_vol never being updated)
+        // Note: We use a small threshold because numerical precision can cause tiny values
+        assert!(
+            vol_momentum.abs() > 1e-10 || computer.prev_fast_vol > 1e-10,
+            "Vol momentum machinery should be active. momentum={}, prev_fast_vol={}",
+            vol_momentum,
+            computer.prev_fast_vol
+        );
     }
 }

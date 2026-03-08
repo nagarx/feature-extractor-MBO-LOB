@@ -74,7 +74,8 @@
 //! ```
 
 use crate::config::{
-    AdaptiveSamplingConfig, ExperimentMetadata, MultiScaleConfig, PipelineConfig, SamplingConfig,
+    AdaptiveSamplingConfig, ExperimentMetadata, MultiScaleSamplingConfig, PipelineConfig,
+    SamplingConfig,
     SamplingStrategy,
 };
 use crate::features::FeatureConfig;
@@ -485,12 +486,12 @@ impl PipelineBuilder {
     /// - Medium: 2x decimation (short-term trends)
     /// - Slow: 4x decimation (long-term context)
     pub fn with_multiscale(mut self) -> Self {
-        self.sampling.multiscale = Some(MultiScaleConfig::default());
+        self.sampling.multiscale = Some(MultiScaleSamplingConfig::default());
         self
     }
 
     /// Configure multi-scale windowing with custom parameters.
-    pub fn with_multiscale_config(mut self, config: MultiScaleConfig) -> Self {
+    pub fn with_multiscale_config(mut self, config: MultiScaleSamplingConfig) -> Self {
         self.sampling.multiscale = Some(config);
         self
     }

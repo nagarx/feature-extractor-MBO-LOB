@@ -447,9 +447,9 @@ impl Pipeline {
         let multiscale_window = if let Some(ref sampling) = config.sampling {
             if let Some(ref ms_config) = sampling.multiscale {
                 if ms_config.enabled {
-                    use crate::sequence_builder::{MultiScaleConfig as MSConfig, ScaleConfig};
+                    use crate::sequence_builder::{MultiScaleConfig, ScaleConfig};
 
-                    let ms_config_internal = MSConfig::new(
+                    let ms_config_internal = MultiScaleConfig::new(
                         ScaleConfig::new(ms_config.fast_window, 1, 1),
                         ScaleConfig::new(ms_config.medium_window, ms_config.medium_decimation, 1),
                         ScaleConfig::new(ms_config.slow_window, ms_config.slow_decimation, 1),
