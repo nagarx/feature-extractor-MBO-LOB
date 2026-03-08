@@ -21,7 +21,8 @@ feature_extractor/
 │   ├── prelude.rs                # Convenience re-exports for common use
 │   │
 │   ├── builder.rs                # PipelineBuilder fluent API
-│   ├── config.rs                 # Pipeline configuration
+│   ├── config.rs                 # Pipeline configuration (MultiScaleSamplingConfig)
+│   ├── contract.rs               # Pipeline contract constants (SCHEMA_VERSION, eps)
 │   ├── pipeline.rs               # High-level pipeline orchestrator
 │   ├── batch.rs                  # Parallel batch processing (feature: parallel)
 │   │
@@ -31,14 +32,36 @@ feature_extractor/
 │   │   └── presets.rs           # Paper-aligned presets (DeepLOB, TLOB, FI-2010, etc.)
 │   │
 │   ├── features/                 # Feature extraction (raw computation only)
-│   │   ├── mod.rs               # FeatureExtractor, extract_into(), extract_arc()
+│   │   ├── mod.rs               # Thin re-export layer: FeatureConfig, FeatureExtractor, SignalContext
+│   │   ├── config.rs            # FeatureConfig struct, builder, validation, feature_count()
+│   │   ├── extractor.rs         # FeatureExtractor: orchestrates LOB/MBO/signal extraction
 │   │   ├── lob_features.rs      # Raw LOB features (prices, volumes) - 40 features
 │   │   ├── derived_features.rs  # Derived analytics (spread, microprice, etc.) - 8 features
-│   │   ├── mbo_features.rs      # MBO-specific features - 36 features
-│   │   ├── signals.rs           # Trading signals (OFI, TimeRegime, etc.) - 14 features
+│   │   ├── mbo_features/          # MBO-specific features - 36 features (directory module)
+│   │   │   ├── mod.rs             # MboAggregator orchestrator, public API, integration tests
+│   │   │   ├── event.rs           # MboEvent struct + conversions
+│   │   │   ├── window.rs          # MboWindow rolling buffer (O(1) incremental stats)
+│   │   │   ├── order_tracker.rs   # OrderInfo + OrderTracker (lifecycle state, eviction)
+│   │   │   ├── flow_features.rs   # 12 order flow features (indices 48-59)
+│   │   │   ├── size_features.rs   # 8 size distribution features (indices 60-67)
+│   │   │   ├── queue_features.rs  # 6 queue & depth features (indices 68-73)
+│   │   │   ├── institutional_features.rs  # 4 institutional detection (indices 74-77)
+│   │   │   └── lifecycle_features.rs      # 6 core MBO metrics (indices 78-83)
+│   │   ├── signals/             # Trading signals (OFI, TimeRegime, etc.) - 14 features (directory module)
+│   │   │   ├── mod.rs           # SignalContext, re-exports
+│   │   │   ├── time_regime.rs   # TimeRegime enum, compute_time_regime(), ET offset
+│   │   │   ├── book_valid.rs    # is_book_valid(), is_book_valid_from_lob()
+│   │   │   ├── ofi.rs           # OfiComputer, OfiSample, streaming OFI accumulation
+│   │   │   ├── compute.rs       # SignalVector, compute_signals()
+│   │   │   └── indices.rs       # Signal index constants (TRUE_OFI..SCHEMA_VERSION)
 │   │   ├── order_flow.rs        # OFI, queue imbalance, trade flow
 │   │   ├── fi2010.rs            # FI-2010 handcrafted features (80)
-│   │   └── market_impact.rs     # Market impact estimation (slippage, VWAP)
+│   │   ├── market_impact.rs     # Market impact estimation (slippage, VWAP)
+│   │   └── experimental/        # Opt-in experimental features (+18, indices 98-115)
+│   │       ├── mod.rs           # ExperimentalConfig, group registry
+│   │       ├── institutional_v2.rs  # Enhanced whale detection (8 features)
+│   │       ├── volatility.rs    # Realized vol & regime (6 features)
+│   │       └── seasonality.rs   # Time-of-day features (4 features)
 │   │
 │   ├── labeling/                 # Label generation for supervised learning
 │   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats, re-exports
@@ -46,7 +69,7 @@ feature_extractor/
 │   │   ├── deeplob.rs           # DeepLOB labeling (k=h) - ✅ Export integrated
 │   │   ├── multi_horizon.rs     # Multi-horizon labels - ✅ Export integrated
 │   │   ├── opportunity.rs       # Opportunity/big-move detection - ✅ Export integrated
-│   │   ├── triple_barrier.rs    # Triple Barrier (de Prado) - ⚠️ API only, export pending
+│   │   ├── triple_barrier.rs    # Triple Barrier (de Prado) - ✅ Export integrated (Schema 2.4+)
 │   │   └── magnitude.rs         # Magnitude/regression targets - ⚠️ API only, export pending
 │   │
 │   ├── preprocessing/            # Normalization and sampling
@@ -63,14 +86,27 @@ feature_extractor/
 │   │   └── multiscale.rs        # MultiScaleWindow, push_arc()
 │   │
 │   ├── validation.rs             # Feature validation (crossed quotes, NaN checks)
-│   ├── export/                   # Export module
-│   │   ├── mod.rs               # NumpyExporter, BatchExporter, DatasetConfig re-exports
+│   ├── export/                   # Export configuration
+│   │   ├── mod.rs               # Module declarations, config re-exports
+│   │   ├── config/              # NormalizationConfig, DatasetConfig, FeatureNormStrategy
 │   │   ├── tensor_format.rs     # TensorFormatter, TensorFormat, TensorOutput
-│   │   └── dataset_config.rs    # DatasetConfig, SymbolConfig, FeatureSetConfig, etc.
-│   └── export_aligned.rs         # Aligned batch export
+│   │   └── dataset_config.rs    # DatasetConfig, LabelingStrategy, ExportLabelConfig
+│   └── export_aligned/           # Production exporter (modular directory)
+│       ├── mod.rs               # AlignedBatchExporter struct, builder, dispatch, export_day_common()
+│       ├── types.rs             # LabelEncoding, NormalizationStrategy, NormalizationParams, LabelingResult
+│       ├── metadata.rs          # Provenance, normalization, processing metadata builders
+│       ├── alignment.rs         # Sequence-label alignment (single + multi-horizon)
+│       ├── validation.rs        # Label validation, spread verification, class balance
+│       ├── normalization.rs     # Feature normalization engine (per-group strategies)
+│       ├── npy_export.rs        # NPY file writing (sequences, labels, tensor formats)
+│       └── strategies/          # Per-strategy label generation → LabelingResult
+│           ├── tlob.rs          # Single + multi-horizon TLOB
+│           ├── opportunity.rs   # Opportunity/big-move detection
+│           └── triple_barrier.rs # Triple Barrier + volatility scaling
 │
 ├── tools/                        # CLI tools
-│   └── export_dataset.rs        # Configuration-driven export CLI
+│   ├── export_dataset.rs        # Configuration-driven export CLI
+│   └── calibrate_triple_barrier.py  # Per-day volatility analysis & barrier calibration
 │
 ├── configs/                      # Sample configuration files
 │   ├── nvda_98feat.toml         # 98-feature NVIDIA export config
@@ -123,6 +159,7 @@ Feature count is automatically computed:
 | + MBO | 76 | 40 + 36 |
 | + Derived + MBO | 84 | 40 + 8 + 36 |
 | + Derived + MBO + Signals | 98 | 40 + 8 + 36 + 14 |
+| + Experimental (all groups) | 116 | 98 + 8 + 6 + 4 |
 
 ### 3. Streaming Sequence Generation
 
@@ -161,7 +198,7 @@ use feature_extractor::prelude::*;
 |----------|-------|---------|--------|-------------|
 | Raw LOB | 40 | 0-39 | All papers | (P_ask, V_ask, P_bid, V_bid) × 10 levels |
 | Derived | 8 | 40-47 | TLOB, DeepLOB | Microprice, spread, imbalance |
-| MBO Features | 36 | 48-83 | MBO Paper | Order lifecycle patterns |
+| MBO Features | 36 | 48-83 | MBO Paper | Order lifecycle patterns (directory module: `mbo_features/`) |
 | Trading Signals | 14 | 84-97 | Cont et al., Stoikov | OFI, microprice, time regime, safety gates |
 | **Total (full)** | **98** | 0-97 | - | All features enabled |
 
@@ -276,8 +313,16 @@ pub enum Preset {
 - [x] **Export CLI Tool** (`export_dataset` binary for TOML-driven exports)
 - [x] **Sample Configurations** (NVDA 98-feat, 84-feat baseline, multi-symbol templates)
 
+### Recently Completed
+- [x] **Triple Barrier Export Integration** - Full integration into `AlignedBatchExporter` (Schema 2.4+)
+- [x] **Per-Horizon Barriers** - Different profit/stop-loss per horizon (Schema 3.2+)
+- [x] **Volatility-Adaptive Scaling** - Per-day barrier scaling based on realized volatility (Schema 3.3+)
+- [x] **LabelEncoding** - Unified label validation contract across all strategies
+- [x] **LabelingStrategy Enum** - TOML `strategy` field for strategy selection
+- [x] **Experimental Features Module** - 18 opt-in features (institutional_v2, volatility, seasonality)
+- [x] **Calibration Tool** - `tools/calibrate_triple_barrier.py` for per-day volatility analysis
+
 ### Pending
-- [ ] **Triple Barrier Export Integration** - Integrate `TripleBarrierLabeler` into `AlignedBatchExporter`
 - [ ] **Magnitude Export Integration** - Integrate `MagnitudeGenerator` for regression targets
 - [ ] crates.io publication
 - [ ] Additional paper presets (ViT-LOB)

@@ -255,10 +255,9 @@ The library provides multiple labeling strategies for different trading objectiv
 | **TLOB** | ✅ Integrated | Down/Stable/Up | Trend following (default) |
 | **Multi-Horizon** | ✅ Integrated | Down/Stable/Up × N | FI-2010 benchmarks |
 | **Opportunity** | ✅ Integrated | BigDown/NoOpp/BigUp | Big move detection |
-| **Triple Barrier** | ⚠️ API only | StopLoss/Timeout/ProfitTarget | Risk-managed trading |
+| **Triple Barrier** | ✅ Integrated | StopLoss/Timeout/ProfitTarget | Risk-managed trading, vol-adaptive |
 
-> **Note**: "API only" means the labeler is implemented in Rust but not yet integrated into `export_dataset`.
-> See [LABELING_STRATEGIES.md](LABELING_STRATEGIES.md) for detailed documentation.
+> See [LABELING_STRATEGIES.md](LABELING_STRATEGIES.md) for detailed documentation on all strategies.
 
 ### TLOB Method
 

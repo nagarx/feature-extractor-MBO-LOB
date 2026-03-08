@@ -2,7 +2,7 @@
 
 > **Purpose**: Single source of truth for all data transformations from raw Databento MBO files to model-ready LOB feature datasets. This document describes the preprocessing pipeline capabilities independent of any specific model architecture.  
 > **Audience**: LLMs and developers needing exact technical details for debugging, extending, or reproducing the pipeline.  
-> **Last Updated**: 2026-01-25 (Added lob-dataset-analyzer integration, Full 98-Feature Analysis)
+> **Last Updated**: 2026-03-07 (Monolith decomposition: mbo_features/, signals/, export_aligned/ are now directory modules; contract.rs as single source of truth; comprehensive test infrastructure)
 
 ---
 
@@ -70,17 +70,23 @@
        └─ MboAggregator.extract()     → 36 features (optional)
        │
        ▼
-  Vec<f64> [40-84 features, GROUPED layout]
+  Vec<f64> [40-116 features, GROUPED layout]
        │
        ▼ [Stage 5: SequenceBuilder]
   Sequence { features: Vec<Arc<Vec<f64>>>, length: 100 }
        │
-       ▼ [Stage 6: Label Generation]
-       ├─ TlobLabelGenerator (smoothed past vs smoothed future)
-       └─ DeepLobLabelGenerator (alternative method)
+       ▼ [Stage 6: Label Generation (strategy-dependent)]
+       ├─ TlobLabelGenerator (smoothed past vs smoothed future) — strategy = "tlob"
+       ├─ DeepLobLabelGenerator (alternative TLOB method)
+       ├─ OpportunityLabelGenerator (peak return detection) — strategy = "opportunity"
+       └─ TripleBarrierLabeler (profit/stop/timeout barriers) — strategy = "triple_barrier"
        │
-       ▼ [Stage 7: align_sequences_with_labels()]
+       ▼ [Stage 6b: Volatility-Adaptive Scaling (optional, Triple Barrier only)]
+       barrier_day = barrier_base * clamp(vol_day / vol_reference, floor, cap)
+       │
+       ▼ [Stage 7: validate_label_alignment() + align_sequences_with_labels()]
   (aligned_sequences, aligned_labels) - 1:1 mapping
+  Validated via LabelEncoding contract (SignedTrend, SignedOpportunity, TripleBarrierClassIndex)
        │
        ▼ [Stage 8: normalize_sequences() - market_structure_zscore]
   Normalized sequences (mean≈0, std≈1 per day) + NormalizationParams
@@ -608,7 +614,7 @@ pub fn compute_depth_features(lob_state: &LobState, levels: usize, tick_size: f6
 
 | File | Module |
 |------|--------|
-| `feature-extractor-MBO-LOB/src/features/mbo_features.rs` | `MboAggregator`, `MboWindow`, `OrderInfo` |
+| `feature-extractor-MBO-LOB/src/features/mbo_features/mod.rs` | `MboAggregator` orchestrator, public API |
 
 #### Architecture
 
@@ -734,7 +740,7 @@ The 14 trading signals serve as **rich input features** for ML experimentation:
 
 | File | Module |
 |------|--------|
-| `feature-extractor-MBO-LOB/src/features/signals.rs` | `OfiComputer`, `compute_signals()`, `TimeRegime` |
+| `feature-extractor-MBO-LOB/src/features/signals/mod.rs` | `compute_signals()` orchestrator, `TimeRegime`, signal constants |
 | `feature-extractor-MBO-LOB/src/pipeline.rs` | Signal integration into pipeline |
 
 #### Research Foundation
@@ -1038,12 +1044,18 @@ pub struct Sequence {
 
 ## 7. Stage 6: Label Generation
 
-The pipeline supports two labeling methods, each with different characteristics:
+The pipeline supports multiple labeling strategies, selected via `strategy` in TOML config:
 
-| Method | Source | Horizon Bias | Use Case |
-|--------|--------|--------------|----------|
-| TLOB | `TlobLabelGenerator` | No | Production, research |
-| DeepLOB | `DeepLobLabelGenerator` | Yes | Benchmarking, simplicity |
+| Method | Source | Label Encoding | Use Case |
+|--------|--------|----------------|----------|
+| TLOB | `TlobLabelGenerator` | SignedTrend `{-1,0,1}` | Production, research |
+| DeepLOB | `DeepLobLabelGenerator` | SignedTrend `{-1,0,1}` | Benchmarking, simplicity |
+| Multi-Horizon | `MultiHorizonLabelGenerator` | SignedTrend `{-1,0,1}` × N | Multi-task learning |
+| Opportunity | `OpportunityLabelGenerator` | SignedOpportunity `{-1,0,1}` | Big move detection |
+| Triple Barrier | `TripleBarrierLabeler` | TripleBarrierClassIndex `{0,1,2}` | Risk-managed trading |
+
+All strategies are validated via `LabelEncoding` which defines the expected label range and class
+names for each strategy. See `export_aligned.rs` for the unified `validate_label_alignment()` function.
 
 ---
 
@@ -1315,7 +1327,7 @@ labels: BTreeMap<usize, Vec<(usize, TrendLabel, f64)>>  // horizon → [(index, 
 
 | File | Function |
 |------|----------|
-| `feature-extractor-MBO-LOB/src/export_aligned.rs` | `align_sequences_with_labels()` |
+| `feature-extractor-MBO-LOB/src/export_aligned/mod.rs` | `AlignedBatchExporter`, `align_sequences_with_labels()` |
 
 ### Alignment Formula
 
@@ -1349,7 +1361,7 @@ Typical drop rate: 5-15% of sequences at day boundaries.
 
 | File | Function |
 |------|----------|
-| `feature-extractor-MBO-LOB/src/export_aligned.rs` | `normalize_sequences()` |
+| `feature-extractor-MBO-LOB/src/export_aligned/normalization.rs` | `normalize_sequences()`, `NormalizationStrategy` |
 
 ### Strategy: `market_structure_zscore`
 
@@ -1934,9 +1946,11 @@ combined = get_feature_groups("signals", "derived")  # Tuple of all indices
 |------|---------|
 | `src/features/lob_features.rs` | `extract_raw_features()`, `extract_normalized_features()` |
 | `src/features/derived_features.rs` | `compute_derived_features()`, `compute_depth_features()` |
-| `src/features/mbo_features.rs` | `MboAggregator`, `MboWindow`, `MboEvent`, `OrderInfo` |
-| `src/features/signals.rs` | `OfiComputer`, `compute_signals()`, `TimeRegime`, `OfiSample` |
-| `src/features/mod.rs` | `FeatureConfig` - feature set configuration |
+| `src/features/mbo_features/` | Directory module: `mod.rs` (orchestrator), `order_tracker.rs`, `window.rs`, `event.rs`, `flow_features.rs`, `size_features.rs`, `queue_features.rs`, `institutional_features.rs`, `lifecycle_features.rs` |
+| `src/features/signals/` | Directory module: `mod.rs` (orchestrator), `compute.rs`, `ofi.rs`, `time_regime.rs`, `book_valid.rs`, `indices.rs` |
+| `src/features/config.rs` | `FeatureConfig` - feature set configuration |
+| `src/features/extractor.rs` | `FeatureExtractor` - feature extraction orchestrator |
+| `src/contract.rs` | Pipeline constants: `SCHEMA_VERSION`, `STABLE_FEATURE_COUNT`, `SIGNAL_COUNT`, `CATEGORICAL_INDICES` |
 | `src/preprocessing/sampling.rs` | `EventBasedSampler`, `VolumeBasedSampler` |
 | `src/sequence_builder/builder.rs` | `SequenceBuilder`, `SequenceConfig`, `Sequence` |
 | `src/labeling/tlob.rs` | `TlobLabelGenerator` |
@@ -1944,7 +1958,7 @@ combined = get_feature_groups("signals", "derived")  # Tuple of all indices
 | `src/labeling/multi_horizon.rs` | `MultiHorizonLabelGenerator`, `ThresholdStrategy` |
 | `src/export/mod.rs` | `NumpyExporter`, `BatchExporter`, `DatasetConfig` re-exports |
 | `src/export/dataset_config.rs` | `DatasetConfig`, `SymbolConfig`, `FeatureSetConfig`, etc. |
-| `src/export_aligned.rs` | `AlignedBatchExporter`, `normalize_sequences()` |
+| `src/export_aligned/` | Directory module: `mod.rs` (orchestrator), `alignment.rs`, `normalization.rs`, `npy_export.rs`, `metadata.rs`, `validation.rs`, `types.rs` |
 | `tools/export_dataset.rs` | CLI tool for configuration-driven exports |
 | `configs/nvda_98feat.toml` | Sample 98-feature NVIDIA configuration |
 | `configs/nvda_84feat_baseline.toml` | Sample 84-feature baseline configuration |
@@ -2151,6 +2165,31 @@ let valid_idx = indices::BOOK_VALID;    // 92
 
 ¹ `depth_ticks_*` = volume-weighted average distance from BBO in ticks. Measures liquidity positioning, NOT raw volume.
 
+#### Experimental Features (18, opt-in)
+
+When `include_experimental = true` is set, additional features are appended after index 97:
+
+| Index | Name | Group | Description |
+|-------|------|-------|-------------|
+| 98 | `round_lot_ratio` | institutional_v2 | Round lot proportion |
+| 99 | `odd_lot_ratio` | institutional_v2 | Odd lot proportion |
+| 100 | `size_clustering` | institutional_v2 | Size clustering metric |
+| 101 | `price_clustering` | institutional_v2 | Price clustering metric |
+| 102 | `mod_before_cancel` | institutional_v2 | Modification-before-cancel ratio |
+| 103 | `sweep_ratio` | institutional_v2 | Sweep order detection |
+| 104 | `fill_patience_bid` | institutional_v2 | Bid fill patience |
+| 105 | `fill_patience_ask` | institutional_v2 | Ask fill patience |
+| 106 | `realized_vol_fast` | volatility | Fast-window realized volatility |
+| 107 | `realized_vol_slow` | volatility | Slow-window realized volatility |
+| 108 | `vol_ratio` | volatility | Fast/slow vol ratio |
+| 109 | `vol_momentum` | volatility | Volatility momentum |
+| 110 | `return_autocorr` | volatility | Return autocorrelation |
+| 111 | `vol_of_vol` | volatility | Volatility of volatility |
+| 112 | `minutes_since_open` | seasonality | Minutes since market open |
+| 113 | `minutes_until_close` | seasonality | Minutes until market close |
+| 114 | `session_progress` | seasonality | Session progress [0, 1] |
+| 115 | `time_bucket` | seasonality | Discrete time bucket |
+
 ### Feature Configuration Presets
 
 | Preset | Features | Index Range | Use Case |
@@ -2161,6 +2200,7 @@ let valid_idx = indices::BOOK_VALID;    // 92
 | LOB + Order Flow | 76 | 0-39, 48-83 | + MBO patterns |
 | Full Base Set | 84 | 0-83 | All base features |
 | Full + Signals | 98 | 0-97 | Maximum information + trading signals |
+| Full + Experimental | 116 | 0-115 | All features including experimental |
 
 ### Normalization Considerations
 

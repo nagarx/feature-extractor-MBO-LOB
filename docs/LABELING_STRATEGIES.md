@@ -11,7 +11,7 @@ Choosing the right labeling strategy is crucial for training effective trading m
 | TLOB | Classification | Trend following | Simple, widely used | ✅ Integrated |
 | Multi-Horizon | Classification | Adaptive strategies | Multiple timeframes | ✅ Integrated |
 | Opportunity | Classification | Big move detection | Peak return focus | ✅ Integrated |
-| Triple Barrier | Classification | Risk-managed trading | Explicit risk/reward | ⚠️ **API Only** |
+| Triple Barrier | Classification | Risk-managed trading | Explicit risk/reward, vol-adaptive | ✅ **Integrated** |
 | Magnitude | Regression | Position sizing | Continuous targets | ⚠️ **API Only** |
 
 > **Important**: "API Only" means the labeler is fully implemented and tested for use in Rust code, but not yet integrated into the `export_dataset` CLI tool. See [Integration Status](#integration-status) for details.
@@ -212,13 +212,14 @@ When both thresholds are exceeded within the horizon:
 
 ## 4. Triple Barrier Labeling
 
-> ⚠️ **API Only - Not Yet Integrated into Export Pipeline**
+> ✅ **Fully Integrated into Export Pipeline (Schema 2.4+)**
 >
-> The Triple Barrier labeler is **fully implemented and tested** for use in Rust code,
-> but is **NOT yet integrated** into the `export_dataset` CLI tool. To use Triple Barrier
-> labels, you must either:
-> 1. Use the Rust API directly in your own code
-> 2. Wait for export pipeline integration (tracked in roadmap)
+> The Triple Barrier labeler is fully integrated into the `export_dataset` CLI tool.
+> Use `strategy = "triple_barrier"` in your TOML config. Features include:
+> - Per-horizon barriers (different profit/stop-loss per horizon)
+> - Volatility-adaptive scaling (per-day barrier adjustment based on realized volatility)
+> - Configurable timeout strategies and conflict resolution
+> - Calibration tool: `tools/calibrate_triple_barrier.py`
 
 Implements the Triple Barrier method from López de Prado's "Advances in Financial Machine Learning" (2018).
 
@@ -238,11 +239,14 @@ Entry ───┼────────────────────�
 
 ### Label Assignment
 
-| First Barrier Hit | Label | Meaning |
-|-------------------|-------|---------|
-| Upper (Profit Target) | +1 | Winning trade |
-| Lower (Stop-Loss) | -1 | Losing trade |
-| Vertical (Time Limit) | 0 | Inconclusive |
+| First Barrier Hit | Label (Class Index) | Meaning |
+|-------------------|---------------------|---------|
+| Lower (Stop-Loss) | 0 | Losing trade |
+| Vertical (Time Limit) | 1 | Inconclusive / Timeout |
+| Upper (Profit Target) | 2 | Winning trade |
+
+> **Note**: Triple Barrier uses class indices `{0, 1, 2}` (not signed `{-1, 0, 1}` like TLOB/Opportunity).
+> This is enforced by `LabelEncoding::TripleBarrierClassIndex` in the validation contract.
 
 ### Configuration
 
@@ -271,11 +275,56 @@ assert_eq!(config.risk_reward_ratio(), 2.0);      // 2:1 R:R
 assert!((config.breakeven_win_rate() - 0.33).abs() < 0.01); // Need 33% win rate
 ```
 
+### TOML Export Configuration
+
+```toml
+# Basic Triple Barrier
+[labels]
+strategy = "triple_barrier"
+max_horizons = [50, 100, 200]
+profit_target_pct = 0.005
+stop_loss_pct = 0.003
+
+# Per-horizon barriers (calibrated to each horizon's volatility)
+[labels]
+strategy = "triple_barrier"
+max_horizons = [50, 100, 200]
+profit_targets = [0.0028, 0.0039, 0.0059]
+stop_losses = [0.0019, 0.0026, 0.0040]
+
+# Volatility-adaptive scaling (barriers adjust per-day)
+[labels]
+strategy = "triple_barrier"
+max_horizons = [50, 100, 200]
+profit_targets = [0.0020, 0.0028, 0.0042]
+stop_losses = [0.0013, 0.0019, 0.0028]
+volatility_scaling = true
+volatility_reference = 0.00015
+volatility_floor = 0.3
+volatility_cap = 3.0
+```
+
+### Calibration Tool
+
+Use `tools/calibrate_triple_barrier.py` to compute data-driven barrier thresholds:
+
+```bash
+python tools/calibrate_triple_barrier.py \
+    --data-dir ../data/exports/my_export \
+    --horizons 50 100 200 \
+    --target-pt-rate 0.25 --target-sl-rate 0.25
+
+# Per-day volatility analysis
+python tools/calibrate_triple_barrier.py \
+    --data-dir ../data/exports/my_export \
+    --per-day --horizons 50 100 200
+```
+
 ### Timeout Strategies
 
 | Strategy | Behavior |
 |----------|----------|
-| `LabelAsTimeout` | Always label as 0 (standard) |
+| `LabelAsTimeout` | Always label as 1 (standard) |
 | `UseReturnSign` | Label based on final return sign |
 | `UseFractionalThreshold` | Use partial threshold (50%) |
 
@@ -465,43 +514,39 @@ This section clarifies which labeling strategies are fully integrated into the e
 
 These strategies can be used via TOML config and `export_dataset`:
 
-| Strategy | Config Field | Classes | Notes |
-|----------|--------------|---------|-------|
-| **TLOB** | `strategy = "tlob"` | Down/Stable/Up | Default, most tested |
-| **Multi-Horizon** | `horizons = [10, 50, 100]` | Down/Stable/Up × N | Multiple horizons |
-| **Opportunity** | `strategy = "opportunity"` | BigDown/NoOpp/BigUp | Peak return based |
+| Strategy | Config Field | Classes | Label Encoding | Notes |
+|----------|--------------|---------|----------------|-------|
+| **TLOB** | `strategy = "tlob"` | Down/Stable/Up | `{-1, 0, 1}` (SignedTrend) | Default, most tested |
+| **Multi-Horizon** | `horizons = [10, 50, 100]` | Down/Stable/Up × N | `{-1, 0, 1}` (SignedTrend) | Multiple horizons |
+| **Opportunity** | `strategy = "opportunity"` | BigDown/NoOpp/BigUp | `{-1, 0, 1}` (SignedOpportunity) | Peak return based |
+| **Triple Barrier** | `strategy = "triple_barrier"` | StopLoss/Timeout/ProfitTarget | `{0, 1, 2}` (TripleBarrierClassIndex) | Vol-adaptive, per-horizon barriers |
 
 ### API Only (Not in Export Pipeline)
 
-These strategies are fully implemented and tested in Rust, but NOT yet integrated into `export_dataset`:
-
 | Strategy | Rust API | Status | Tracking |
 |----------|----------|--------|----------|
-| **Triple Barrier** | `TripleBarrierLabeler` | ✅ Tests pass | Pending export integration |
 | **Magnitude** | `MagnitudeGenerator` | ✅ Tests pass | Pending export integration |
 
 ### Using API-Only Strategies
 
-To use Triple Barrier or Magnitude labeling, you must write Rust code:
+To use Magnitude labeling, you must write Rust code:
 
 ```rust
-use feature_extractor::{TripleBarrierConfig, TripleBarrierLabeler};
+use feature_extractor::{MagnitudeConfig, MagnitudeGenerator};
 
-// Create labeler
-let config = TripleBarrierConfig::new(0.005, 0.003, 50);
-let mut labeler = TripleBarrierLabeler::new(config);
-
-// Add prices (from your feature extraction pipeline)
-labeler.add_prices(&mid_prices);
-
-// Generate labels
-let labels = labeler.generate_labels()?;
+let config = MagnitudeConfig::point_return(50);
+let mut generator = MagnitudeGenerator::new(config);
+generator.add_prices(&mid_prices);
+let returns = generator.generate()?;
 ```
 
 ### Roadmap
 
-- [ ] Integrate `TripleBarrierLabeler` into `AlignedBatchExporter`
-- [ ] Add `profit_target_pct`, `stop_loss_pct` fields to `ExportLabelConfig`
+- [x] Integrate `TripleBarrierLabeler` into `AlignedBatchExporter` ✅ (Schema 2.4+)
+- [x] Add `profit_target_pct`, `stop_loss_pct` fields to `ExportLabelConfig` ✅ (Schema 2.4+)
+- [x] Per-horizon barrier overrides ✅ (Schema 3.2+)
+- [x] Volatility-adaptive barrier scaling ✅ (Schema 3.3+)
+- [x] Unified `LabelEncoding` validation contract ✅
 - [ ] Integrate `MagnitudeGenerator` into export pipeline
 - [ ] Add regression label export support
 

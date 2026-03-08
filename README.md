@@ -20,7 +20,9 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 - **Trading Signals**: 14 research-backed signals (OFI, microprice, time regime)
 - **Label Generation**: TLOB, DeepLOB, Opportunity, and Triple Barrier labeling methods
 - **Multi-Horizon Labels**: Generate labels for multiple prediction horizons (FI-2010, DeepLOB presets)
-- **Labeling Strategies**: TLOB, Multi-Horizon, Opportunity (✅ Export integrated), Triple Barrier (API only)
+- **Labeling Strategies**: TLOB, Multi-Horizon, Opportunity, Triple Barrier (all ✅ Export integrated)
+- **Volatility-Adaptive Barriers**: Per-day barrier scaling based on realized volatility
+- **Experimental Features**: Opt-in 18 additional features (institutional, volatility, seasonality)
 - **TensorFormatter**: Model-specific tensor shapes (DeepLOB, HLOB, Flat, Image formats)
 - **Multiple Normalization Strategies**: Z-score, Rolling Z-score, Global Z-score, Bilinear
 - **Multi-Scale Sequences**: Fast/Medium/Slow temporal resolution
@@ -152,7 +154,11 @@ let pipeline = PipelineBuilder::new()
 | Derived | 8 | 40-47 | Mid-price, spread, imbalance, etc. |
 | MBO Features | 36 | 48-83 | Order flow dynamics |
 | Trading Signals | 14 | 84-97 | OFI, microprice, time regime, safety gates |
-| **Total** | **98** | 0-97 | Full feature set with all options enabled |
+| **Standard Total** | **98** | 0-97 | Full feature set with all standard options |
+| Experimental: institutional_v2 | 8 | 98-105 | Enhanced whale detection (opt-in) |
+| Experimental: volatility | 6 | 106-111 | Realized vol & regime (opt-in) |
+| Experimental: seasonality | 4 | 112-115 | Time-of-day features (opt-in) |
+| **Max Total** | **116** | 0-115 | All features including experimental |
 
 ### Additional Feature Sets (standalone usage)
 
@@ -270,7 +276,7 @@ The library provides multiple labeling strategies for different trading objectiv
 | **TLOB** | ✅ Integrated | Trend following, DeepLOB reproduction |
 | **Multi-Horizon** | ✅ Integrated | FI-2010 benchmarks, multi-task learning |
 | **Opportunity** | ✅ Integrated | Big move detection, whale watching |
-| **Triple Barrier** | ⚠️ API only | Risk-managed trading (export integration pending) |
+| **Triple Barrier** | ✅ Integrated | Risk-managed trading, vol-adaptive barriers |
 | **Magnitude** | ⚠️ API only | Regression targets (export integration pending) |
 
 > **Note**: "API only" means the labeler works in Rust code but isn't yet available via `export_dataset` CLI.
@@ -666,17 +672,23 @@ cargo bench
 ## Testing
 
 ```bash
-# Run all tests
-cargo test
+# Unit tests only (729 tests, no data required)
+cargo test --lib --features "parallel,databento"
 
-# Run library tests only
-cargo test --lib
+# All tests including integration (requires data/ directory with NVIDIA MBO files)
+cargo test --features "parallel,databento" -- --test-threads=4
 
-# Run with verbose output
+# Real-data validation (determinism, layout, state isolation, export)
+cargo test --test phase3_real_data_validation --features "parallel,databento"
+
+# Golden snapshot regression guard
+cargo test --test golden_snapshot --features "parallel,databento"
+
+# Contract validation (verifies Rust constants match pipeline_contract.toml)
+cargo test --test contract_validation_test --features "parallel,databento"
+
+# Verbose output
 cargo test -- --nocapture
-
-# Run parallel processing tests (requires --features parallel)
-cargo test --features parallel --test parallel_processing_tests
 ```
 
 ## Documentation

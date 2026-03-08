@@ -60,24 +60,48 @@ The library implements features from:
 ## 2. Module Architecture
 
 ```
+build.rs                     # Compile-time git hash capture for provenance
 src/
 ├── lib.rs                    # Public API exports
 ├── prelude.rs                # Convenience re-exports
 ├── builder.rs                # PipelineBuilder fluent API
 ├── pipeline.rs               # Main Pipeline orchestrator
-├── config.rs                 # PipelineConfig, SamplingConfig
+├── config.rs                 # PipelineConfig, SamplingConfig, MultiScaleSamplingConfig
+├── contract.rs               # Pipeline contract constants (SCHEMA_VERSION, feature counts, eps)
 ├── validation.rs             # Data quality validation
 ├── batch.rs                  # Parallel batch processing (feature-gated: parallel)
 │
 ├── features/
-│   ├── mod.rs                # FeatureConfig, FeatureExtractor, extract_into(), extract_arc()
+│   ├── mod.rs                # Thin re-export layer: FeatureConfig, FeatureExtractor, SignalContext
+│   ├── config.rs             # FeatureConfig struct, builder, validation, feature_count()
+│   ├── extractor.rs          # FeatureExtractor: orchestrates LOB/MBO/signal extraction
 │   ├── lob_features.rs       # Raw LOB features (40 features)
 │   ├── derived_features.rs   # Derived metrics (8 features)
-│   ├── mbo_features.rs       # MBO aggregated (36 features)
-│   ├── signals.rs            # Trading signals (14 features): OfiComputer, TimeRegime
+│   ├── mbo_features/          # MBO aggregated features (36 features) — directory module
+│   │   ├── mod.rs             # MboAggregator orchestrator, public API, integration tests
+│   │   ├── event.rs           # MboEvent struct + from_mbo_message + to_mbo_message
+│   │   ├── window.rs          # MboWindow rolling buffer with O(1) incremental statistics
+│   │   ├── order_tracker.rs   # OrderInfo + OrderTracker (lifecycle state, eviction)
+│   │   ├── flow_features.rs   # 12 order flow features (indices 48-59)
+│   │   ├── size_features.rs   # 8 size distribution features (indices 60-67)
+│   │   ├── queue_features.rs  # 6 queue & depth features (indices 68-73)
+│   │   ├── institutional_features.rs  # 4 institutional detection features (indices 74-77)
+│   │   └── lifecycle_features.rs      # 6 core MBO metrics (indices 78-83)
+│   ├── signals/              # Trading signals (14 features) — directory module
+│   │   ├── mod.rs            # SignalContext, re-exports
+│   │   ├── time_regime.rs    # TimeRegime enum, compute_time_regime(), ET offset estimation
+│   │   ├── book_valid.rs     # is_book_valid(), is_book_valid_from_lob()
+│   │   ├── ofi.rs            # OfiComputer, OfiSample, streaming OFI accumulation
+│   │   ├── compute.rs        # SignalVector, compute_signals(), compute_signals_with_book_valid()
+│   │   └── indices.rs        # Signal index constants (TRUE_OFI through SCHEMA_VERSION)
 │   ├── order_flow.rs         # Order flow imbalance
 │   ├── fi2010.rs             # FI-2010 benchmark features
-│   └── market_impact.rs      # Market impact estimation
+│   ├── market_impact.rs      # Market impact estimation
+│   └── experimental/         # Opt-in experimental features (Schema 3.0+)
+│       ├── mod.rs            # ExperimentalConfig, group registry, feature_count()
+│       ├── institutional_v2.rs  # Enhanced whale detection (8 features, indices 98-105)
+│       ├── volatility.rs     # Realized vol & regime (6 features, indices 106-111)
+│       └── seasonality.rs    # Time-of-day features (4 features, indices 112-115)
 │
 ├── sequence_builder/
 │   ├── mod.rs                # Module exports, FeatureVec type alias
@@ -98,7 +122,7 @@ src/
 │   ├── deeplob.rs            # DeepLobLabelGenerator - ✅ Export integrated
 │   ├── multi_horizon.rs      # MultiHorizonLabelGenerator - ✅ Export integrated
 │   ├── opportunity.rs        # OpportunityLabelGenerator - ✅ Export integrated
-│   ├── triple_barrier.rs     # TripleBarrierLabeler - ⚠️ API only, export pending
+│   ├── triple_barrier.rs     # TripleBarrierLabeler - ✅ Export integrated (Schema 2.4+)
 │   └── magnitude.rs          # MagnitudeGenerator (regression) - ⚠️ API only, export pending
 │
 ├── schema/
@@ -106,19 +130,53 @@ src/
 │   ├── presets.rs            # Preset feature configurations
 │   └── feature_def.rs        # Feature definitions
 │
-├── export/                   # Export module (directory)
-│   ├── mod.rs                # NumpyExporter, BatchExporter, DatasetConfig re-exports
+├── export/                   # Export configuration
+│   ├── mod.rs                # Module declarations, config re-exports
+│   ├── config/               # NormalizationConfig, DatasetConfig, FeatureNormStrategy, etc.
 │   ├── tensor_format.rs      # TensorFormat, TensorFormatter, TensorOutput
-│   └── dataset_config.rs     # DatasetConfig, SymbolConfig, FeatureSetConfig, etc.
-├── export_aligned.rs         # Aligned feature/label export
+│   └── dataset_config.rs     # DatasetConfig, LabelingStrategy, ExportLabelConfig, etc.
+│
+├── export_aligned/           # Production exporter (modular directory)
+│   ├── mod.rs                # AlignedBatchExporter struct, builder, dispatch, export_day_common()
+│   ├── types.rs              # LabelEncoding, NormalizationStrategy, NormalizationParams, AlignedDayExport, LabelingResult
+│   ├── metadata.rs           # build_provenance(), build_normalization_metadata(), build_processing_metadata()
+│   ├── alignment.rs          # generate_labels(), build_multi_horizon_label_matrix(), align_sequences_with_multi_labels()
+│   ├── validation.rs         # verify_raw_spreads(), validate_label_alignment(), validate_class_balance()
+│   ├── normalization.rs      # normalize_sequences(), compute_feature_statistics(), apply_normalization()
+│   ├── npy_export.rs         # export_sequences(), export_labels(), export_multi_horizon_labels(), tensor format exports
+│   └── strategies/           # Per-strategy label generation → LabelingResult
+│       ├── mod.rs            # Sub-module declarations
+│       ├── tlob.rs           # labeling_single_horizon_tlob(), labeling_multi_horizon_tlob()
+│       ├── opportunity.rs    # labeling_opportunity(), build_opportunity_label_matrix()
+│       └── triple_barrier.rs # labeling_triple_barrier(), compute_daily_volatility(), build_triple_barrier_label_matrix()
 │
 ├── tools/                    # CLI tools (binaries)
-│   └── export_dataset.rs     # Configuration-driven export CLI
+│   ├── export_dataset.rs     # Configuration-driven export CLI
+│   └── calibrate_triple_barrier.py  # Per-day volatility analysis & barrier calibration
 │
 └── configs/                  # Sample configuration files
     ├── nvda_98feat.toml      # 98-feature NVIDIA export configuration
+    ├── nvda_98feat_v2.toml   # Updated 98-feature config
+    ├── nvda_98feat_full.toml # Full 98-feature config (all features)
     ├── nvda_84feat_baseline.toml # 84-feature baseline configuration
-    └── template_multi_symbol.toml # Multi-symbol export template
+    ├── nvda_116feat_full_analysis.toml # 116-feature config (includes experimental)
+    ├── nvda_triple_barrier.toml       # Triple Barrier labeling config
+    ├── nvda_11month_triple_barrier.toml           # 11-month Triple Barrier export
+    ├── nvda_11month_triple_barrier_calibrated.toml # Calibrated per-horizon barriers
+    ├── nvda_11month_triple_barrier_volscaled.toml  # Volatility-scaled barriers
+    ├── nvda_11month_complete.toml     # Complete 11-month dataset export
+    ├── nvda_bigmove_detection.toml    # Opportunity/big-move detection config
+    ├── nvda_multi_horizon.toml        # Multi-horizon TLOB config
+    ├── nvda_extended_multi_horizon.toml # Extended multi-horizon config
+    ├── nvda_balanced.toml             # Balanced class distribution config
+    ├── nvda_spread_adaptive.toml      # Spread-adaptive threshold config
+    ├── nvda_tlob_raw_v2.toml          # Raw TLOB (no normalization)
+    ├── nvda_tlob_repo_v1.toml         # TLOB repo-compatible v1
+    ├── nvda_tlob_repo_v2.toml         # TLOB repo-compatible v2
+    ├── template_multi_symbol.toml     # Multi-symbol export template
+    └── examples/                      # Example configs
+        ├── nvda_tlob_repo.toml
+        └── nvda_tlob_raw.toml
 ```
 
 ---
@@ -243,6 +301,7 @@ The total feature count depends on configuration:
 | LOB + MBO | `levels × 4 + 36` | 76 |
 | LOB + Derived + MBO | `levels × 4 + 8 + 36` | 84 |
 | LOB + Derived + MBO + Signals | `levels × 4 + 8 + 36 + 14` | 98 |
+| + Experimental (all groups) | `98 + 8 + 6 + 4` | 116 |
 
 ### FeatureConfig
 
@@ -325,37 +384,75 @@ Computed in `derived_features.rs`:
 
 ### MBO Features (36)
 
-Extracted in `mbo_features.rs` using multi-timescale windows:
+Extracted in `features/mbo_features/` directory module using multi-timescale windows.
+
+**Module Architecture** (`src/features/mbo_features/`):
+
+| File | Responsibility | Lines |
+|------|---------------|-------|
+| `mod.rs` | `MboAggregator` orchestrator, public API (`MboEvent`, `OrderInfo` re-exports), integration tests | ~990 |
+| `event.rs` | `MboEvent` struct, `from_mbo_message()`, `to_mbo_message()` | ~106 |
+| `window.rs` | `MboWindow` rolling buffer with O(1) incremental counters, lazy percentile/stats recomputation | ~272 |
+| `order_tracker.rs` | `OrderInfo` struct, `OrderTracker` (active orders map, completed order buffers, eviction) | ~329 |
+| `flow_features.rs` | 12 order flow features: net flow, cancel flow, trade flow, event rates, volatility, regime indicator | ~274 |
+| `size_features.rs` | 8 size distribution features: percentiles, z-score, skewness, large order ratio, concentration | ~177 |
+| `queue_features.rs` | 6 queue & depth features: queue position, size ahead, orders per level, concentration, depth ticks | ~251 |
+| `institutional_features.rs` | 4 institutional detection features: large order frequency/imbalance, modification score, iceberg proxy | ~127 |
+| `lifecycle_features.rs` | 6 core MBO metrics: avg order age, median lifetime, avg fill ratio, time to first fill, cancel-to-add ratio | ~209 |
 
 **Window Sizes**:
 - Fast: 100 messages (~2 seconds)
 - Medium: 1000 messages (~20 seconds) - **Primary extraction source**
 - Slow: 5000 messages (~100 seconds)
 
-**Feature Categories**:
+**Feature Categories** (feature-to-file mapping):
 
-| Range | Category | Count | Description |
-|-------|----------|-------|-------------|
-| 0-11 | Order Flow | 12 | Event rates, imbalances |
-| 12-19 | Size Distribution | 8 | Percentiles, z-scores |
-| 20-25 | Queue & Depth | 6 | Queue position, concentration |
-| 26-29 | Institutional | 4 | Large order detection |
-| 30-35 | Core MBO | 6 | Lifecycle metrics |
+| Range | Category | Count | Source File | Description |
+|-------|----------|-------|------------|-------------|
+| 0-11 | Order Flow | 12 | `flow_features.rs` | Event rates, net flows, imbalances, regime indicator |
+| 12-19 | Size Distribution | 8 | `size_features.rs` | Percentiles, z-scores, skewness, concentration |
+| 20-25 | Queue & Depth | 6 | `queue_features.rs` | Queue position, depth ticks, level concentration |
+| 26-29 | Institutional | 4 | `institutional_features.rs` | Large order detection, modification score |
+| 30-35 | Core MBO | 6 | `lifecycle_features.rs` | Order lifecycle metrics |
 
-> **✅ Fixed in v2.2**: `median_order_lifetime` (index 31 within MBO, absolute index 79)
+Each feature sub-module exports an `extract()` function returning a fixed-size array `[f64; N]`
+to avoid heap allocations in the high-frequency path. The `MboAggregator::extract_features()`
+method in `mod.rs` calls each `extract()` and concatenates the results into a `Vec<f64>` of length 36.
+
+**Data Flow**:
+
+```
+MboMessage → MboEvent (event.rs)
+                │
+                ├──► MboWindow.push() (window.rs) — 3 windows: fast/medium/slow
+                └──► OrderTracker.process_event() (order_tracker.rs) — lifecycle state
+                          │
+                          ▼
+                MboAggregator.extract_features(lob) → Vec<f64> [36]
+                          │
+                ┌─────────┼─────────┬─────────┬─────────┐
+                ▼         ▼         ▼         ▼         ▼
+          flow_features  size_    queue_   instit.   lifecycle_
+          ::extract()    features features features  features
+          [f64; 12]     ::extract ::extract ::extract ::extract
+                        [f64; 8] [f64; 6] [f64; 4]  [f64; 6]
+```
+
+> **Fixed in v2.2**: `median_order_lifetime` (index 31 within MBO, absolute index 79)
 > now returns the true median lifetime of completed orders. Implementation uses rolling
-> buffers (`completed_lifetimes`, `completed_fill_ratios`, `completed_modifications`)
+> buffers in `OrderTracker` (`completed_lifetimes`, `completed_fill_ratios`, `completed_modifications`)
 > to track order outcomes.
 
 **MboAggregator Memory**: ~8 MB per symbol (bounded via order eviction)
 
-**Order Eviction**: Orders are evicted from tracking after 1 hour (`MAX_ORDER_AGE_NS`)
-or when tracker exceeds 50K orders (`MAX_ORDER_TRACKER_SIZE`) to prevent unbounded memory growth.
+**Order Eviction** (in `order_tracker.rs`): Orders are evicted from tracking after 1 hour
+(`MAX_ORDER_AGE_NS`) or when tracker exceeds 50K orders (`MAX_ORDER_TRACKER_SIZE`) to prevent
+unbounded memory growth. Evicted orders are recorded in completed buffers to preserve statistics.
 
 **Tick Size Configuration**:
 
-The `depth_ticks_bid` and `depth_ticks_ask` features (indices 24-25 within MBO) require correct
-tick size configuration for accurate depth measurements:
+The `depth_ticks_bid` and `depth_ticks_ask` features (indices 24-25 within MBO, computed in
+`queue_features.rs`) require correct tick size configuration for accurate depth measurements:
 
 ```rust
 // Default: $0.01 (US equities)
@@ -377,11 +474,25 @@ let extractor = FeatureExtractor::with_config(config);
 ```
 
 **WARNING**: Using incorrect tick_size causes integer division truncation in depth calculations.
-A $0.001 tick instrument with default $0.01 configuration will report depth_ticks ≈ 0.
+A $0.001 tick instrument with default $0.01 configuration will report depth_ticks = 0.
+
+**Test Distribution** (72 tests total):
+
+| File | Test Count | Scope |
+|------|-----------|-------|
+| `mod.rs` | 33 | Integration tests: sign conventions, queue tracking, eviction, full extraction |
+| `flow_features.rs` | 7 | Unit: net flows, symmetry, volatility, regime indicator |
+| `size_features.rs` | 7 | Unit: skewness, concentration, insufficient data |
+| `queue_features.rs` | 7 | Unit: level concentration, depth ticks (bid/ask) |
+| `lifecycle_features.rs` | 7 | Unit: cancel-to-add ratio, median lifetime, fill ratio |
+| `order_tracker.rs` | 4 | Unit: fill ratio, add/cancel, full fill, eviction |
+| `institutional_features.rs` | 3 | Unit: modification score edge cases |
+| `window.rs` | 2 | Unit: push, eviction |
+| `event.rs` | 1 | Unit: event creation |
 
 ### Trading Signals (14 for indices 84-97)
 
-Computed in `signals.rs` using streaming OFI and base features.
+Computed in `signals/` directory module using streaming OFI and base features.
 
 **CONSTRAINT**: Signals require **exactly 10 LOB levels** (`lob_levels == 10`).
 The signal indices are hardcoded for the 10-level layout:
@@ -394,7 +505,12 @@ Configurations with `include_signals: true` and `lob_levels ≠ 10` will fail va
 
 | File | Module |
 |------|--------|
-| `src/features/signals.rs` | `OfiComputer`, `compute_signals()`, `TimeRegime` |
+| `src/features/signals/` | Directory module: `OfiComputer`, `compute_signals()`, `TimeRegime` |
+| `src/features/signals/ofi.rs` | `OfiComputer`, `OfiSample`, streaming OFI accumulation |
+| `src/features/signals/compute.rs` | `SignalVector`, `compute_signals()`, `compute_signals_with_book_valid()` |
+| `src/features/signals/time_regime.rs` | `TimeRegime` enum, `compute_time_regime()`, ET offset estimation |
+| `src/features/signals/book_valid.rs` | `is_book_valid()`, `is_book_valid_from_lob()` |
+| `src/features/signals/indices.rs` | Signal index constants (TRUE_OFI=0 through SCHEMA_VERSION=13) |
 
 **Research Foundation**:
 - OFI: Cont, Kukanov & Stoikov (2014) "The Price Impact of Order Book Events"
@@ -522,6 +638,38 @@ let pipeline = PipelineBuilder::new()
 
 assert_eq!(pipeline.config().features.feature_count(), 98);
 ```
+
+### Experimental Features (18 features, indices 98-115)
+
+Opt-in features for analysis and experimentation. Enabled via `include_experimental` in `FeatureConfig`
+or `include_experimental = true` in TOML. Subject to change without schema version bumps.
+
+**Groups:**
+
+| Group | Count | Indices | Features |
+|-------|-------|---------|----------|
+| `institutional_v2` | 8 | 98-105 | round_lot_ratio, odd_lot_ratio, size_clustering, price_clustering, mod_before_cancel, sweep_ratio, fill_patience_bid, fill_patience_ask |
+| `volatility` | 6 | 106-111 | realized_vol_fast, realized_vol_slow, vol_ratio, vol_momentum, return_autocorr, vol_of_vol |
+| `seasonality` | 4 | 112-115 | minutes_since_open, minutes_until_close, session_progress, time_bucket |
+
+**Configuration:**
+
+```rust
+let config = ExperimentalConfig::new()
+    .with_all_groups();  // Enable all 18 features
+
+let config = ExperimentalConfig::new()
+    .with_groups(vec!["volatility".into(), "seasonality".into()]);  // Selective
+```
+
+```toml
+[features]
+include_experimental = true
+experimental_groups = ["institutional_v2", "volatility", "seasonality"]
+```
+
+**Promotion Path**: Features that prove valuable in analysis can be promoted to the main schema
+(requires schema version bump, documentation update, and Python contract update).
 
 ---
 
@@ -888,12 +1036,55 @@ The library provides multiple labeling strategies for different trading objectiv
 | **TLOB** | Down/Stable/Up | ✅ Integrated | Trend following, DeepLOB reproduction |
 | **Multi-Horizon** | Down/Stable/Up × N | ✅ Integrated | FI-2010 benchmarks, multi-task learning |
 | **Opportunity** | BigDown/NoOpp/BigUp | ✅ Integrated | Big move detection, peak returns |
-| **Triple Barrier** | StopLoss/Timeout/ProfitTarget | ⚠️ API only | Risk-managed trading |
+| **Triple Barrier** | StopLoss/Timeout/ProfitTarget | ✅ Integrated | Risk-managed trading, volatility-scaled barriers |
 | **Magnitude** | Continuous returns | ⚠️ API only | Regression, position sizing |
 
 > **Note**: "API only" means the labeler is fully implemented and tested in Rust, but NOT yet
 > integrated into `export_dataset` CLI. Use the Rust API directly or wait for export integration.
 > See [docs/LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md) for detailed documentation.
+
+### LabelingStrategy Enum (TOML `strategy` field)
+
+The `LabelingStrategy` enum controls which labeling method is used during export:
+
+```rust
+pub enum LabelingStrategy {
+    Tlob,           // Default: smoothed average trend labels
+    Opportunity,    // Peak return based big-move detection
+    TripleBarrier,  // Trade outcome based on profit/stop barriers
+}
+```
+
+**TOML usage**: `strategy = "tlob"`, `strategy = "opportunity"`, `strategy = "triple_barrier"`
+
+### LabelEncoding (Unified Validation Contract)
+
+The `LabelEncoding` enum defines the expected label range and class names for each strategy,
+serving as the single source of truth for label validation across the entire export pipeline:
+
+```rust
+pub enum LabelEncoding {
+    SignedTrend,              // TLOB/Multi-horizon: {-1=Down, 0=Stable, 1=Up}
+    SignedOpportunity,        // Opportunity: {-1=BigDown, 0=NoOpportunity, 1=BigUp}
+    TripleBarrierClassIndex,  // Triple Barrier: {0=StopLoss, 1=Timeout, 2=ProfitTarget}
+}
+
+impl LabelEncoding {
+    pub fn valid_range(&self) -> (i8, i8);           // (-1,1) or (0,2)
+    pub fn num_classes(&self) -> usize;              // Always 3
+    pub fn class_names(&self) -> Vec<&'static str>;  // Strategy-specific names
+    pub fn strategy_name(&self) -> &'static str;     // "TLOB", "Opportunity", "Triple Barrier"
+    pub fn expected_range_description(&self) -> String; // Human-readable for error messages
+}
+```
+
+All labeling strategies produce a `LabelingResult` struct (defined in `export_aligned/types.rs`),
+which is consumed by the unified `export_day_common()` pipeline. Each strategy function
+(`labeling_single_horizon_tlob`, `labeling_multi_horizon_tlob`, `labeling_opportunity`,
+`labeling_triple_barrier`) returns a `LabelingResult` containing label indices, label matrix,
+encoding, strategy metadata, and distribution. The common pipeline handles alignment,
+validation via `validate_label_alignment()` parameterized by `LabelEncoding`, normalization,
+NPY export, and metadata generation.
 
 ### TLOB Labeling Method
 
@@ -1018,37 +1209,77 @@ impl MultiHorizonLabels {
 
 ---
 
+## 8b. Pipeline Contract Constants (`contract.rs`)
+
+Single Rust-side source of truth for pipeline-wide constants. All values **must** match
+`contracts/pipeline_contract.toml` and are validated at `cargo test` time by
+`tests/contract_validation_test.rs` (11 golden tests).
+
+| Constant | Value | Source in TOML |
+|----------|-------|----------------|
+| `SCHEMA_VERSION` | `2.2` (f64) | `[contract].schema_version` |
+| `SCHEMA_VERSION_STR` | `"2.2"` | `[contract].schema_version` |
+| `STABLE_FEATURE_COUNT` | `98` | `[features].stable_count` |
+| `EXPERIMENTAL_FEATURE_COUNT` | `18` | `[features].experimental_count` |
+| `FULL_FEATURE_COUNT` | `116` | `[features].full_count` |
+| `LOB_LEVELS` | `10` | `[features].lob_levels` |
+| `SIGNAL_COUNT` | `14` | count of `[features.signals]` entries |
+| `CATEGORICAL_INDICES` | `[92, 93, 94, 97]` | `[features.categorical].indices` |
+| `FLOAT_CMP_EPS` | `1e-10` | Floating-point comparison threshold |
+| `DIVISION_GUARD_EPS` | `1e-8` | Division-by-zero guard for ratio features |
+
+**Two schema version systems exist (do NOT merge them):**
+
+1. `contract::SCHEMA_VERSION` = `2.2` (f64) -- the **pipeline contract** version, embedded at feature index 97, used in export metadata
+2. `schema::SCHEMA_VERSION` = `"1.0.0"` (str) -- the **feature definition** schema version, used only by paper presets in `schema/feature_def.rs`
+
+---
+
 ## 9. Export Pipeline
 
-### NumpyExporter
+### AlignedBatchExporter
+
+The production exporter for labeled datasets with perfect 1:1 sequence-label alignment.
+Located in `src/export_aligned/` as a modular directory with single-responsibility sub-modules.
+
+#### Module Architecture
+
+```
+export_aligned/
+  mod.rs            ← AlignedBatchExporter struct, builder, export_day() dispatch, export_day_common()
+  types.rs          ← LabelEncoding, NormalizationStrategy, NormalizationParams, AlignedDayExport, LabelingResult
+  metadata.rs       ← build_provenance(), build_normalization_metadata(), build_processing_metadata()
+  alignment.rs      ← generate_labels(), build_multi_horizon_label_matrix(), align_sequences_with_multi_labels()
+  validation.rs     ← verify_raw_spreads(), validate_label_alignment(), validate_class_balance()
+  normalization.rs  ← normalize_sequences(), compute_feature_statistics(), apply_normalization()
+  npy_export.rs     ← export_sequences(), export_labels(), export_multi_horizon_labels(), tensor format exports
+  strategies/       ← Per-strategy label generation (each returns LabelingResult)
+    tlob.rs         ← labeling_single_horizon_tlob(), labeling_multi_horizon_tlob()
+    opportunity.rs  ← labeling_opportunity(), build_opportunity_label_matrix()
+    triple_barrier.rs ← labeling_triple_barrier(), compute_daily_volatility(), build_triple_barrier_label_matrix()
+```
+
+#### Deduplication Pattern: LabelingResult
+
+All four labeling strategies (single-horizon TLOB, multi-horizon TLOB, opportunity, triple barrier)
+produce a `LabelingResult` struct, which the unified `export_day_common()` pipeline consumes:
 
 ```rust
-pub struct NumpyExporter {
-    output_dir: PathBuf,
-}
-
-impl NumpyExporter {
-    // Creates: features.npy, mid_prices.npy, metadata.json
-    pub fn export(&self, output: &PipelineOutput) -> Result<()>;
+pub(super) struct LabelingResult {
+    pub label_indices: Vec<usize>,            // Indices into mid_prices where labels exist
+    pub label_matrix: Vec<Vec<i8>>,           // Labels (single = Vec<[1]>, multi = Vec<[N_horizons]>)
+    pub encoding: LabelEncoding,              // Strategy-specific encoding for validation
+    pub strategy_name: String,                // "TLOB", "Opportunity", "Triple Barrier"
+    pub strategy_metadata: serde_json::Value, // Strategy-specific metadata for JSON export
+    pub distribution: serde_json::Value,      // Label class distribution
+    pub is_multi_horizon: bool,               // Controls 1D vs 2D label export
+    pub horizons_config: Option<serde_json::Value>, // Horizon config for {day}_horizons.json
 }
 ```
 
-### BatchExporter (⚠️ DEPRECATED)
+This pattern eliminated ~1000 lines of duplicated pipeline logic.
 
-> **⚠️ DEPRECATED**: Use `AlignedBatchExporter` instead. `BatchExporter` uses
-> `to_flat_features()` which causes 10x data inflation and label misalignment.
-
-```rust
-#[deprecated(since = "0.9.0", note = "Use AlignedBatchExporter")]
-pub struct BatchExporter {
-    output_dir: PathBuf,
-    label_config: Option<LabelConfig>,
-}
-```
-
-### AlignedBatchExporter (✅ RECOMMENDED)
-
-The correct exporter for labeled datasets with perfect 1:1 sequence-label alignment:
+#### Public API
 
 ```rust
 pub struct AlignedBatchExporter {
@@ -1057,69 +1288,134 @@ pub struct AlignedBatchExporter {
     window_size: usize,
     stride: usize,
     tensor_format: Option<TensorFormat>,
+    feature_mapping: Option<FeatureMapping>,
     multi_horizon_config: Option<MultiHorizonConfig>,
+    opportunity_configs: Option<Vec<OpportunityConfig>>,
+    triple_barrier_configs: Option<(Vec<TripleBarrierConfig>, Vec<usize>)>,
+    volatility_scaling: Option<(f64, f64, f64)>,  // (reference_vol, floor, cap)
+    normalization_config: NormalizationConfig,
+    config_hash: Option<String>,  // For provenance tracking
 }
 
 impl AlignedBatchExporter {
     pub fn new(output_dir: P, label_config: LabelConfig, window_size: usize, stride: usize) -> Self;
-    
+
     // Builder methods
     pub fn with_tensor_format(self, format: TensorFormat) -> Self;
+    pub fn with_feature_mapping(self, mapping: FeatureMapping) -> Self;
     pub fn with_multi_horizon_labels(self, config: MultiHorizonConfig) -> Self;
-    
-    // Creates: {day}_sequences.npy, {day}_labels.npy, {day}_metadata.json, {day}_normalization.json
+    pub fn with_opportunity_labels(self, configs: Vec<OpportunityConfig>) -> Self;
+    pub fn with_triple_barrier_labels(self, configs: Vec<TripleBarrierConfig>, horizons: Vec<usize>) -> Self;
+    pub fn with_volatility_scaling(self, reference_vol: f64, floor: f64, cap: f64) -> Self;
+    pub fn with_normalization(self, config: NormalizationConfig) -> Self;
+    pub fn with_config_hash(self, hash: String) -> Self;
+
+    // Inspection
+    pub fn normalization_config(&self) -> &NormalizationConfig;
+    pub fn is_opportunity_labeling(&self) -> bool;
+    pub fn is_triple_barrier_labeling(&self) -> bool;
+    pub fn is_multi_horizon(&self) -> bool;
+    pub fn is_tensor_formatted(&self) -> bool;
+    pub fn tensor_format(&self) -> Option<&TensorFormat>;
+    pub fn multi_horizon_config(&self) -> Option<&MultiHorizonConfig>;
+
+    // Export: creates {day}_sequences.npy, {day}_labels.npy, {day}_metadata.json, {day}_normalization.json
     // For multi-horizon: also creates {day}_horizons.json
     pub fn export_day(&self, day_name: &str, output: &PipelineOutput) -> Result<AlignedDayExport>;
 }
 ```
 
-### ExportLabelConfig (Multi-Horizon Support)
+### ExportLabelConfig (Multi-Strategy, Multi-Horizon)
 
-The `ExportLabelConfig` supports both single-horizon and multi-horizon label generation:
+The `ExportLabelConfig` supports all three labeling strategies with multi-horizon generation:
 
 ```rust
 pub struct ExportLabelConfig {
-    pub horizon: usize,                    // Single horizon (default: 200)
-    pub horizons: Option<Vec<usize>>,      // Multiple horizons (e.g., [10, 20, 50, 100, 200])
-    pub smoothing_window: usize,           // Smoothing window (default: 10)
+    // Strategy selection (Schema 2.3+)
+    pub strategy: LabelingStrategy,                     // tlob (default), opportunity, triple_barrier
+    pub conflict_priority: Option<ExportConflictPriority>, // For opportunity only
+
+    // Horizon configuration
+    pub horizon: usize,                    // Single horizon (default: 50)
+    pub horizons: Vec<usize>,             // Multiple horizons (alias: max_horizons for Triple Barrier)
+    pub smoothing_window: usize,           // Smoothing window size (default: 10)
+
+    // Threshold configuration
     pub threshold: f64,                    // Classification threshold (default: 0.0008)
+    pub threshold_strategy: Option<ExportThresholdStrategy>, // fixed, quantile, rolling_spread, tlob_dynamic
+
+    // Triple Barrier fields (Schema 2.4+, only when strategy = "triple_barrier")
+    pub profit_target_pct: Option<f64>,    // Upper barrier (e.g., 0.005 = 50 bps)
+    pub stop_loss_pct: Option<f64>,        // Lower barrier (e.g., 0.003 = 30 bps)
+    pub timeout_strategy: Option<ExportTimeoutStrategy>,
+    pub min_holding_period: Option<usize>,
+
+    // Per-horizon barrier overrides (Schema 3.2+)
+    pub profit_targets: Option<Vec<f64>>,  // Per-horizon profit targets
+    pub stop_losses: Option<Vec<f64>>,     // Per-horizon stop losses
+
+    // Volatility-adaptive scaling (Schema 3.3+)
+    pub volatility_scaling: Option<bool>,
+    pub volatility_reference: Option<f64>,
+    pub volatility_floor: Option<f64>,     // Default: 0.3
+    pub volatility_cap: Option<f64>,       // Default: 3.0
 }
 
 impl ExportLabelConfig {
-    // Check if multi-horizon mode is active
     pub fn is_multi_horizon(&self) -> bool;
-    
-    // Get effective horizons (either `horizons` or single `[horizon]`)
     pub fn effective_horizons(&self) -> Vec<usize>;
-    
-    // Get maximum horizon (for validation)
     pub fn max_horizon(&self) -> usize;
-    
-    // Convert to MultiHorizonConfig (for AlignedBatchExporter)
-    pub fn to_multi_horizon_config(&self) -> Option<MultiHorizonConfig>;
-    
+    pub fn is_volatility_scaling(&self) -> bool;
+    pub fn volatility_scaling_params(&self) -> Option<(f64, f64, f64)>;
+
     // Constructors
     pub fn single(horizon: usize, smoothing: usize, threshold: f64) -> Self;
     pub fn multi(horizons: Vec<usize>, smoothing: usize, threshold: f64) -> Self;
-    pub fn fi2010() -> Self;   // horizons: [10, 20, 30, 50, 100]
-    pub fn deeplob() -> Self;  // horizons: [10, 20, 50, 100]
+    pub fn fi2010() -> Self;
+    pub fn deeplob() -> Self;
+    pub fn triple_barrier(horizons: Vec<usize>, profit_targets: Vec<f64>, stop_losses: Vec<f64>) -> Self;
 }
 ```
 
 **TOML Configuration Examples:**
 
 ```toml
-# Single-horizon (backward compatible)
+# TLOB single-horizon (backward compatible)
 [labels]
 horizon = 200
 smoothing_window = 10
 threshold = 0.0008
 
-# Multi-horizon
+# TLOB multi-horizon
 [labels]
 horizons = [10, 20, 50, 100, 200]
 smoothing_window = 10
 threshold = 0.0008
+
+# Opportunity detection
+[labels]
+strategy = "opportunity"
+horizons = [50, 100, 200]
+threshold = 0.005
+conflict_priority = "larger_magnitude"
+
+# Triple Barrier with per-horizon barriers
+[labels]
+strategy = "triple_barrier"
+max_horizons = [50, 100, 200]
+profit_targets = [0.0028, 0.0039, 0.0059]
+stop_losses = [0.0019, 0.0026, 0.0040]
+
+# Triple Barrier with volatility-adaptive scaling
+[labels]
+strategy = "triple_barrier"
+max_horizons = [50, 100, 200]
+profit_targets = [0.0020, 0.0028, 0.0042]
+stop_losses = [0.0013, 0.0019, 0.0028]
+volatility_scaling = true
+volatility_reference = 0.00015
+volatility_floor = 0.3
+volatility_cap = 3.0
 ```
 
 **Output Shapes:**
@@ -1336,6 +1632,48 @@ def denormalize_prices(normalized, means, stds, levels=10):
         # Bid prices (20-29)
         result[:, :, 20 + level] = normalized[:, :, 20 + level] * stds[level] + means[level]
     return result
+```
+
+### Export Metadata Contract
+
+Every `{day}_metadata.json` now includes standardized fields enforced by the pipeline contract:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `schema_version` | string | Pipeline schema version (e.g., "2.2") |
+| `contract_version` | string | Same as schema_version |
+| `label_strategy` | string | "tlob", "opportunity", or "triple_barrier" |
+| `label_encoding` | object | Strategy-specific class name mapping |
+| `normalization` | object | Strategy, applied flag, params_file |
+| `provenance` | object | Git commit, dirty flag, extractor version, config hash |
+| `processing` | object | Messages processed, features extracted, sequences stats |
+| `export_timestamp` | string | ISO 8601 timestamp (UTC) |
+
+#### Provenance Block
+
+Embedded in every metadata JSON and `dataset_manifest.json`:
+
+```json
+{
+  "provenance": {
+    "extractor_version": "0.10.0",
+    "git_commit": "abc123def...",
+    "git_dirty": false,
+    "config_hash": "d41d8cd98f00...",
+    "contract_version": "2.2",
+    "export_timestamp_utc": "2026-03-06T12:00:00Z"
+  }
+}
+```
+
+The git hash and dirty status are captured at compile time via `build.rs`. The config hash is an MD5 digest of the serialized `DatasetConfig`, ensuring every exported dataset is traceable to its exact configuration.
+
+#### Build-Time Provenance (`build.rs`)
+
+```rust
+// Captured at compile time, available as:
+env!("GIT_COMMIT_HASH")  // Full SHA-1 hash
+env!("GIT_DIRTY")        // "true" or "false"
 ```
 
 ---
@@ -1705,7 +2043,7 @@ pub struct SamplingConfig {
     pub min_time_interval_ns: Option<u64>,
     pub event_count: Option<usize>,
     pub adaptive: Option<AdaptiveSamplingConfig>,
-    pub multiscale: Option<MultiScaleConfig>,
+    pub multiscale: Option<MultiScaleSamplingConfig>,
 }
 
 pub enum SamplingStrategy {
@@ -1925,56 +2263,73 @@ pub fn process<P: AsRef<Path>>(&mut self, path: P) -> Result<PipelineOutput> {
 
 ## 15. Testing Patterns
 
-### Unit Test Structure
+### Test Infrastructure
+
+#### Centralized Test Helpers (`tests/common/mod.rs`)
+
+All integration tests import shared constants and helpers:
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    // Helper to create realistic test LOB
-    fn create_test_lob_state() -> LobState {
-        let mut state = LobState::new(10);
-        // Set realistic prices and sizes
-        state.bid_prices[0] = 100_000_000_000;  // $100.00
-        state.ask_prices[0] = 100_010_000_000;  // $100.01
-        // ...
-        state
-    }
-    
-    #[test]
-    fn test_feature_count_consistency() {
-        let config = FeatureConfig::default();
-        let extractor = FeatureExtractor::with_config(config.clone());
-        let state = create_test_lob_state();
-        
-        let features = extractor.extract_lob_features(&state).unwrap();
-        assert_eq!(features.len(), config.feature_count());
-    }
-}
+pub const HOT_STORE_DIR: &str = "...";    // Hot store decompressed MBO files
+pub const COMPRESSED_DIR: &str = "...";    // Compressed .dbn.zst files
+pub const MBP10_DIR: &str = "...";         // MBP-10 files
+
+pub fn find_mbo_file(date: &str) -> Option<PathBuf>;  // Finds MBO file for YYYYMMDD
+pub fn has_test_data() -> bool;                         // Checks data directory exists
+
+macro_rules! skip_if_no_data { ... }  // Gracefully skips tests when data unavailable
 ```
 
-### Integration Test Pattern
+#### Unit Tests (729 tests, `cargo test --lib`)
 
-```rust
-#[test]
-fn test_full_pipeline() {
-    // 1. Create pipeline
-    let pipeline = Pipeline::from_config(PipelineConfig::default()).unwrap();
-    
-    // 2. Process messages
-    for msg in test_messages {
-        let lob_state = reconstructor.process_message(&msg).unwrap();
-        pipeline.process(&msg, &lob_state);
-    }
-    
-    // 3. Get output
-    let output = pipeline.finalize();
-    
-    // 4. Verify
-    assert!(output.sequences.len() > 0);
-    assert_eq!(output.sequences[0].features[0].len(), pipeline.config().features.feature_count());
-}
+Each module contains `#[cfg(test)] mod tests` with:
+- Formula validation against hand-calculated expected values
+- Edge cases: `0.0`, `NaN`, `Inf`, near-zero inputs
+- Shape/dimension assertions for feature vectors
+- Sign convention checks (positive = bullish, negative = bearish)
+
+#### Contract Validation (`tests/contract_validation_test.rs`)
+
+11 assertions verifying `src/contract.rs` constants match `contracts/pipeline_contract.toml`:
+- `SCHEMA_VERSION`, `STABLE_FEATURE_COUNT`, `SIGNAL_COUNT`
+- `CATEGORICAL_INDICES`, `LOB_LEVELS`
+- Feature group boundaries (LOB, derived, MBO, signal ranges)
+
+#### Real-Data Validation (`tests/phase3_real_data_validation.rs`)
+
+6 tests running against real NVIDIA MBO data (requires `data/` directory):
+
+| Test | What it validates |
+|------|-------------------|
+| `test_determinism_full_pipeline` | Two runs of the same day produce identical output (excluding known non-deterministic features) |
+| `test_feature_layout_validation` | Feature vector width matches `STABLE_FEATURE_COUNT`, all values finite |
+| `test_cross_day_state_isolation` | Processing day A then B gives same result for B as processing B alone |
+| `test_signal_spot_check` | Signal features have correct sign conventions and reasonable ranges |
+| `test_mbo_feature_statistics` | MBO features show non-trivial variance (excludes config-dependent zero features) |
+| `test_export_end_to_end` | Full export pipeline: .npy shapes, metadata JSON, no NaN/Inf, valid label ranges |
+
+#### Golden Snapshot Regression (`tests/golden_snapshot.rs`)
+
+- Fixture: `tests/fixtures/golden_feb3_100.json` (100 post-warmup feature vectors from Feb 3, 2025)
+- First run: generates fixture from live pipeline output
+- Subsequent runs: compares new output against fixture with tolerances
+- Deterministic features: `ABS_TOL = 1e-10`
+- Non-deterministic features (indices 70, 78-81, 83): `REL_TOL = 0.01` with warnings
+
+### Running Tests
+
+```bash
+# Unit tests only (no data required)
+cargo test --lib --features "parallel,databento"
+
+# All tests including integration (requires data/)
+cargo test --features "parallel,databento" -- --test-threads=4
+
+# Specific integration test
+cargo test --test phase3_real_data_validation --features "parallel,databento"
+
+# Golden snapshot regression
+cargo test --test golden_snapshot --features "parallel,databento"
 ```
 
 ---
@@ -2300,22 +2655,36 @@ assert!(config.validate().is_err()); // Error: requires 10 levels
 Signal indices are hardcoded for the 10-level layout. Non-10-level configurations
 with signals enabled will fail validation.
 
-### 7. Triple Barrier and Magnitude Export Not Integrated
+### 7. Magnitude Export Not Integrated
 
-These labelers are fully implemented and tested but NOT integrated into `export_dataset`:
-```rust
-// Can use directly in Rust code
-let config = TripleBarrierConfig::new(0.005, 0.003, 50);
-let mut labeler = TripleBarrierLabeler::new(config);
-labeler.add_prices(&prices);
-let labels = labeler.generate_labels()?;
+The `MagnitudeGenerator` (regression targets) is fully implemented and tested but NOT integrated
+into `export_dataset`. Use the Rust API directly.
 
-// CANNOT use via TOML config - will fall back to TLOB
-// [labels]
-// strategy = "triple_barrier"  # NOT SUPPORTED IN export_dataset
-```
+> **Note**: Triple Barrier labeling IS fully integrated into the export pipeline (Schema 2.4+),
+> including per-horizon barriers, volatility-adaptive scaling, and TOML configuration support.
 
 **Tracking**: See roadmap in [docs/LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md#roadmap).
+
+### 8. OrderTracker HashMap Non-Determinism
+
+**Root cause**: `OrderTracker` in `src/features/mbo_features/order_tracker.rs` uses `HashMap<u64, OrderInfo>` with Rust's default `RandomState` hasher. The hasher seed is randomized per process, causing iteration order to vary across runs. Features that aggregate over `HashMap` values (sums, means, counts) produce different results due to floating-point non-associativity.
+
+**Affected feature indices** (MBO block, offsets from MBO base index 48):
+
+| Index | Feature | Why non-deterministic |
+|-------|---------|----------------------|
+| 70 | `orders_per_level` | Aggregation over HashMap values |
+| 78 | `avg_order_age` | Mean computed over HashMap iteration |
+| 79 | `median_order_lifetime` | Order of collection from HashMap |
+| 80 | `avg_fill_ratio` | Mean over HashMap values |
+| 81 | `avg_time_to_first_fill` | Mean over HashMap values |
+| 83 | `active_order_count` | Count derived from HashMap state |
+
+**Impact**: Different f64 values across runs for the same input data. Differences are small (typically < 1e-6 relative) but fail strict bitwise equality.
+
+**Current workaround**: Tests in `phase3_real_data_validation.rs` and `golden_snapshot.rs` use a `KNOWN_NONDETERMINISTIC` array to exclude these indices from strict equality, applying relaxed tolerance (`REL_TOL = 0.01`) with logged warnings instead.
+
+**Fix plan**: Replace `HashMap<u64, OrderInfo>` with `BTreeMap<u64, OrderInfo>` (deterministic iteration order) or switch to `FxHashMap` with a fixed seed. This requires verifying no performance regression in the hot path, as `OrderTracker` processes every MBO event.
 
 ---
 
@@ -2330,6 +2699,7 @@ let labels = labeler.generate_labels()?;
 | +MBO | 76 | 40 + 36 |
 | +Derived +MBO | 84 | 40 + 8 + 36 |
 | +Derived +MBO +Signals | 98 | 40 + 8 + 36 + 14 |
+| +Experimental (all) | 116 | 98 + 8 + 6 + 4 |
 
 ### Key Defaults
 
@@ -2355,11 +2725,12 @@ use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig};
 // Specific components
 use feature_extractor::{
     features::{FeatureConfig, FeatureExtractor},
-    features::signals::{OfiComputer, OfiSample, TimeRegime, compute_signals, SIGNAL_COUNT},
+    features::signals::{OfiComputer, OfiSample, TimeRegime, compute_signals},
     sequence_builder::{SequenceBuilder, SequenceConfig, FeatureVec},
     preprocessing::{VolumeBasedSampler, Normalizer},
     labeling::{LabelConfig, TlobLabelGenerator, MultiHorizonConfig},
-    export::{NumpyExporter, BatchExporter},
+    export_aligned::{AlignedBatchExporter, NormalizationStrategy},
+    contract::{SCHEMA_VERSION, STABLE_FEATURE_COUNT, FULL_FEATURE_COUNT},
 };
 
 // Parallel processing (requires "parallel" feature)
@@ -2403,4 +2774,4 @@ data = report.to_dict()  # With version metadata
 
 ---
 
-*Last updated: January 25, 2026*
+*Last updated: March 6, 2026*
