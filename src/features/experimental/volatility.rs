@@ -222,7 +222,7 @@ impl VolatilityComputer {
 
                     // Update vol history and volatility snapshots periodically
                     // Using sample_count % 10 provides momentum over ~10 update intervals
-                    if self.sample_count % 10 == 0 {
+                    if self.sample_count.is_multiple_of(10) {
                         let new_vol = self.fast_window.std();
                         if new_vol > FLOAT_CMP_EPS {
                             self.vol_history.push(new_vol);

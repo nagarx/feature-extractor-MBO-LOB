@@ -192,7 +192,7 @@ impl MboAggregator {
 
         self.message_count += 1;
 
-        if self.message_count % 1000 == 0 {
+        if self.message_count.is_multiple_of(1000) {
             self.order_tracker.evict_old(event.timestamp);
         }
     }

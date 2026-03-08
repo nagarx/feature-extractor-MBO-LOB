@@ -382,7 +382,7 @@ impl AdaptiveVolumeThreshold {
         sorted_vols.sort_by(|a, b| a.total_cmp(b));
 
         // Calculate median volatility as baseline (robust to outliers)
-        let baseline = if sorted_vols.len() % 2 == 0 {
+        let baseline = if sorted_vols.len().is_multiple_of(2) {
             let mid = sorted_vols.len() / 2;
             (sorted_vols[mid - 1] + sorted_vols[mid]) / 2.0
         } else {
