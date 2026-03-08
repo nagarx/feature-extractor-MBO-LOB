@@ -23,7 +23,7 @@ use std::path::Path;
 const HOT_STORE_DIR: &str = "../data/hot_store";
 
 /// Compressed data directory (fallback if hot store unavailable)
-const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-01_to_2025-09-30";
+const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
 
 /// Information about which data source is being used
 #[derive(Debug, Clone, Copy)]

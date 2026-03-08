@@ -29,7 +29,7 @@ use std::path::Path;
 use std::time::Instant;
 
 /// Test data path - using Feb 10, 2025 (different from commonly used Feb 3)
-const TEST_DATA_PATH: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250210.mbo.dbn.zst";
+const TEST_DATA_PATH: &str = "../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250210.mbo.dbn.zst";
 
 /// Maximum messages to process (for reasonable test duration)
 const MAX_MESSAGES: usize = 500_000;

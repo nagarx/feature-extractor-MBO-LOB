@@ -9,7 +9,6 @@
 
 use feature_extractor::batch::{BatchConfig, BatchProcessor};
 use feature_extractor::builder::PipelineBuilder;
-use feature_extractor::features::signals;
 use std::path::Path;
 
 // Expected data directory (hot store - decompressed DBN files)
@@ -141,7 +140,7 @@ fn test_signal_values_in_expected_ranges() {
         .expect("Failed to process files");
 
     // Track signal statistics
-    let mut signal_stats = vec![(f64::MAX, f64::MIN, 0.0, 0u64); signals::SIGNAL_COUNT];
+    let mut signal_stats = vec![(f64::MAX, f64::MIN, 0.0, 0u64); feature_extractor::contract::SIGNAL_COUNT];
 
     // Collect statistics from all feature vectors
     for result in output.results.iter() {
@@ -259,12 +258,10 @@ fn test_signal_values_in_expected_ranges() {
                 assert!(min >= 0.0, "invalidity_delta negative: {}", min);
             }
             13 => {
-                // schema_version should be 2.1
+                let sv = feature_extractor::contract::SCHEMA_VERSION;
                 assert!(
-                    (min - 2.1).abs() < 0.001 && (max - 2.1).abs() < 0.001,
-                    "schema_version should be 2.1: [{}, {}]",
-                    min,
-                    max
+                    (min - sv).abs() < 0.001 && (max - sv).abs() < 0.001,
+                    "schema_version should be {sv}: [{min}, {max}]",
                 );
             }
             _ => {}

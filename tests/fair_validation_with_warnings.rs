@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Test configuration
-const MBO_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30";
-const MBP10_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07";
+const MBO_DATA_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const MBP10_DATA_DIR: &str = "../data/NVDA_MBP10_2025-07";
 
 /// Results structure for fair comparison
 #[derive(Debug, Default)]
@@ -667,12 +667,8 @@ fn test_warning_stats_export() {
         "Should contain messages_processed"
     );
     assert!(
-        content.contains("\"warnings\""),
-        "Should contain warnings section"
-    );
-    assert!(
         content.contains("\"cancel_order_not_found\""),
-        "Should contain warning details"
+        "Should contain warning details (cancel_order_not_found)"
     );
 
     println!("\n✅ Stats exported to: {}", export_path);

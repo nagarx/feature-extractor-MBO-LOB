@@ -16,7 +16,6 @@
 
 use feature_extractor::batch::{BatchConfig, BatchProcessor};
 use feature_extractor::builder::PipelineBuilder;
-use feature_extractor::features::signals;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -51,14 +50,14 @@ fn get_test_files() -> Vec<String> {
 /// Collect all signal vectors from batch output
 fn collect_all_signals(
     output: &feature_extractor::batch::BatchOutput,
-) -> Vec<[f64; signals::SIGNAL_COUNT]> {
+) -> Vec<[f64; feature_extractor::contract::SIGNAL_COUNT]> {
     let mut all_signals = Vec::new();
 
     for result in output.results.iter() {
         for seq in result.output.sequences.iter() {
             for feat_vec in seq.features.iter() {
                 if feat_vec.len() >= 98 {
-                    let mut signals = [0.0; signals::SIGNAL_COUNT];
+                    let mut signals = [0.0; feature_extractor::contract::SIGNAL_COUNT];
                     for (i, &val) in feat_vec[84..98].iter().enumerate() {
                         signals[i] = val;
                     }
@@ -259,7 +258,7 @@ fn test_02_signal_bounds() {
         (Some(0.0), Some(1.0)),        // mbo_ready: {0, 1}
         (Some(0.0), None),             // dt_seconds: [0, ∞)
         (Some(0.0), None),             // invalidity_delta: [0, ∞)
-        (Some(2.1), Some(2.1)),        // schema_version: exactly 2.1
+        (Some(feature_extractor::contract::SCHEMA_VERSION), Some(feature_extractor::contract::SCHEMA_VERSION)),        // schema_version: must match contract
     ];
 
     println!("{:<25} {:>12} {:>12} {:>12} {:>12}", "Signal", "Min", "Max", "Mean", "StdDev");
@@ -644,18 +643,20 @@ fn test_07_schema_version() {
 
     for (i, signals) in all_signals.iter().enumerate() {
         let version = signals[13]; // schema_version at index 13
-        if (version - 2.1).abs() > 0.001 {
-            eprintln!("Sample {} has schema_version = {}", i, version);
+        let expected = feature_extractor::contract::SCHEMA_VERSION;
+        if (version - expected).abs() > 0.001 {
+            eprintln!("Sample {} has schema_version = {}, expected {}", i, version, expected);
             all_version_2 = false;
         }
     }
 
+    let expected = feature_extractor::contract::SCHEMA_VERSION;
     println!("Schema Version Check:");
-    println!("  Expected: 2.1");
+    println!("  Expected: {}", expected);
     println!("  Samples checked: {}", all_signals.len());
-    println!("  All v2.1: {}", if all_version_2 { "✓" } else { "✗" });
+    println!("  All match: {}", if all_version_2 { "pass" } else { "FAIL" });
 
-    assert!(all_version_2, "All samples must have schema_version = 2.1");
+    assert!(all_version_2, "All samples must have schema_version = {}", expected);
 
     println!("\n✅ PASSED: Schema version validated");
 }

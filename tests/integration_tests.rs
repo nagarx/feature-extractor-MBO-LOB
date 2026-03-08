@@ -32,7 +32,7 @@ use std::time::Instant;
 
 /// Path to NVIDIA MBO data
 const NVDA_DATA_DIR: &str =
-    "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30";
+    "../data/NVDA_2025-02-03_to_2026-01-07";
 
 /// Get path to a specific day's data file
 fn get_data_file(date: &str) -> String {

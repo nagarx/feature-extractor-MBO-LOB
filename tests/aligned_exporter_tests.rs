@@ -454,3 +454,90 @@ fn test_normalization_params_save_load() {
     // Cleanup
     std::fs::remove_dir_all(temp_dir).unwrap();
 }
+
+// ============================================================================
+// LabelEncoding Contract Tests
+// ============================================================================
+
+#[test]
+fn test_label_encoding_signed_trend_contract() {
+    let enc = LabelEncoding::SignedTrend;
+    assert_eq!(enc.valid_range(), (-1, 1));
+    assert_eq!(enc.num_classes(), 3);
+    assert_eq!(enc.class_names(), vec!["Down", "Stable", "Up"]);
+    assert_eq!(enc.strategy_name(), "TLOB");
+
+    let desc = enc.expected_range_description();
+    assert!(desc.contains("-1=Down"), "Expected '-1=Down' in: {desc}");
+    assert!(desc.contains("0=Stable"), "Expected '0=Stable' in: {desc}");
+    assert!(desc.contains("1=Up"), "Expected '1=Up' in: {desc}");
+}
+
+#[test]
+fn test_label_encoding_signed_opportunity_contract() {
+    let enc = LabelEncoding::SignedOpportunity;
+    assert_eq!(enc.valid_range(), (-1, 1));
+    assert_eq!(enc.num_classes(), 3);
+    assert_eq!(enc.class_names(), vec!["BigDown", "NoOpportunity", "BigUp"]);
+    assert_eq!(enc.strategy_name(), "Opportunity");
+}
+
+#[test]
+fn test_label_encoding_triple_barrier_contract() {
+    let enc = LabelEncoding::TripleBarrierClassIndex;
+    assert_eq!(enc.valid_range(), (0, 2));
+    assert_eq!(enc.num_classes(), 3);
+    assert_eq!(enc.class_names(), vec!["StopLoss", "Timeout", "ProfitTarget"]);
+    assert_eq!(enc.strategy_name(), "Triple Barrier");
+
+    let desc = enc.expected_range_description();
+    assert!(desc.contains("0=StopLoss"), "Expected '0=StopLoss' in: {desc}");
+    assert!(desc.contains("1=Timeout"), "Expected '1=Timeout' in: {desc}");
+    assert!(desc.contains("2=ProfitTarget"), "Expected '2=ProfitTarget' in: {desc}");
+}
+
+#[test]
+fn test_label_encoding_all_have_3_classes() {
+    let encodings = [
+        LabelEncoding::SignedTrend,
+        LabelEncoding::SignedOpportunity,
+        LabelEncoding::TripleBarrierClassIndex,
+    ];
+    for enc in &encodings {
+        assert_eq!(
+            enc.num_classes(),
+            3,
+            "{} should have 3 classes",
+            enc.strategy_name()
+        );
+        assert_eq!(
+            enc.class_names().len(),
+            3,
+            "{} should have 3 class names",
+            enc.strategy_name()
+        );
+    }
+}
+
+#[test]
+fn test_label_encoding_range_covers_all_classes() {
+    let encodings = [
+        LabelEncoding::SignedTrend,
+        LabelEncoding::SignedOpportunity,
+        LabelEncoding::TripleBarrierClassIndex,
+    ];
+    for enc in &encodings {
+        let (min, max) = enc.valid_range();
+        let span = (max - min + 1) as usize;
+        assert_eq!(
+            span,
+            enc.num_classes(),
+            "{}: range [{}, {}] spans {} values but num_classes={}",
+            enc.strategy_name(),
+            min,
+            max,
+            span,
+            enc.num_classes()
+        );
+    }
+}

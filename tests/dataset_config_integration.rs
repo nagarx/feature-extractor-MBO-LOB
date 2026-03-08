@@ -183,7 +183,7 @@ fn test_98_feature_export_with_real_data() {
 fn test_split_config() {
     let days: Vec<String> = (1..=20).map(|i| format!("2025-02-{:02}", i)).collect();
 
-    let split = feature_extractor::export::dataset_config::SplitConfig {
+    let split = feature_extractor::export::config::SplitConfig {
         train_ratio: 0.7,
         val_ratio: 0.15,
         test_ratio: 0.15,
@@ -497,7 +497,7 @@ fn test_full_config_toml_roundtrip() {
         tick_size = 0.01
 
         [data]
-        input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+        input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
         output_dir = "../data/exports/nvda_balanced"
         hot_store_dir = "../data/hot_store"
 

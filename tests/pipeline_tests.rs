@@ -501,7 +501,7 @@ fn test_zero_allocation_pipeline_correctness() {
 /// Test that multi-scale configuration works with Arc-based sharing.
 #[test]
 fn test_multiscale_arc_sharing_configuration() {
-    use feature_extractor::config::MultiScaleConfig;
+    use feature_extractor::config::MultiScaleSamplingConfig;
 
     let mut config = PipelineConfig::default();
     config.features.lob_levels = 10;
@@ -516,7 +516,7 @@ fn test_multiscale_arc_sharing_configuration() {
         volume_threshold: None,
         min_time_interval_ns: None,
         adaptive: None,
-        multiscale: Some(MultiScaleConfig {
+        multiscale: Some(MultiScaleSamplingConfig {
             enabled: true,
             fast_window: 10,
             medium_window: 20,

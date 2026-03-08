@@ -7,7 +7,7 @@
 //! 4. Different presets (TLOB, DeepLOB, LOBench) produce expected outputs
 //! 5. Metadata includes normalization configuration
 
-use feature_extractor::export::dataset_config::{FeatureNormStrategy, NormalizationConfig};
+use feature_extractor::export::config::{FeatureNormStrategy, NormalizationConfig};
 use feature_extractor::prelude::*;
 use std::sync::Arc;
 
