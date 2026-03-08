@@ -59,13 +59,13 @@ tick_size = 0.01
 
 [data]
 # Input: Raw MBO data (11 months: Feb 2025 - Jan 2026)
-input_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/NVDA_2025-02-03_to_2026-01-07"
+input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
 
 # Hot store: Pre-decompressed files for faster processing
-hot_store_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/hot_store"
+hot_store_dir = "../data/hot_store"
 
 # Output: Full 116-feature export for analysis
-output_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/exports/nvda_116feat_full_analysis"
+output_dir = "../data/exports/nvda_116feat_full_analysis"
 
 [dates]
 # Full date range: ~230 trading days
@@ -96,6 +96,12 @@ include_derived = true    # +8 features (mid_price, spread, imbalances)
 include_mbo = true        # +36 features (order flow, queue, institutional)
 include_signals = true    # +14 features (OFI, pressure, regime, gates)
 mbo_window_size = 1000    # Rolling window for MBO statistics
+
+# Queue tracking: enables accurate avg_queue_position and queue_size_ahead features
+# This adds memory overhead (~1MB per symbol) and ~10-20ns per event
+# Disabled by default for performance; enable when queue features are needed
+# NOTE: queue_tracking causes significant slowdown. Enable only when needed.
+include_queue_tracking = false
 
 # -----------------------------------------------------------------------------
 # EXPERIMENTAL FEATURES (indices 98-115)

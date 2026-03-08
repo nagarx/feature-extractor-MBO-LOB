@@ -36,9 +36,9 @@ filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
 tick_size = 0.01
 
 [data]
-input_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/NVDA_2025-02-03_to_2026-01-07"
-hot_store_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/hot_store"
-output_dir = "/Users/knight/code_local/HFT-pipeline-v2/data/exports/nvda_tlob_repo_v1"
+input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_tlob_repo_v1"
 
 [dates]
 start_date = "2025-02-03"

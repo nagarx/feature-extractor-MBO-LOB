@@ -1,0 +1,207 @@
+# =============================================================================
+# NVDA 11-Month Triple Barrier Dataset Configuration (VOLATILITY-SCALED)
+# =============================================================================
+#
+# Complete NVIDIA dataset: Feb 3, 2025 → Jan 7, 2026 (234 trading days)
+# with Triple Barrier labeling using VOLATILITY-ADAPTIVE barrier thresholds.
+#
+# Schema version: 3.3 (98 features, per-horizon Triple Barrier, vol-scaling)
+#
+# VOLATILITY SCALING METHODOLOGY
+# ===============================
+# Static barriers produce severely imbalanced classes across market regimes:
+#   - High-vol days (Feb 2025): ~55% Timeout, ~15% PT, ~30% SL
+#   - Low-vol days (Nov 2025):  ~95% Timeout, ~1% PT, ~4% SL
+#
+# Solution: Scale barriers per-day based on realized volatility:
+#   barrier_day = barrier_base * clamp(vol_day / vol_reference, floor, cap)
+#
+# This ensures every day produces roughly balanced class distributions
+# regardless of market regime.
+#
+# CALIBRATION DATA:
+#   - Reference volatility: 0.000659 (median of 164 training days)
+#   - Base barriers calibrated from training days near reference volatility
+#   - Scaling range: 0.3x - 3.0x (no days hit floor or cap)
+#   - Actual scaling range observed: 0.61x - 2.87x
+#
+# REGIME ANALYSIS:
+#   - Train (164 days): median vol = 6.59 bps/tick, median scale = 1.00x
+#   - Val   ( 35 days): median vol = 5.01 bps/tick, median scale = 0.76x
+#   - Test  ( 35 days): median vol = 5.45 bps/tick, median scale = 0.83x
+#
+# RESEARCH REFERENCE:
+# López de Prado, M. (2018). "Advances in Financial Machine Learning", Chapter 3.
+# Barriers should adapt to volatility for balanced class distributions.
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- \
+#       --config configs/nvda_11month_triple_barrier_volscaled.toml
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA 11-Month Triple Barrier Dataset (Volatility-Scaled)"
+description = "Full 234-day dataset with per-day volatility-adaptive Triple Barrier labeling"
+version = "3.3.0"
+tags = [
+    "nvda",
+    "98-features",
+    "triple-barrier",
+    "volatility-scaled",
+    "per-day-barriers",
+    "balanced-classes",
+    "production",
+]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+output_dir = "../data/exports/nvda_11month_triple_barrier_volscaled"
+hot_store_dir = "../data/hot_store"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-07"
+
+exclude_dates = [
+    "2025-01-20",  # MLK Day
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+    "2025-11-27",  # Thanksgiving
+    "2025-12-25",  # Christmas
+    "2026-01-01",  # New Year
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+# =============================================================================
+# VOLATILITY-SCALED TRIPLE BARRIER CONFIGURATION (Schema 3.3+)
+# =============================================================================
+#
+# Base barriers are calibrated from training days near the reference volatility.
+# Each day's barriers are scaled by: vol_day / vol_reference (clamped).
+#
+#     Price
+#       ▲  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  Upper Barrier (scaled per day)
+#       │                            ↑ barrier_base * scale
+#       │  ●─────────●───────────────●
+#       │  Entry    │                │  ← Price path
+#       │           │                │
+#       ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│  Lower Barrier (scaled per day)
+#                                    │     ↓ barrier_base * scale
+#                   │◄───────────────►│
+#                     max_horizon
+#
+# Example: A low-vol day (scale=0.76x) gets tighter barriers,
+# so price movements still trigger PT/SL hits at similar rates.
+
+[labels]
+strategy = "triple_barrier"
+
+# Horizons (vertical barriers) in ticks
+max_horizons = [50, 100, 200]
+
+# Global defaults (used as fallback)
+profit_target_pct = 0.002716
+stop_loss_pct = 0.001810
+
+# =============================================================================
+# BASE BARRIERS (before volatility scaling)
+# =============================================================================
+# Calibrated from training days near reference volatility.
+# These are the barriers that would be used on a "median volatility" day.
+#
+# Calibration command:
+#   python tools/calibrate_triple_barrier.py \
+#       --data-dir ../data/exports/nvda_11month_triple_barrier_calibrated \
+#       --horizons 50 100 200 --per-day \
+#       --target-pt-rate 0.30 --target-sl-rate 0.30 --risk-reward 1.5
+
+# Per-horizon base profit targets (basis points → decimal)
+# H50=27.2bps, H100=38.3bps, H200=55.7bps
+profit_targets = [0.002716, 0.003827, 0.005566]
+
+# Per-horizon base stop losses (basis points → decimal)
+# H50=18.1bps, H100=25.5bps, H200=37.1bps
+stop_losses = [0.001810, 0.002551, 0.003711]
+
+# =============================================================================
+# VOLATILITY SCALING PARAMETERS (Schema 3.3+)
+# =============================================================================
+# Barriers are scaled per-day: barrier_day = barrier_base * clamp(scale, floor, cap)
+# where scale = vol_day / vol_reference
+
+# Enable per-day volatility scaling
+volatility_scaling = true
+
+# Reference volatility: median daily realized vol across 164 training days
+# Computed as std(log_returns) per day, then median across days
+# Units: dimensionless (per-tick std of log returns)
+volatility_reference = 0.000659
+
+# Minimum scaling factor (prevents absurdly tight barriers on dead days)
+volatility_floor = 0.3
+
+# Maximum scaling factor (prevents absurdly wide barriers on crash days)
+volatility_cap = 3.0
+
+# Timeout = "don't trade" signal (safest for risk management)
+timeout_strategy = "label_as_timeout"
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = true
+
+# =============================================================================
+# EXPECTED OUTCOMES WITH VOLATILITY-SCALED BARRIERS
+# =============================================================================
+#
+# With per-day scaling, class distribution should be roughly consistent:
+#
+# | Split | Profit Target | Stop Loss | Timeout |
+# |-------|---------------|-----------|---------|
+# | Train | ~20-25%       | ~25-30%   | ~45-55% |
+# | Val   | ~20-25%       | ~25-30%   | ~45-55% |
+# | Test  | ~20-25%       | ~25-30%   | ~45-55% |
+#
+# Key improvement over static barriers:
+#   - Val/Test no longer dominated by Timeout (was 91-95%)
+#   - Model can learn meaningful patterns across all regimes
+#   - Class weights less critical (but focal loss still recommended)
+#
+# TRAINING RECOMMENDATION:
+#   - val_accuracy ~45-55% indicates genuine learning
+#   - val_profittarget_precision > 40% indicates useful predictions
+#   - All three classes should appear in predictions (not just Timeout)
+#
+# =============================================================================

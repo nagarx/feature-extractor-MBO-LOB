@@ -44,4 +44,5 @@ Thumbs.db
 # AI assistant working files
 CLAUDE.md
 RULE.md
+.claude/
 
