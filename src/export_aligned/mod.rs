@@ -21,18 +21,16 @@
 //! - Label corresponds to the prediction target for that sequence
 //! - Exported arrays have matching lengths: len(sequences) == len(labels)
 
-pub mod types;
 mod alignment;
 mod metadata;
 mod normalization;
 mod npy_export;
 mod strategies;
+pub mod types;
 mod validation;
 
-pub use types::{
-    AlignedDayExport, LabelEncoding, NormalizationParams, NormalizationStrategy,
-};
 use metadata::{build_normalization_metadata, build_processing_metadata, build_provenance};
+pub use types::{AlignedDayExport, LabelEncoding, NormalizationParams, NormalizationStrategy};
 
 use crate::export::config::NormalizationConfig;
 use crate::export::tensor_format::{FeatureMapping, TensorFormat};
@@ -76,7 +74,8 @@ pub struct AlignedBatchExporter {
     pub(super) multi_horizon_config: Option<MultiHorizonConfig>,
     pub(super) opportunity_configs: Option<Vec<OpportunityConfig>>,
     /// Tuple of (configs, horizons). López de Prado (2018), Chapter 3.
-    pub(super) triple_barrier_configs: Option<(Vec<crate::labeling::TripleBarrierConfig>, Vec<usize>)>,
+    pub(super) triple_barrier_configs:
+        Option<(Vec<crate::labeling::TripleBarrierConfig>, Vec<usize>)>,
     /// Volatility-adaptive scaling: (reference_volatility, floor, cap).
     pub(super) volatility_scaling: Option<(f64, f64, f64)>,
     pub(super) normalization_config: NormalizationConfig,
@@ -323,12 +322,7 @@ impl AlignedBatchExporter {
     /// * `reference_vol` - Reference volatility (median daily vol from calibration)
     /// * `floor` - Minimum scaling factor (e.g., 0.3)
     /// * `cap` - Maximum scaling factor (e.g., 3.0)
-    pub fn with_volatility_scaling(
-        mut self,
-        reference_vol: f64,
-        floor: f64,
-        cap: f64,
-    ) -> Self {
+    pub fn with_volatility_scaling(mut self, reference_vol: f64, floor: f64, cap: f64) -> Self {
         self.volatility_scaling = Some((reference_vol, floor, cap));
         self
     }
@@ -481,7 +475,10 @@ impl AlignedBatchExporter {
         }
 
         // Step 8: Export normalization params
-        norm_params.save_json(self.output_dir.join(format!("{day_name}_normalization.json")))?;
+        norm_params.save_json(
+            self.output_dir
+                .join(format!("{day_name}_normalization.json")),
+        )?;
 
         // Step 9: Build and export metadata
         let tensor_format_str = self.tensor_format.as_ref().map(|f| format!("{:?}", f));
@@ -524,8 +521,9 @@ impl AlignedBatchExporter {
         if let Some(horizons_config) = &labeling.horizons_config {
             let horizons_path = self.output_dir.join(format!("{day_name}_horizons.json"));
             let horizons_file = File::create(&horizons_path)?;
-            serde_json::to_writer_pretty(horizons_file, horizons_config)
-                .map_err(|e| std::io::Error::other(format!("Failed to write horizons config: {e}")))?;
+            serde_json::to_writer_pretty(horizons_file, horizons_config).map_err(|e| {
+                std::io::Error::other(format!("Failed to write horizons config: {e}"))
+            })?;
             println!("  💾 Exported horizons config: {}", horizons_path.display());
         }
 

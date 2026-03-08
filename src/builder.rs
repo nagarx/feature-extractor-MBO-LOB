@@ -75,8 +75,7 @@
 
 use crate::config::{
     AdaptiveSamplingConfig, ExperimentMetadata, MultiScaleSamplingConfig, PipelineConfig,
-    SamplingConfig,
-    SamplingStrategy,
+    SamplingConfig, SamplingStrategy,
 };
 use crate::features::FeatureConfig;
 use crate::pipeline::Pipeline;

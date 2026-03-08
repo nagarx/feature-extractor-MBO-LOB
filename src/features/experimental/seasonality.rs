@@ -118,8 +118,7 @@ impl SeasonalityComputer {
         // Compute minutes until close
         let minutes_until_close = if time_of_day_ns < market_close {
             ((market_close - time_of_day_ns) as f64 / 60_000_000_000.0)
-                .max(0.0)
-                .min(SESSION_DURATION_MINUTES)
+                .clamp(0.0, SESSION_DURATION_MINUTES)
         } else {
             0.0
         };
@@ -142,14 +141,14 @@ impl SeasonalityComputer {
         // Convert to approximate day of year
         let seconds_since_epoch = timestamp_ns / 1_000_000_000;
         let days_since_epoch = seconds_since_epoch / 86400;
-        
+
         // January 1, 1970 was a Thursday
         // Rough estimate of day of year (ignoring leap years for simplicity)
         let day_of_year = (days_since_epoch % 365) as u32;
 
         // DST roughly: March 10 (day ~70) to November 3 (day ~307)
         // This is approximate but sufficient for features
-        day_of_year >= 70 && day_of_year <= 307
+        (70..=307).contains(&day_of_year)
     }
 }
 
@@ -284,11 +283,7 @@ mod tests {
         let computer = SeasonalityComputer::new();
 
         // Test various timestamps
-        let timestamps = [
-            0u64,
-            1_000_000_000_000_000_000,
-            1_700_000_000_000_000_000,
-        ];
+        let timestamps = [0u64, 1_000_000_000_000_000_000, 1_700_000_000_000_000_000];
 
         for ts in timestamps {
             let mut output = Vec::new();

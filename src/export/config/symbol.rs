@@ -190,7 +190,7 @@ impl DataPathConfig {
 ///
 /// Supports both explicit date lists and date ranges.
 /// For ranges, weekends are automatically excluded.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DateRangeConfig {
     /// Start date (inclusive), format: YYYY-MM-DD
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -211,17 +211,6 @@ pub struct DateRangeConfig {
     /// Format: YYYY-MM-DD for each date.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_dates: Vec<String>,
-}
-
-impl Default for DateRangeConfig {
-    fn default() -> Self {
-        Self {
-            start_date: None,
-            end_date: None,
-            explicit_dates: None,
-            exclude_dates: Vec::new(),
-        }
-    }
 }
 
 impl DateRangeConfig {
@@ -311,9 +300,7 @@ impl DateRangeConfig {
 
     /// Validate the date configuration.
     pub fn validate(&self) -> Result<(), String> {
-        if self.explicit_dates.is_none()
-            && (self.start_date.is_none() || self.end_date.is_none())
-        {
+        if self.explicit_dates.is_none() && (self.start_date.is_none() || self.end_date.is_none()) {
             return Err(
                 "Either explicit_dates or both start_date and end_date must be provided"
                     .to_string(),

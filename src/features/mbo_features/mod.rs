@@ -356,8 +356,14 @@ mod tests {
         let mut aggregator = MboAggregator::new();
 
         for i in 0..10u64 {
-            let event =
-                MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(event);
         }
         for i in 10..15u64 {
@@ -396,8 +402,14 @@ mod tests {
         let mut aggregator = MboAggregator::new();
 
         for i in 0..5u64 {
-            let event =
-                MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(event);
         }
         for i in 5..15u64 {
@@ -414,7 +426,11 @@ mod tests {
 
         let lob = LobState::new(10);
         let features = aggregator.extract_features(&lob);
-        assert!(features[6] < 0.0, "More ask adds should be bearish, got {:.4}", features[6]);
+        assert!(
+            features[6] < 0.0,
+            "More ask adds should be bearish, got {:.4}",
+            features[6]
+        );
     }
 
     #[test]
@@ -457,7 +473,11 @@ mod tests {
 
         let lob = LobState::new(10);
         let features = aggregator.extract_features(&lob);
-        assert!(features[7] > 0.0, "More ask cancels should be bullish, got {:.4}", features[7]);
+        assert!(
+            features[7] > 0.0,
+            "More ask cancels should be bullish, got {:.4}",
+            features[7]
+        );
     }
 
     #[test]
@@ -500,7 +520,11 @@ mod tests {
 
         let lob = LobState::new(10);
         let features = aggregator.extract_features(&lob);
-        assert!(features[7] < 0.0, "More bid cancels should be bearish, got {:.4}", features[7]);
+        assert!(
+            features[7] < 0.0,
+            "More bid cancels should be bearish, got {:.4}",
+            features[7]
+        );
     }
 
     #[test]
@@ -590,7 +614,11 @@ mod tests {
 
         let lob = LobState::new(10);
         let features = aggregator.extract_features(&lob);
-        assert!(features[8] < 0.0, "More sell-initiated trades should be bearish, got {:.4}", features[8]);
+        assert!(
+            features[8] < 0.0,
+            "More sell-initiated trades should be bearish, got {:.4}",
+            features[8]
+        );
     }
 
     #[test]
@@ -598,8 +626,14 @@ mod tests {
         let mut aggregator = MboAggregator::new();
 
         for i in 0..10u64 {
-            let event =
-                MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(event);
         }
         for i in 10..20u64 {
@@ -662,9 +696,21 @@ mod tests {
 
         let lob = LobState::new(10);
         let features = aggregator.extract_features(&lob);
-        assert!(features[6].abs() < 0.01, "Balanced adds should be ~0, got {:.4}", features[6]);
-        assert!(features[7].abs() < 0.01, "Balanced cancels should be ~0, got {:.4}", features[7]);
-        assert!(features[8].abs() < 0.01, "Balanced trades should be ~0, got {:.4}", features[8]);
+        assert!(
+            features[6].abs() < 0.01,
+            "Balanced adds should be ~0, got {:.4}",
+            features[6]
+        );
+        assert!(
+            features[7].abs() < 0.01,
+            "Balanced cancels should be ~0, got {:.4}",
+            features[7]
+        );
+        assert!(
+            features[8].abs() < 0.01,
+            "Balanced trades should be ~0, got {:.4}",
+            features[8]
+        );
     }
 
     // Numerical stability
@@ -680,7 +726,11 @@ mod tests {
 
         let features = aggregator.extract_features(&LobState::new(10));
         let regime = features[11];
-        assert!(regime >= -10.0 && regime <= 10.0, "Should be clamped, got {}", regime);
+        assert!(
+            regime >= -10.0 && regime <= 10.0,
+            "Should be clamped, got {}",
+            regime
+        );
     }
 
     #[test]
@@ -688,7 +738,11 @@ mod tests {
         let mut aggregator = MboAggregator::new();
         let features = aggregator.extract_features(&LobState::new(10));
         let regime = features[11];
-        assert!(regime.abs() <= 10.0, "Empty should be bounded, got {}", regime);
+        assert!(
+            regime.abs() <= 10.0,
+            "Empty should be bounded, got {}",
+            regime
+        );
     }
 
     // cancel_to_add_ratio integration tests
@@ -697,8 +751,14 @@ mod tests {
         let mut aggregator = MboAggregator::new();
 
         for i in 0..10u64 {
-            let event =
-                MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(event);
         }
         for i in 0..5u64 {
@@ -738,7 +798,11 @@ mod tests {
         }
 
         let features = aggregator.extract_features(&LobState::new(10));
-        assert_eq!(features[34], 10.0, "Should be capped at 10.0, got {}", features[34]);
+        assert_eq!(
+            features[34], 10.0,
+            "Should be capped at 10.0, got {}",
+            features[34]
+        );
     }
 
     // median_order_lifetime integration
@@ -750,8 +814,14 @@ mod tests {
             let lifetime_ns = (i + 1) * 1_000_000_000;
             let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, i);
             aggregator.process_event(add);
-            let cancel =
-                MboEvent::new(lifetime_ns, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            let cancel = MboEvent::new(
+                lifetime_ns,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(cancel);
         }
 
@@ -780,7 +850,11 @@ mod tests {
         aggregator.process_event(event);
         let lob = LobState::new(10);
         let features = aggregator.extract_features(&lob);
-        assert!(features[20].abs() < 1e-10, "Single order should be at position 0, got {}", features[20]);
+        assert!(
+            features[20].abs() < 1e-10,
+            "Single order should be at position 0, got {}",
+            features[20]
+        );
     }
 
     #[test]
@@ -788,8 +862,14 @@ mod tests {
         let mut aggregator = MboAggregator::new().with_queue_tracking();
 
         for i in 1..=3u64 {
-            let event =
-                MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(event);
         }
 
@@ -869,8 +949,14 @@ mod tests {
         }
 
         let features = aggregator.extract_features(&lob);
-        assert!(features[20] > 0.0, "queue_position should be > 0 with tracking");
-        assert!(features[21] > 0.0, "volume_ahead should be > 0 with tracking");
+        assert!(
+            features[20] > 0.0,
+            "queue_position should be > 0 with tracking"
+        );
+        assert!(
+            features[21] > 0.0,
+            "volume_ahead should be > 0 with tracking"
+        );
     }
 
     // Completed order lifetime buffer bound test
@@ -882,14 +968,24 @@ mod tests {
             let lifetime_ns = (i + 1) * 1_000_000;
             let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, i);
             aggregator.process_event(add);
-            let cancel =
-                MboEvent::new(lifetime_ns, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            let cancel = MboEvent::new(
+                lifetime_ns,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(cancel);
         }
 
         let features = aggregator.extract_features(&LobState::new(10));
         let median = features[31];
-        assert!(median > 0.5 && median < 0.7, "Should be ~0.6s, got {}", median);
+        assert!(
+            median > 0.5 && median < 0.7,
+            "Should be ~0.6s, got {}",
+            median
+        );
     }
 
     // Fill ratio mixed outcomes
@@ -899,23 +995,26 @@ mod tests {
 
         let add1 = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
         aggregator.process_event(add1);
-        let cancel1 =
-            MboEvent::new(1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        let cancel1 = MboEvent::new(
+            1_000_000,
+            Action::Cancel,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            1,
+        );
         aggregator.process_event(cancel1);
 
         let add2 = MboEvent::new(2_000_000, Action::Add, Side::Ask, 100_000_000_000, 200, 2);
         aggregator.process_event(add2);
-        let fill2 =
-            MboEvent::new(3_000_000, Action::Trade, Side::Ask, 100_000_000_000, 200, 2);
+        let fill2 = MboEvent::new(3_000_000, Action::Trade, Side::Ask, 100_000_000_000, 200, 2);
         aggregator.process_event(fill2);
 
         let add3 = MboEvent::new(4_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, 3);
         aggregator.process_event(add3);
-        let fill3 =
-            MboEvent::new(5_000_000, Action::Trade, Side::Bid, 100_000_000_000, 50, 3);
+        let fill3 = MboEvent::new(5_000_000, Action::Trade, Side::Bid, 100_000_000_000, 50, 3);
         aggregator.process_event(fill3);
-        let cancel3 =
-            MboEvent::new(6_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 50, 3);
+        let cancel3 = MboEvent::new(6_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 50, 3);
         aggregator.process_event(cancel3);
 
         let features = aggregator.extract_features(&LobState::new(10));
@@ -933,7 +1032,14 @@ mod tests {
         let mut aggregator = MboAggregator::new();
 
         for i in 0..1100u64 {
-            let add = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let add = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(add);
         }
 
@@ -949,7 +1055,14 @@ mod tests {
         let new_timestamp = MAX_ORDER_AGE_NS + 1_000_000_000;
 
         for i in 0..1000u64 {
-            let add = MboEvent::new(old_timestamp, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let add = MboEvent::new(
+                old_timestamp,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             aggregator.process_event(add);
         }
 
@@ -964,7 +1077,14 @@ mod tests {
         let old_timestamp = 0u64;
         let new_timestamp = MAX_ORDER_AGE_NS + 1_000_000_000;
 
-        let add = MboEvent::new(old_timestamp, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
+        let add = MboEvent::new(
+            old_timestamp,
+            Action::Add,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            1,
+        );
         aggregator.process_event(add);
 
         for i in 2..(MAX_ORDER_TRACKER_SIZE as u64 + 2) {
@@ -977,10 +1097,7 @@ mod tests {
         aggregator.order_tracker.evict_old(new_timestamp);
 
         assert!(
-            !aggregator
-                .order_tracker
-                .completed_fill_ratios()
-                .is_empty()
+            !aggregator.order_tracker.completed_fill_ratios().is_empty()
                 || aggregator.order_tracker.active_count() < MAX_ORDER_TRACKER_SIZE,
             "Eviction should either record completed orders or reduce tracker size"
         );

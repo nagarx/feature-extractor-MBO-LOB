@@ -23,7 +23,11 @@ fn find_contract_toml() -> Option<String> {
 
 fn parse_toml() -> Option<toml::Value> {
     let content = find_contract_toml()?;
-    Some(content.parse::<toml::Value>().expect("Invalid TOML in pipeline_contract.toml"))
+    Some(
+        content
+            .parse::<toml::Value>()
+            .expect("Invalid TOML in pipeline_contract.toml"),
+    )
 }
 
 // =============================================================================
@@ -52,9 +56,11 @@ fn schema_version_matches_toml() {
     );
 
     assert_eq!(
-        contract::SCHEMA_VERSION_STR, toml_version,
+        contract::SCHEMA_VERSION_STR,
+        toml_version,
         "contract::SCHEMA_VERSION_STR ({}) != TOML [contract].schema_version ({})",
-        contract::SCHEMA_VERSION_STR, toml_version
+        contract::SCHEMA_VERSION_STR,
+        toml_version
     );
 }
 
@@ -74,9 +80,11 @@ fn stable_feature_count_matches_toml() {
         .expect("Missing [features].stable_count") as usize;
 
     assert_eq!(
-        contract::STABLE_FEATURE_COUNT, toml_val,
+        contract::STABLE_FEATURE_COUNT,
+        toml_val,
         "contract::STABLE_FEATURE_COUNT ({}) != TOML [features].stable_count ({})",
-        contract::STABLE_FEATURE_COUNT, toml_val
+        contract::STABLE_FEATURE_COUNT,
+        toml_val
     );
 }
 
@@ -92,9 +100,11 @@ fn experimental_feature_count_matches_toml() {
         .expect("Missing [features].experimental_count") as usize;
 
     assert_eq!(
-        contract::EXPERIMENTAL_FEATURE_COUNT, toml_val,
+        contract::EXPERIMENTAL_FEATURE_COUNT,
+        toml_val,
         "contract::EXPERIMENTAL_FEATURE_COUNT ({}) != TOML [features].experimental_count ({})",
-        contract::EXPERIMENTAL_FEATURE_COUNT, toml_val
+        contract::EXPERIMENTAL_FEATURE_COUNT,
+        toml_val
     );
 }
 
@@ -110,9 +120,11 @@ fn full_feature_count_matches_toml() {
         .expect("Missing [features].full_count") as usize;
 
     assert_eq!(
-        contract::FULL_FEATURE_COUNT, toml_val,
+        contract::FULL_FEATURE_COUNT,
+        toml_val,
         "contract::FULL_FEATURE_COUNT ({}) != TOML [features].full_count ({})",
-        contract::FULL_FEATURE_COUNT, toml_val
+        contract::FULL_FEATURE_COUNT,
+        toml_val
     );
 
     assert_eq!(
@@ -137,9 +149,11 @@ fn lob_levels_matches_toml() {
         .expect("Missing [features].lob_levels") as usize;
 
     assert_eq!(
-        contract::LOB_LEVELS, toml_val,
+        contract::LOB_LEVELS,
+        toml_val,
         "contract::LOB_LEVELS ({}) != TOML [features].lob_levels ({})",
-        contract::LOB_LEVELS, toml_val
+        contract::LOB_LEVELS,
+        toml_val
     );
 }
 
@@ -186,9 +200,11 @@ fn categorical_indices_match_toml() {
         .collect();
 
     assert_eq!(
-        contract::CATEGORICAL_INDICES, &toml_indices[..],
+        contract::CATEGORICAL_INDICES,
+        &toml_indices[..],
         "contract::CATEGORICAL_INDICES ({:?}) != TOML [features.categorical].indices ({:?})",
-        contract::CATEGORICAL_INDICES, toml_indices
+        contract::CATEGORICAL_INDICES,
+        toml_indices
     );
 }
 
@@ -208,7 +224,11 @@ fn signal_index_spot_checks() {
         .expect("Missing [features.signals] table");
 
     let true_ofi = signals["true_ofi"].as_integer().unwrap() as usize;
-    assert_eq!(true_ofi, 84, "TOML true_ofi index should be 84, got {}", true_ofi);
+    assert_eq!(
+        true_ofi, 84,
+        "TOML true_ofi index should be 84, got {}",
+        true_ofi
+    );
 
     let schema_version_idx = signals["schema_version"].as_integer().unwrap() as usize;
     assert_eq!(
@@ -231,10 +251,18 @@ fn derived_feature_index_spot_checks() {
 
     let derived = &toml["features"]["derived"];
     let mid_price = derived["mid_price"].as_integer().unwrap() as usize;
-    assert_eq!(mid_price, 40, "TOML mid_price should be at index 40, got {}", mid_price);
+    assert_eq!(
+        mid_price, 40,
+        "TOML mid_price should be at index 40, got {}",
+        mid_price
+    );
 
     let spread = derived["spread"].as_integer().unwrap() as usize;
-    assert_eq!(spread, 41, "TOML spread should be at index 41, got {}", spread);
+    assert_eq!(
+        spread, 41,
+        "TOML spread should be at index 41, got {}",
+        spread
+    );
 }
 
 #[test]
@@ -286,8 +314,10 @@ fn lob_layout_consistency() {
     );
 
     assert_eq!(
-        ask_prices_count, contract::LOB_LEVELS,
+        ask_prices_count,
+        contract::LOB_LEVELS,
         "LOB group count ({}) should equal LOB_LEVELS ({})",
-        ask_prices_count, contract::LOB_LEVELS
+        ask_prices_count,
+        contract::LOB_LEVELS
     );
 }

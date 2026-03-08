@@ -682,9 +682,9 @@ impl Pipeline {
                     let stats = lob.stats();
                     let current_crossed = stats.crossed_quotes;
                     let current_locked = stats.locked_quotes;
-                    let invalidity_delta =
-                        (current_crossed.saturating_sub(last_crossed_count) as u32)
-                            + (current_locked.saturating_sub(last_locked_count) as u32);
+                    let invalidity_delta = (current_crossed.saturating_sub(last_crossed_count)
+                        as u32)
+                        + (current_locked.saturating_sub(last_locked_count) as u32);
                     last_crossed_count = current_crossed;
                     last_locked_count = current_locked;
 
@@ -726,7 +726,7 @@ impl Pipeline {
                 } else if let Err(e) = self.sequence_builder.push_arc(ts, features) {
                     log::error!("Sequence builder push failed: {}", e);
                 } else if let Some(seq) = self.sequence_builder.try_build_sequence() {
-                        accumulated_sequences.push(seq);
+                    accumulated_sequences.push(seq);
                 }
 
                 if let Some(mid) = lob_state.mid_price() {

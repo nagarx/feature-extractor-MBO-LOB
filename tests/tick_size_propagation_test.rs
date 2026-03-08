@@ -54,16 +54,16 @@ verbose = false
 
     // Parse the config
     let config: DatasetConfig = toml::from_str(toml_content).expect("Failed to parse TOML");
-    
+
     // Verify the symbol config has the custom tick_size
     assert_eq!(
         config.symbol.tick_size, 0.001,
         "SymbolConfig should have tick_size = 0.001"
     );
-    
+
     // Convert to PipelineConfig
     let pipeline_config = config.to_pipeline_config();
-    
+
     // THE BUG: tick_size in FeatureConfig should be 0.001, not 0.01
     assert_eq!(
         pipeline_config.features.tick_size, 0.001,
@@ -122,15 +122,15 @@ verbose = false
 "#;
 
     let config: DatasetConfig = toml::from_str(toml_content).expect("Failed to parse TOML");
-    
+
     // Default should be 0.01
     assert_eq!(
         config.symbol.tick_size, 0.01,
         "Default tick_size should be 0.01"
     );
-    
+
     let pipeline_config = config.to_pipeline_config();
-    
+
     // Should propagate the default
     assert_eq!(
         pipeline_config.features.tick_size, 0.01,
@@ -148,9 +148,10 @@ fn test_tick_size_various_values() {
         (1.0, "Futures (whole units)"),
         (0.05, "Some ETFs"),
     ];
-    
+
     for (tick_size, description) in test_cases {
-        let toml_content = format!(r#"
+        let toml_content = format!(
+            r#"
 [symbol]
 name = "TEST"
 exchange = "TEST"
@@ -192,19 +193,22 @@ test_pct = 0.15
 [processing]
 num_threads = 4
 verbose = false
-"#, tick_size);
-        
+"#,
+            tick_size
+        );
+
         let config: DatasetConfig = toml::from_str(&toml_content)
             .expect(&format!("Failed to parse TOML for {}", description));
-        
+
         let pipeline_config = config.to_pipeline_config();
-        
+
         assert!(
             (pipeline_config.features.tick_size - tick_size).abs() < 1e-10,
             "For {}: Expected tick_size = {}, got {}. \
              tick_size is not being propagated from SymbolConfig!",
-            description, tick_size, pipeline_config.features.tick_size
+            description,
+            tick_size,
+            pipeline_config.features.tick_size
         );
     }
 }
-

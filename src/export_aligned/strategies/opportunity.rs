@@ -7,6 +7,8 @@ use crate::pipeline::PipelineOutput;
 use mbo_lob_reconstructor::Result;
 use std::collections::HashMap;
 
+type LabelMatrix = (Vec<usize>, Vec<Vec<i8>>, HashMap<String, usize>);
+
 impl AlignedBatchExporter {
     /// Opportunity-based labeling strategy.
     pub(crate) fn labeling_opportunity(
@@ -98,7 +100,7 @@ impl AlignedBatchExporter {
     /// Build label matrix for opportunity labeling.
     fn build_opportunity_label_matrix(
         all_labels: &[Vec<(usize, OpportunityLabel, f64, f64)>],
-    ) -> Result<(Vec<usize>, Vec<Vec<i8>>, HashMap<String, usize>)> {
+    ) -> Result<LabelMatrix> {
         use std::collections::BTreeSet;
 
         let mut valid_indices: Option<BTreeSet<usize>> = None;
@@ -140,9 +142,7 @@ impl AlignedBatchExporter {
         for &idx in &valid_indices {
             let mut row = Vec::with_capacity(all_labels.len());
             for lookup in &horizon_lookups {
-                let label = lookup
-                    .get(&idx)
-                    .unwrap_or(&OpportunityLabel::NoOpportunity);
+                let label = lookup.get(&idx).unwrap_or(&OpportunityLabel::NoOpportunity);
                 row.push(label.as_int());
                 *dist.entry(label.name().to_string()).or_insert(0) += 1;
             }

@@ -123,8 +123,12 @@ impl FeatureNormStrategy {
             Self::GlobalZScore => "Global Z-score: shared mean/std across all features",
             Self::MarketStructure => "Market-structure preserving (ask/bid level sharing)",
             Self::PercentageChange => "Percentage change: (x - ref) / ref",
-            Self::MinMax => "Min-max scaling to [0, 1] (NOT FULLY IMPLEMENTED - uses Z-score fallback)",
-            Self::Bilinear => "Bilinear: (price - mid) / (k * tick) (NOT FULLY IMPLEMENTED - uses approximation)",
+            Self::MinMax => {
+                "Min-max scaling to [0, 1] (NOT FULLY IMPLEMENTED - uses Z-score fallback)"
+            }
+            Self::Bilinear => {
+                "Bilinear: (price - mid) / (k * tick) (NOT FULLY IMPLEMENTED - uses approximation)"
+            }
         }
     }
 
@@ -519,7 +523,10 @@ mod tests {
         assert_eq!(config.derived, FeatureNormStrategy::None);
         assert_eq!(config.mbo, FeatureNormStrategy::None);
         assert_eq!(config.signals, FeatureNormStrategy::None);
-        assert!(!config.any_normalization(), "raw() should not apply any normalization");
+        assert!(
+            !config.any_normalization(),
+            "raw() should not apply any normalization"
+        );
     }
 
     #[test]
@@ -593,8 +600,7 @@ mod tests {
 
     #[test]
     fn test_normalization_config_any_normalization_true() {
-        let config = NormalizationConfig::raw()
-            .with_derived(FeatureNormStrategy::ZScore);
+        let config = NormalizationConfig::raw().with_derived(FeatureNormStrategy::ZScore);
         assert!(config.any_normalization());
     }
 
@@ -628,7 +634,9 @@ mod tests {
         config.bilinear_scale_factor = 0.0;
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("bilinear_scale_factor must be > 0"));
+        assert!(result
+            .unwrap_err()
+            .contains("bilinear_scale_factor must be > 0"));
     }
 
     #[test]
@@ -637,7 +645,9 @@ mod tests {
         config.reference_price = "invalid_reference".to_string();
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("reference_price must be one of"));
+        assert!(result
+            .unwrap_err()
+            .contains("reference_price must be one of"));
     }
 
     #[test]
@@ -791,8 +801,8 @@ bilinear_scale_factor = 75.0
 
         for strat in strategies {
             let config = NormalizationConfig::raw().with_lob_prices(strat.clone());
-            let toml_str = toml::to_string(&config)
-                .expect(&format!("Should serialize strategy {:?}", strat));
+            let toml_str =
+                toml::to_string(&config).expect(&format!("Should serialize strategy {:?}", strat));
             let _loaded: NormalizationConfig = toml::from_str(&toml_str)
                 .expect(&format!("Should deserialize strategy {:?}", strat));
         }

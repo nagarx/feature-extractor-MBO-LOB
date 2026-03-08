@@ -204,14 +204,17 @@ fn test_opportunity_generator_conflict_strategies() {
     ];
 
     // Test LargerMagnitude strategy
-    let config = OpportunityConfig::new(5, 0.05)
-        .with_conflict_priority(ConflictPriority::LargerMagnitude);
+    let config =
+        OpportunityConfig::new(5, 0.05).with_conflict_priority(ConflictPriority::LargerMagnitude);
     let mut gen = OpportunityLabelGenerator::new(config);
     gen.add_prices(&prices);
     let labels = gen.generate_labels().unwrap();
     let (_, label, _, _) = &labels[0];
     // Both have same magnitude (10%), so should pick one (implementation-dependent)
-    assert!(label.is_opportunity(), "Should resolve conflict to an opportunity");
+    assert!(
+        label.is_opportunity(),
+        "Should resolve conflict to an opportunity"
+    );
 
     // Test UpPriority strategy
     let config =
@@ -303,8 +306,14 @@ fn test_opportunity_stats_analysis() {
     // Verify peak returns are finite and sensible
     assert!(stats.peak_max_return.is_finite());
     assert!(stats.peak_min_return.is_finite());
-    assert!(stats.peak_max_return >= 0.0, "Peak max return should be >= 0");
-    assert!(stats.peak_min_return <= 0.0, "Peak min return should be <= 0");
+    assert!(
+        stats.peak_max_return >= 0.0,
+        "Peak max return should be >= 0"
+    );
+    assert!(
+        stats.peak_min_return <= 0.0,
+        "Peak min return should be <= 0"
+    );
 }
 
 #[test]
@@ -432,7 +441,11 @@ fn test_edge_case_minimum_prices() {
 
     let labels = generator.generate_labels().unwrap();
     // Should generate exactly 1 label (for t=0)
-    assert_eq!(labels.len(), 1, "Should generate exactly one label with minimum prices");
+    assert_eq!(
+        labels.len(),
+        1,
+        "Should generate exactly one label with minimum prices"
+    );
 }
 
 #[test]
@@ -448,14 +461,8 @@ fn test_numerical_stability() {
     for (_, _, max_ret, min_ret) in &labels {
         assert!(!max_ret.is_nan(), "NaN in max_return with small prices");
         assert!(!min_ret.is_nan(), "NaN in min_return with small prices");
-        assert!(
-            max_ret.is_finite(),
-            "Infinite max_return with small prices"
-        );
-        assert!(
-            min_ret.is_finite(),
-            "Infinite min_return with small prices"
-        );
+        assert!(max_ret.is_finite(), "Infinite max_return with small prices");
+        assert!(min_ret.is_finite(), "Infinite min_return with small prices");
     }
 
     // Large prices
@@ -466,14 +473,7 @@ fn test_numerical_stability() {
     for (_, _, max_ret, min_ret) in &labels {
         assert!(!max_ret.is_nan(), "NaN in max_return with large prices");
         assert!(!min_ret.is_nan(), "NaN in min_return with large prices");
-        assert!(
-            max_ret.is_finite(),
-            "Infinite max_return with large prices"
-        );
-        assert!(
-            min_ret.is_finite(),
-            "Infinite min_return with large prices"
-        );
+        assert!(max_ret.is_finite(), "Infinite max_return with large prices");
+        assert!(min_ret.is_finite(), "Infinite min_return with large prices");
     }
 }
-

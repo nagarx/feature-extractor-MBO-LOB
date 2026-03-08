@@ -120,7 +120,7 @@ fn estimate_et_offset(timestamp_ns: i64) -> i64 {
     let day_of_year = (days_since_epoch % 365) as i32;
 
     // DST in US: roughly March 10 (day ~70) to November 3 (day ~307)
-    if day_of_year >= 70 && day_of_year < 307 {
+    if (70..307).contains(&day_of_year) {
         ET_OFFSET_DST_NS
     } else {
         ET_OFFSET_STANDARD_NS
@@ -206,30 +206,48 @@ mod tests {
         // February 3, 2025 at 14:30:00 UTC
         // Standard time: UTC 14:30 - 5 hours = ET 09:30 (market open)
         let feb_3_2025_1430_utc_ns: i64 = 1738679400 * NS_PER_SECOND;
-        assert_eq!(compute_time_regime(feb_3_2025_1430_utc_ns), TimeRegime::Open);
+        assert_eq!(
+            compute_time_regime(feb_3_2025_1430_utc_ns),
+            TimeRegime::Open
+        );
 
         // +15 min -> ET 09:45 (Early)
         let feb_3_2025_1445_utc_ns = feb_3_2025_1430_utc_ns + 15 * 60 * NS_PER_SECOND;
-        assert_eq!(compute_time_regime(feb_3_2025_1445_utc_ns), TimeRegime::Early);
+        assert_eq!(
+            compute_time_regime(feb_3_2025_1445_utc_ns),
+            TimeRegime::Early
+        );
 
         // +1 hour -> ET 10:30 (Midday)
         let feb_3_2025_1530_utc_ns = feb_3_2025_1430_utc_ns + 60 * 60 * NS_PER_SECOND;
-        assert_eq!(compute_time_regime(feb_3_2025_1530_utc_ns), TimeRegime::Midday);
+        assert_eq!(
+            compute_time_regime(feb_3_2025_1530_utc_ns),
+            TimeRegime::Midday
+        );
 
         // +6 hours -> ET 15:30 (Close)
         let feb_3_2025_2030_utc_ns = feb_3_2025_1430_utc_ns + 6 * 60 * 60 * NS_PER_SECOND;
-        assert_eq!(compute_time_regime(feb_3_2025_2030_utc_ns), TimeRegime::Close);
+        assert_eq!(
+            compute_time_regime(feb_3_2025_2030_utc_ns),
+            TimeRegime::Close
+        );
     }
 
     #[test]
     fn test_compute_time_regime_dst_summer() {
         // July 1, 2025 at 13:30:00 UTC (DST: UTC 13:30 - 4 hours = ET 09:30)
         let july_1_2025_1330_utc_ns: i64 = 1751376600 * NS_PER_SECOND;
-        assert_eq!(compute_time_regime(july_1_2025_1330_utc_ns), TimeRegime::Open);
+        assert_eq!(
+            compute_time_regime(july_1_2025_1330_utc_ns),
+            TimeRegime::Open
+        );
 
         // +15 min -> ET 09:45 (Early)
         let july_1_2025_1345_utc_ns = july_1_2025_1330_utc_ns + 15 * 60 * NS_PER_SECOND;
-        assert_eq!(compute_time_regime(july_1_2025_1345_utc_ns), TimeRegime::Early);
+        assert_eq!(
+            compute_time_regime(july_1_2025_1345_utc_ns),
+            TimeRegime::Early
+        );
     }
 
     #[test]

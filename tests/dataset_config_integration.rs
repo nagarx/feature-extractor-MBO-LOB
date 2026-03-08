@@ -15,10 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// Test directory path for hot store data
-const HOT_STORE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../data/hot_store"
-);
+const HOT_STORE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/hot_store");
 
 fn hot_store_exists() -> bool {
     Path::new(HOT_STORE_PATH).exists()
@@ -28,7 +25,11 @@ fn hot_store_exists() -> bool {
 fn test_dataset_config_feature_counts() {
     // Test that feature counts are computed correctly
     let config_40 = FeatureSetConfig::raw_lob();
-    assert_eq!(config_40.feature_count(), 40, "Raw LOB should have 40 features");
+    assert_eq!(
+        config_40.feature_count(),
+        40,
+        "Raw LOB should have 40 features"
+    );
 
     let config_84 = FeatureSetConfig::baseline();
     assert_eq!(
@@ -168,11 +169,7 @@ fn test_98_feature_export_with_real_data() {
     for day_result in &output.results {
         let features = day_result.output.to_flat_features();
         if !features.is_empty() {
-            assert_eq!(
-                features[0].len(),
-                98,
-                "Each sample should have 98 features"
-            );
+            assert_eq!(features[0].len(), 98, "Each sample should have 98 features");
         }
     }
 
@@ -416,7 +413,9 @@ fn test_export_label_config_builders() {
     assert!(config.threshold_strategy.is_some());
 
     match &config.threshold_strategy {
-        Some(ExportThresholdStrategy::Quantile { target_proportion, .. }) => {
+        Some(ExportThresholdStrategy::Quantile {
+            target_proportion, ..
+        }) => {
             assert!((target_proportion - 0.33).abs() < 1e-10);
         }
         _ => panic!("Expected Quantile strategy from balanced()"),
@@ -458,7 +457,9 @@ fn test_multi_horizon_config_conversion_with_strategy() {
 
     // Verify threshold strategy was correctly converted
     match &multi_config.threshold_strategy {
-        ThresholdStrategy::Quantile { target_proportion, .. } => {
+        ThresholdStrategy::Quantile {
+            target_proportion, ..
+        } => {
             assert!((target_proportion - 0.33).abs() < 1e-10);
         }
         _ => panic!("Expected Quantile strategy in MultiHorizonConfig"),
@@ -565,4 +566,3 @@ fn test_full_config_toml_roundtrip() {
 
     println!("✅ Full config with threshold strategy: {}", desc);
 }
-

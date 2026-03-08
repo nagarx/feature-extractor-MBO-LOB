@@ -148,8 +148,7 @@ impl OrderTracker {
     pub(super) fn process_event(&mut self, event: &MboEvent) {
         match event.action {
             Action::Add => {
-                let info =
-                    OrderInfo::new(event.timestamp, event.size, event.price, event.side);
+                let info = OrderInfo::new(event.timestamp, event.size, event.price, event.side);
                 self.active.insert(event.order_id, info);
             }
             Action::Modify => {
@@ -284,13 +283,24 @@ mod tests {
         tracker.process_event(&add);
         assert_eq!(tracker.active_count(), 1);
 
-        let cancel = MboEvent::new(1_000_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        let cancel = MboEvent::new(
+            1_000_000_000,
+            Action::Cancel,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            1,
+        );
         tracker.process_event(&cancel);
         assert_eq!(tracker.active_count(), 0);
         assert_eq!(tracker.completed_lifetimes().len(), 1);
 
         let lifetime = tracker.completed_lifetimes()[0];
-        assert!((lifetime - 1.0).abs() < 0.001, "Lifetime should be 1.0s, got {}", lifetime);
+        assert!(
+            (lifetime - 1.0).abs() < 0.001,
+            "Lifetime should be 1.0s, got {}",
+            lifetime
+        );
     }
 
     #[test]
@@ -300,7 +310,14 @@ mod tests {
         let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
         tracker.process_event(&add);
 
-        let fill = MboEvent::new(2_000_000_000, Action::Trade, Side::Bid, 100_000_000_000, 100, 1);
+        let fill = MboEvent::new(
+            2_000_000_000,
+            Action::Trade,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            1,
+        );
         tracker.process_event(&fill);
 
         assert_eq!(tracker.active_count(), 0);
@@ -315,7 +332,14 @@ mod tests {
         let new_timestamp = MAX_ORDER_AGE_NS + 1_000_000_000;
 
         for i in 0..1000u64 {
-            let add = MboEvent::new(old_timestamp, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let add = MboEvent::new(
+                old_timestamp,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             tracker.process_event(&add);
         }
 

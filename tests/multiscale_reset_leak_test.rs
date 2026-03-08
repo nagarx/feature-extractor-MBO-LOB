@@ -71,7 +71,11 @@ fn test_reset_clears_accumulated_sequences() {
     let mut day1_leak_count = 0;
     let mut total_sequences = 0;
 
-    for seq in fast_seqs.iter().chain(medium_seqs.iter()).chain(slow_seqs.iter()) {
+    for seq in fast_seqs
+        .iter()
+        .chain(medium_seqs.iter())
+        .chain(slow_seqs.iter())
+    {
         total_sequences += 1;
         // Check the first feature of the first snapshot in the sequence
         if !seq.features.is_empty() {
@@ -124,21 +128,34 @@ fn test_reset_clears_all_state() {
     window.reset();
 
     // Verify ALL state is cleared
-    assert_eq!(window.total_events(), 0, "total_events should be 0 after reset");
-    
+    assert_eq!(
+        window.total_events(),
+        0,
+        "total_events should be 0 after reset"
+    );
+
     let counters = window.decimation_counters();
-    assert_eq!(counters, (0, 0, 0), "decimation counters should be 0 after reset");
-    
+    assert_eq!(
+        counters,
+        (0, 0, 0),
+        "decimation counters should be 0 after reset"
+    );
+
     let acc_after = window.accumulated_counts();
     assert_eq!(
-        acc_after, (0, 0, 0),
+        acc_after,
+        (0, 0, 0),
         "ACCUMULATED SEQUENCES NOT CLEARED: got {:?}. \
          This is the bug - reset() must clear accumulated_fast/medium/slow vectors.",
         acc_after
     );
-    
+
     let buffers = window.buffer_counts();
-    assert_eq!(buffers, (0, 0, 0), "builder buffers should be empty after reset");
+    assert_eq!(
+        buffers,
+        (0, 0, 0),
+        "builder buffers should be empty after reset"
+    );
 }
 
 #[test]
@@ -219,9 +236,14 @@ fn test_try_build_all_then_reset_is_clean() {
     assert!(day2_result.is_some(), "Day 2 should produce sequences");
 
     let ms = day2_result.unwrap();
-    
+
     // All should be Day 2 only
-    for seq in ms.fast().iter().chain(ms.medium().iter()).chain(ms.slow().iter()) {
+    for seq in ms
+        .fast()
+        .iter()
+        .chain(ms.medium().iter())
+        .chain(ms.slow().iter())
+    {
         if !seq.features.is_empty() {
             let marker = seq.features[0][0];
             assert!(
@@ -232,4 +254,3 @@ fn test_try_build_all_then_reset_is_clean() {
         }
     }
 }
-

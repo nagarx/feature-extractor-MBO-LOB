@@ -58,22 +58,22 @@ use serde::{Deserialize, Serialize};
 pub struct ReturnData {
     /// Simple point-to-point return at horizon.
     ///
-    /// Computed as: (price[t+h] - price[t]) / price[t]
+    /// Computed as: `(price[t+h] - price[t]) / price[t]`
     pub point_return: f64,
 
     /// Maximum return achieved within the horizon.
     ///
-    /// Computed as: max(price[t+1..t+h+1]) / price[t] - 1
+    /// Computed as: `max(price[t+1..t+h+1]) / price[t] - 1`
     pub max_return: f64,
 
     /// Minimum return observed within the horizon.
     ///
-    /// Computed as: min(price[t+1..t+h+1]) / price[t] - 1
+    /// Computed as: `min(price[t+1..t+h+1]) / price[t] - 1`
     pub min_return: f64,
 
     /// Mean return across the horizon (averaged over all timesteps).
     ///
-    /// Computed as: mean(price[t+1..t+h+1]) / price[t] - 1
+    /// Computed as: `mean(price[t+1..t+h+1]) / price[t] - 1`
     pub mean_return: f64,
 
     /// Standard deviation of returns within the horizon.
@@ -139,7 +139,7 @@ impl ReturnData {
 /// Type of return to compute as the primary output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ReturnType {
-    /// Simple point return at horizon: (price[t+h] - price[t]) / price[t]
+    /// Simple point return at horizon: `(price[t+h] - price[t]) / price[t]`
     #[default]
     PointReturn,
 
@@ -537,8 +537,8 @@ impl MagnitudeGenerator {
                 .map(|&p| (p - entry_price) / entry_price)
                 .collect();
             let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
-            let variance: f64 = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>()
-                / returns.len() as f64;
+            let variance: f64 =
+                returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
             variance.sqrt()
         } else {
             0.0
@@ -925,4 +925,3 @@ mod tests {
         assert_eq!(stats.positive_rate, 0.0);
     }
 }
-

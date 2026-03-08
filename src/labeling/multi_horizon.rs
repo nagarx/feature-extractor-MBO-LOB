@@ -258,11 +258,7 @@ impl ThresholdStrategy {
     ///
     /// Panics if `divisor` is <= 0.
     pub fn tlob_dynamic(fallback: f64, divisor: f64) -> Self {
-        assert!(
-            divisor > 0.0,
-            "divisor must be > 0.0, got {}",
-            divisor
-        );
+        assert!(divisor > 0.0, "divisor must be > 0.0, got {}", divisor);
         ThresholdStrategy::TlobDynamic { fallback, divisor }
     }
 
@@ -962,8 +958,8 @@ impl MultiHorizonLabelGenerator {
             }
 
             // Compute alpha = mean(|percentage_change|) / divisor
-            let mean_abs_change: f64 =
-                smoothed_changes.iter().map(|x| x.abs()).sum::<f64>() / smoothed_changes.len() as f64;
+            let mean_abs_change: f64 = smoothed_changes.iter().map(|x| x.abs()).sum::<f64>()
+                / smoothed_changes.len() as f64;
             let alpha = mean_abs_change / divisor;
 
             return Some(alpha);
@@ -1014,10 +1010,14 @@ impl MultiHorizonLabelGenerator {
         let mut result = MultiHorizonLabels::new(self.config.clone(), total);
 
         // Determine which threshold computation method to use
-        let use_quantile_threshold =
-            matches!(self.config.threshold_strategy, ThresholdStrategy::Quantile { .. });
-        let use_tlob_dynamic_threshold =
-            matches!(self.config.threshold_strategy, ThresholdStrategy::TlobDynamic { .. });
+        let use_quantile_threshold = matches!(
+            self.config.threshold_strategy,
+            ThresholdStrategy::Quantile { .. }
+        );
+        let use_tlob_dynamic_threshold = matches!(
+            self.config.threshold_strategy,
+            ThresholdStrategy::TlobDynamic { .. }
+        );
 
         // Generate labels for each horizon
         for &horizon in &self.config.horizons {
@@ -1802,7 +1802,10 @@ mod tests {
         assert!(!fixed.needs_global_computation());
         assert!(!rolling.needs_global_computation());
         assert!(!quantile.needs_global_computation());
-        assert!(tlob_dynamic.needs_global_computation(), "TlobDynamic should need global computation");
+        assert!(
+            tlob_dynamic.needs_global_computation(),
+            "TlobDynamic should need global computation"
+        );
     }
 
     #[test]
@@ -1811,17 +1814,17 @@ mod tests {
         // Linear upward trend: 100, 101, 102, ... 149 (50 prices)
         let prices: Vec<f64> = (0..50).map(|i| 100.0 + i as f64).collect();
 
-        let config = MultiHorizonConfig::new(
-            vec![5],
-            2,
-            ThresholdStrategy::tlob_dynamic_default(0.0008),
-        );
+        let config =
+            MultiHorizonConfig::new(vec![5], 2, ThresholdStrategy::tlob_dynamic_default(0.0008));
         let mut gen = MultiHorizonLabelGenerator::new(config);
         gen.add_prices(&prices);
 
         // Compute threshold
         let threshold = gen.compute_tlob_dynamic_threshold_for_horizon(5);
-        assert!(threshold.is_some(), "Should compute threshold with sufficient data");
+        assert!(
+            threshold.is_some(),
+            "Should compute threshold with sufficient data"
+        );
 
         let alpha = threshold.unwrap();
         assert!(alpha > 0.0, "Alpha should be positive for trending data");
@@ -1860,7 +1863,10 @@ mod tests {
         for (idx, label, change) in labels_10.iter() {
             assert!(*idx < prices.len(), "Index should be within bounds");
             assert!(change.is_finite(), "Change should be finite");
-            assert!(matches!(label, TrendLabel::Up | TrendLabel::Down | TrendLabel::Stable));
+            assert!(matches!(
+                label,
+                TrendLabel::Up | TrendLabel::Down | TrendLabel::Stable
+            ));
         }
     }
 
@@ -1868,11 +1874,8 @@ mod tests {
     fn test_tlob_dynamic_deterministic() {
         let prices: Vec<f64> = (0..100).map(|i| 100.0 + (i as f64 * 0.1).sin()).collect();
 
-        let config = MultiHorizonConfig::new(
-            vec![10],
-            5,
-            ThresholdStrategy::tlob_dynamic_default(0.0008),
-        );
+        let config =
+            MultiHorizonConfig::new(vec![10], 5, ThresholdStrategy::tlob_dynamic_default(0.0008));
 
         // Run twice with same data
         let mut gen1 = MultiHorizonLabelGenerator::new(config.clone());
@@ -1887,7 +1890,11 @@ mod tests {
         let labels1 = result1.labels_for_horizon(10).unwrap();
         let labels2 = result2.labels_for_horizon(10).unwrap();
 
-        assert_eq!(labels1.len(), labels2.len(), "Should produce same number of labels");
+        assert_eq!(
+            labels1.len(),
+            labels2.len(),
+            "Should produce same number of labels"
+        );
         for (l1, l2) in labels1.iter().zip(labels2.iter()) {
             assert_eq!(l1.0, l2.0, "Indices should match");
             assert_eq!(l1.1, l2.1, "Labels should match");
@@ -1916,9 +1923,16 @@ mod tests {
         let labels = result.labels_for_horizon(3).unwrap();
 
         // Should have produced some non-stable labels around the spike
-        let non_stable = labels.iter().filter(|(_, l, _)| *l != TrendLabel::Stable).count();
+        let non_stable = labels
+            .iter()
+            .filter(|(_, l, _)| *l != TrendLabel::Stable)
+            .count();
         // The spike should cause at least some Up labels (around t=12-14) and Down labels (around t=16-18)
-        assert!(non_stable > 0, "Should detect the price spike, found {} non-stable labels", non_stable);
+        assert!(
+            non_stable > 0,
+            "Should detect the price spike, found {} non-stable labels",
+            non_stable
+        );
     }
 
     #[test]
@@ -1926,11 +1940,8 @@ mod tests {
         let prices: Vec<f64> = (0..80).map(|i| 100.0 + i as f64 * 0.5).collect();
 
         // Same data, different divisors
-        let config_div2 = MultiHorizonConfig::new(
-            vec![10],
-            5,
-            ThresholdStrategy::tlob_dynamic(0.0008, 2.0),
-        );
+        let config_div2 =
+            MultiHorizonConfig::new(vec![10], 5, ThresholdStrategy::tlob_dynamic(0.0008, 2.0));
         let config_div4 = MultiHorizonConfig::new(
             vec![10],
             5,
@@ -1971,11 +1982,17 @@ mod tests {
         let gen = MultiHorizonLabelGenerator::new(config);
 
         let threshold = gen.compute_tlob_dynamic_threshold_for_horizon(100);
-        assert!(threshold.is_none(), "Should return None for insufficient data");
+        assert!(
+            threshold.is_none(),
+            "Should return None for insufficient data"
+        );
 
         // The current_threshold() should return the fallback
         let fallback_threshold = gen.current_threshold();
-        assert!((fallback_threshold - 0.05).abs() < 1e-10, "Should use fallback threshold");
+        assert!(
+            (fallback_threshold - 0.05).abs() < 1e-10,
+            "Should use fallback threshold"
+        );
     }
 
     #[test]
@@ -1988,10 +2005,12 @@ mod tests {
     fn test_tlob_dynamic_no_nan_or_inf() {
         // Test with various price patterns to ensure no NaN/Inf
         let patterns: Vec<Vec<f64>> = vec![
-            (0..50).map(|i| 100.0 + i as f64).collect(),      // Upward
+            (0..50).map(|i| 100.0 + i as f64).collect(), // Upward
             (0..50).map(|i| 100.0 - i as f64 * 0.1).collect(), // Downward
-            vec![100.0; 50],                                   // Flat
-            (0..50).map(|i| 100.0 + (i as f64 * 0.2).sin() * 2.0).collect(), // Oscillating
+            vec![100.0; 50],                             // Flat
+            (0..50)
+                .map(|i| 100.0 + (i as f64 * 0.2).sin() * 2.0)
+                .collect(), // Oscillating
         ];
 
         for prices in patterns {

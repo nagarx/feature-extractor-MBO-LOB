@@ -653,8 +653,13 @@ impl TripleBarrierLabeler {
             let lower_barrier = entry_price * (1.0 - stop_loss);
 
             // Scan price path to find first barrier hit
-            let (label, exit_offset, exit_return) =
-                self.find_first_barrier_hit(entry_t, entry_price, upper_barrier, lower_barrier, min_hold);
+            let (label, exit_offset, exit_return) = self.find_first_barrier_hit(
+                entry_t,
+                entry_price,
+                upper_barrier,
+                lower_barrier,
+                min_hold,
+            );
 
             labels.push((entry_t, label, exit_offset, exit_return));
         }
@@ -750,8 +755,10 @@ impl TripleBarrierLabeler {
             return TripleBarrierStats::default();
         }
 
-        let mut stats = TripleBarrierStats::default();
-        stats.total = labels.len();
+        let mut stats = TripleBarrierStats {
+            total: labels.len(),
+            ..Default::default()
+        };
 
         let mut sum_exit_return = 0.0;
         let mut sum_profit_return = 0.0;
@@ -1196,13 +1203,19 @@ mod tests {
         let mut prices = Vec::new();
 
         // Upward spike (profit target)
-        prices.extend(vec![100.0, 101.0, 102.0, 103.0, 102.5, 102.0, 102.0, 102.0, 102.0, 102.0, 102.0]);
+        prices.extend(vec![
+            100.0, 101.0, 102.0, 103.0, 102.5, 102.0, 102.0, 102.0, 102.0, 102.0, 102.0,
+        ]);
 
         // Stable period (extend for another entry point)
-        prices.extend(vec![100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]);
+        prices.extend(vec![
+            100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0,
+        ]);
 
         // Downward spike (stop-loss)
-        prices.extend(vec![100.0, 99.0, 98.0, 97.0, 97.5, 98.0, 98.0, 98.0, 98.0, 98.0, 98.0]);
+        prices.extend(vec![
+            100.0, 99.0, 98.0, 97.0, 97.5, 98.0, 98.0, 98.0, 98.0, 98.0, 98.0,
+        ]);
 
         labeler.add_prices(&prices);
         let labels = labeler.generate_labels().unwrap();
@@ -1318,4 +1331,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-

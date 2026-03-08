@@ -340,7 +340,8 @@ fn is_regular_hours(timestamp: u64) -> bool {
 
 #[test]
 fn test_granular_level_by_level_validation() {
-    let mbo_path = Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
     let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
@@ -561,7 +562,8 @@ fn test_granular_level_by_level_validation() {
 
 #[test]
 fn test_granular_time_of_day_analysis() {
-    let mbo_path = Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
     let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
@@ -724,7 +726,8 @@ fn test_granular_time_of_day_analysis() {
 
 #[test]
 fn test_granular_error_pattern_detection() {
-    let mbo_path = Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
     let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
@@ -1035,8 +1038,7 @@ fn test_granular_multi_day_consistency() {
     println!("Period: July 1-10, 2025");
     println!("{:=<80}", "");
 
-    let mbo_base =
-        Path::new("../data/NVDA_2025-02-03_to_2026-01-07");
+    let mbo_base = Path::new("../data/NVDA_2025-02-03_to_2026-01-07");
     let mbp_base = Path::new("../data/NVDA_MBP10_2025-07");
 
     let dates = [

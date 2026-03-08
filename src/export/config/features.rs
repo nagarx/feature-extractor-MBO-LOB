@@ -268,9 +268,7 @@ impl FeatureSetConfig {
         }
 
         if self.include_signals && !self.include_derived {
-            return Err(
-                "include_signals requires include_derived to be enabled".to_string()
-            );
+            return Err("include_signals requires include_derived to be enabled".to_string());
         }
 
         if self.include_signals && !self.include_mbo {

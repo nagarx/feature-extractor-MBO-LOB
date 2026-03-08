@@ -148,9 +148,7 @@ struct Observation {
 }
 
 /// Extract observations from pipeline output
-fn extract_observations(
-    output: &feature_extractor::batch::BatchOutput,
-) -> Vec<Observation> {
+fn extract_observations(output: &feature_extractor::batch::BatchOutput) -> Vec<Observation> {
     let mut observations = Vec::new();
 
     for result in output.results.iter() {
@@ -193,7 +191,10 @@ fn extract_observations(
 }
 
 /// Compute forward returns (price change as fraction)
-fn compute_forward_returns(observations: &[Observation], horizon: usize) -> Vec<(Observation, f64)> {
+fn compute_forward_returns(
+    observations: &[Observation],
+    horizon: usize,
+) -> Vec<(Observation, f64)> {
     let mut result = Vec::new();
 
     for i in 0..(observations.len().saturating_sub(horizon)) {
@@ -272,11 +273,26 @@ fn test_net_trade_flow_sign_convention() {
     );
 
     // Extract signals and returns for correlation analysis
-    let net_order_flow: Vec<f64> = obs_with_returns.iter().map(|(o, _)| o.net_order_flow).collect();
-    let net_cancel_flow: Vec<f64> = obs_with_returns.iter().map(|(o, _)| o.net_cancel_flow).collect();
-    let net_trade_flow: Vec<f64> = obs_with_returns.iter().map(|(o, _)| o.net_trade_flow).collect();
-    let trade_asymmetry: Vec<f64> = obs_with_returns.iter().map(|(o, _)| o.trade_asymmetry).collect();
-    let cancel_asymmetry: Vec<f64> = obs_with_returns.iter().map(|(o, _)| o.cancel_asymmetry).collect();
+    let net_order_flow: Vec<f64> = obs_with_returns
+        .iter()
+        .map(|(o, _)| o.net_order_flow)
+        .collect();
+    let net_cancel_flow: Vec<f64> = obs_with_returns
+        .iter()
+        .map(|(o, _)| o.net_cancel_flow)
+        .collect();
+    let net_trade_flow: Vec<f64> = obs_with_returns
+        .iter()
+        .map(|(o, _)| o.net_trade_flow)
+        .collect();
+    let trade_asymmetry: Vec<f64> = obs_with_returns
+        .iter()
+        .map(|(o, _)| o.trade_asymmetry)
+        .collect();
+    let cancel_asymmetry: Vec<f64> = obs_with_returns
+        .iter()
+        .map(|(o, _)| o.cancel_asymmetry)
+        .collect();
     let returns: Vec<f64> = obs_with_returns.iter().map(|(_, r)| *r).collect();
 
     // Filter out NaN/Inf values
@@ -319,29 +335,34 @@ fn test_net_trade_flow_sign_convention() {
     println!("CORRELATION WITH FORWARD RETURNS (horizon={})", horizon);
     println!("{}", "=".repeat(80));
     println!("\nMBO Features (indices 54-56):");
-    println!("  {:20} : {:+.6} {}", 
-        "net_order_flow (54)", 
+    println!(
+        "  {:20} : {:+.6} {}",
+        "net_order_flow (54)",
         corr_net_order_flow,
         sign_assessment(corr_net_order_flow, true)
     );
-    println!("  {:20} : {:+.6} {}", 
-        "net_cancel_flow (55)", 
+    println!(
+        "  {:20} : {:+.6} {}",
+        "net_cancel_flow (55)",
         corr_net_cancel_flow,
         sign_assessment(corr_net_cancel_flow, true)
     );
-    println!("  {:20} : {:+.6} {}",
+    println!(
+        "  {:20} : {:+.6} {}",
         "net_trade_flow (56)",
         corr_net_trade_flow,
         sign_assessment(corr_net_trade_flow, true)
     );
 
     println!("\nTrading Signals (indices 88-89):");
-    println!("  {:20} : {:+.6} {}",
+    println!(
+        "  {:20} : {:+.6} {}",
         "trade_asymmetry (88)",
         corr_trade_asymmetry,
         sign_assessment(corr_trade_asymmetry, true)
     );
-    println!("  {:20} : {:+.6} {}",
+    println!(
+        "  {:20} : {:+.6} {}",
         "cancel_asymmetry (89)",
         corr_cancel_asymmetry,
         sign_assessment(corr_cancel_asymmetry, true)
@@ -351,12 +372,18 @@ fn test_net_trade_flow_sign_convention() {
     println!("\n{}", "=".repeat(80));
     println!("CROSS-SIGNAL CORRELATIONS");
     println!("{}", "=".repeat(80));
-    
+
     let corr_trade_vs_asymmetry = pearson_correlation(&net_trade_flow, &trade_asymmetry);
     let corr_cancel_vs_asymmetry = pearson_correlation(&net_cancel_flow, &cancel_asymmetry);
-    
-    println!("\n  net_trade_flow vs trade_asymmetry:   {:+.6}", corr_trade_vs_asymmetry);
-    println!("  net_cancel_flow vs cancel_asymmetry: {:+.6}", corr_cancel_vs_asymmetry);
+
+    println!(
+        "\n  net_trade_flow vs trade_asymmetry:   {:+.6}",
+        corr_trade_vs_asymmetry
+    );
+    println!(
+        "  net_cancel_flow vs cancel_asymmetry: {:+.6}",
+        corr_cancel_vs_asymmetry
+    );
 
     println!("\n{}", "=".repeat(80));
     println!("SIGN CONVENTION ANALYSIS");
@@ -379,7 +406,10 @@ fn test_net_trade_flow_sign_convention() {
     }
 
     println!("\nSimilarly for cancel signals:");
-    println!("Observed correlation (net_cancel_flow vs cancel_asymmetry): {:+.6}", corr_cancel_vs_asymmetry);
+    println!(
+        "Observed correlation (net_cancel_flow vs cancel_asymmetry): {:+.6}",
+        corr_cancel_vs_asymmetry
+    );
 
     if corr_cancel_vs_asymmetry < -0.9 {
         println!("  ✓ CONFIRMED: net_cancel_flow also has INVERTED sign convention");
@@ -393,11 +423,13 @@ fn test_net_trade_flow_sign_convention() {
     println!("\n{}", "=".repeat(80));
     println!("SIGNAL STATISTICS");
     println!("{}", "=".repeat(80));
-    
+
     let print_stats = |name: &str, vals: &[f64]| {
         let (min, max, mean, std) = compute_stats(vals);
-        println!("  {:20} : min={:+.4}, max={:+.4}, mean={:+.4}, std={:.4}",
-            name, min, max, mean, std);
+        println!(
+            "  {:20} : min={:+.4}, max={:+.4}, mean={:+.4}, std={:.4}",
+            name, min, max, mean, std
+        );
     };
 
     print_stats("net_order_flow", &net_order_flow);
@@ -421,8 +453,10 @@ fn test_net_trade_flow_sign_convention() {
          Both now use (ask - bid) / total formula.",
         corr_trade_vs_asymmetry
     );
-    println!("✓ net_trade_flow vs trade_asymmetry: r = {:+.4} > 0.95 (SIGN CONVENTION CORRECT)", 
-        corr_trade_vs_asymmetry);
+    println!(
+        "✓ net_trade_flow vs trade_asymmetry: r = {:+.4} > 0.95 (SIGN CONVENTION CORRECT)",
+        corr_trade_vs_asymmetry
+    );
 
     // After v2.1 fix: net_cancel_flow uses (ask - bid), same as cancel_asymmetry
     assert!(
@@ -432,8 +466,10 @@ fn test_net_trade_flow_sign_convention() {
          Both now use (ask - bid) / total formula.",
         corr_cancel_vs_asymmetry
     );
-    println!("✓ net_cancel_flow vs cancel_asymmetry: r = {:+.4} > 0.95 (SIGN CONVENTION CORRECT)",
-        corr_cancel_vs_asymmetry);
+    println!(
+        "✓ net_cancel_flow vs cancel_asymmetry: r = {:+.4} > 0.95 (SIGN CONVENTION CORRECT)",
+        corr_cancel_vs_asymmetry
+    );
 
     println!("\n{}", "=".repeat(80));
     println!("CONCLUSION");
@@ -540,7 +576,10 @@ fn test_verify_formula_semantics() {
                                 println!("Formula mismatch for net_trade_flow:");
                                 println!("  trade_rate_bid: {:.6}", trade_rate_bid);
                                 println!("  trade_rate_ask: {:.6}", trade_rate_ask);
-                                println!("  Expected (ask-bid)/total: {:.6}", expected_net_trade_flow);
+                                println!(
+                                    "  Expected (ask-bid)/total: {:.6}",
+                                    expected_net_trade_flow
+                                );
                                 println!("  Actual net_trade_flow: {:.6}", net_trade_flow);
                             }
                         }
@@ -550,11 +589,26 @@ fn test_verify_formula_semantics() {
                             // Correct: they are equal
                         } else if samples_checked < 3 {
                             println!("\nSample {}:", samples_checked + 1);
-                            println!("  trade_rate_bid (sells hitting bid): {:.4}", trade_rate_bid);
-                            println!("  trade_rate_ask (buys hitting ask):  {:.4}", trade_rate_ask);
-                            println!("  net_trade_flow  = (ask-bid)/total = {:+.4}", net_trade_flow);
-                            println!("  trade_asymmetry = (ask-bid)/total = {:+.4}", trade_asymmetry);
-                            println!("  Difference (should be 0): {:+.6}", net_trade_flow - trade_asymmetry);
+                            println!(
+                                "  trade_rate_bid (sells hitting bid): {:.4}",
+                                trade_rate_bid
+                            );
+                            println!(
+                                "  trade_rate_ask (buys hitting ask):  {:.4}",
+                                trade_rate_ask
+                            );
+                            println!(
+                                "  net_trade_flow  = (ask-bid)/total = {:+.4}",
+                                net_trade_flow
+                            );
+                            println!(
+                                "  trade_asymmetry = (ask-bid)/total = {:+.4}",
+                                trade_asymmetry
+                            );
+                            println!(
+                                "  Difference (should be 0): {:+.6}",
+                                net_trade_flow - trade_asymmetry
+                            );
                         }
 
                         samples_checked += 1;
@@ -573,7 +627,8 @@ fn test_verify_formula_semantics() {
     assert!(
         formula_matches > formula_mismatches,
         "Formula verification failed: more mismatches ({}) than matches ({})",
-        formula_mismatches, formula_matches
+        formula_mismatches,
+        formula_matches
     );
 
     println!("\n{}", "=".repeat(80));
@@ -593,4 +648,3 @@ fn test_verify_formula_semantics() {
     println!("  → < 0 = BEARISH / Sell pressure");
     println!("\n✓ Sign convention is now CORRECT.");
 }
-

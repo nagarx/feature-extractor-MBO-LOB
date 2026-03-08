@@ -98,7 +98,14 @@ mod tests {
         let mut tracker = OrderTracker::new();
         let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
         tracker.process_event(&add);
-        let cancel = MboEvent::new(1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        let cancel = MboEvent::new(
+            1_000_000,
+            Action::Cancel,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            1,
+        );
         tracker.process_event(&cancel);
         assert_eq!(modification_score(&tracker), 0.0);
     }
@@ -115,7 +122,14 @@ mod tests {
         let modify2 = MboEvent::new(2_000_000, Action::Modify, Side::Bid, 99_980_000_000, 100, 1);
         tracker.process_event(&modify2);
 
-        let cancel = MboEvent::new(3_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        let cancel = MboEvent::new(
+            3_000_000,
+            Action::Cancel,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            1,
+        );
         tracker.process_event(&cancel);
 
         let score = modification_score(&tracker);

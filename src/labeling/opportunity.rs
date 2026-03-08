@@ -394,9 +394,7 @@ impl OpportunityConfig {
         }
         if let Some(dt) = self.down_threshold {
             if dt <= 0.0 || dt >= 1.0 {
-                return Err(TlobError::generic(
-                    "down_threshold must be in range (0, 1)",
-                ));
+                return Err(TlobError::generic("down_threshold must be in range (0, 1)"));
             }
         }
         Ok(())
@@ -696,8 +694,10 @@ impl OpportunityLabelGenerator {
             return OpportunityStats::default();
         }
 
-        let mut stats = OpportunityStats::default();
-        stats.total = labels.len();
+        let mut stats = OpportunityStats {
+            total: labels.len(),
+            ..Default::default()
+        };
 
         let mut sum_max_return = 0.0;
         let mut sum_min_return = 0.0;
@@ -980,7 +980,9 @@ mod tests {
         let mut generator = OpportunityLabelGenerator::new(config);
 
         // Stable prices with tiny fluctuations
-        let prices: Vec<f64> = (0..20).map(|i| 100.0 + (i as f64 * 0.01).sin() * 0.1).collect();
+        let prices: Vec<f64> = (0..20)
+            .map(|i| 100.0 + (i as f64 * 0.01).sin() * 0.1)
+            .collect();
         generator.add_prices(&prices);
 
         let labels = generator.generate_labels().unwrap();
@@ -1069,7 +1071,9 @@ mod tests {
     #[test]
     fn test_generator_deterministic() {
         let config = OpportunityConfig::new(5, 0.01);
-        let prices: Vec<f64> = (0..50).map(|i| 100.0 + (i as f64 * 0.1).sin() * 3.0).collect();
+        let prices: Vec<f64> = (0..50)
+            .map(|i| 100.0 + (i as f64 * 0.1).sin() * 3.0)
+            .collect();
 
         let mut gen1 = OpportunityLabelGenerator::new(config.clone());
         gen1.add_prices(&prices);
@@ -1291,7 +1295,10 @@ mod tests {
         let (_, label, max_return, _) = &labels[0];
 
         assert!(*max_return > 0.03, "max_return should be above 3%");
-        assert_eq!(*label, OpportunityLabel::BigUp, "Above threshold should be BigUp");
+        assert_eq!(
+            *label,
+            OpportunityLabel::BigUp,
+            "Above threshold should be BigUp"
+        );
     }
 }
-

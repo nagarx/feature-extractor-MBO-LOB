@@ -7,7 +7,9 @@
 //! Expected: With 10,000 features pushed, we should get many sequences per scale.
 //! Actual: Only 1 sequence per scale (fast, medium, slow) = 3 total.
 
-use feature_extractor::sequence_builder::{MultiScaleConfig, MultiScaleWindow, ScaleConfig, Sequence};
+use feature_extractor::sequence_builder::{
+    MultiScaleConfig, MultiScaleWindow, ScaleConfig, Sequence,
+};
 
 /// Test that multi-scale window should produce multiple sequences during streaming.
 ///
@@ -45,26 +47,26 @@ fn test_multiscale_should_produce_multiple_sequences() {
 
     // Now build sequences
     let result = window.try_build_all();
-    
+
     // The current implementation returns at most 1 sequence per scale
     // This test documents the expected vs actual behavior
-    
+
     if let Some(ms) = &result {
         let (fast_count, medium_count, slow_count) = ms.sequence_counts();
-        
+
         // With 500 events, decimation affects effective events per scale:
         // Fast: 500/1=500 effective, (500-10)/5 = ~98 sequences expected
-        // Medium: 500/2=250 effective, (250-20)/10 = ~23 sequences expected  
+        // Medium: 500/2=250 effective, (250-20)/10 = ~23 sequences expected
         // Slow: 500/4=125 effective, (125-40)/20 = ~4 sequences expected
-        
+
         // But currently we only get 1 each!
         // This assertion SHOULD pass once fixed, currently it will fail
-        
+
         // For now, document the bug: we get exactly 1 per scale
         println!("Fast sequences: {} (expected ~18)", fast_count);
         println!("Medium sequences: {} (expected ~8)", medium_count);
         println!("Slow sequences: {} (expected ~3)", slow_count);
-        
+
         // Assert that we get MORE than 1 sequence per scale
         // This will FAIL until the bug is fixed
         assert!(
@@ -102,7 +104,7 @@ fn test_individual_builder_streaming_works() {
         if let Err(e) = builder.push(i * 1_000_000, features) {
             panic!("Push failed: {}", e);
         }
-        
+
         // CRITICAL: Build sequence after each push
         if let Some(seq) = builder.try_build_sequence() {
             sequences.push(seq);
@@ -111,7 +113,7 @@ fn test_individual_builder_streaming_works() {
 
     // With stride 5 and 100 events, should get ~(100-10)/5 = ~18 sequences
     println!("Individual builder produced {} sequences", sequences.len());
-    
+
     assert!(
         sequences.len() >= 15,
         "Individual builder should produce many sequences. Got {}",
@@ -137,15 +139,14 @@ fn test_document_expected_multiscale_behavior() {
     // Current behavior:
     //    - try_build_all() only returns current buffer state (1 seq each)
     //    - Sequences that could have been built during streaming are lost
-    
+
     let config = MultiScaleConfig::default();
     let _window = MultiScaleWindow::new(config, 40);
-    
+
     // Just documenting the expected API:
     // window.try_build_all_accumulated() -> MultiScaleSequence with all built sequences
     // Or: window should internally accumulate during push() and return all at try_build_all()
-    
+
     // For now, this is a documentation-only test
     assert!(true, "Documented expected behavior");
 }
-

@@ -381,7 +381,11 @@ mod tests {
 
         // Vol ratio should be > 1 after volatility spike
         let vol_ratio = output[indices::VOL_RATIO];
-        assert!(vol_ratio > 0.0, "Vol ratio should be positive: {}", vol_ratio);
+        assert!(
+            vol_ratio > 0.0,
+            "Vol ratio should be positive: {}",
+            vol_ratio
+        );
     }
 
     #[test]

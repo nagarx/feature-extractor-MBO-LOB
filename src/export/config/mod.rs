@@ -250,7 +250,9 @@ impl DatasetConfig {
 
     /// Validate the complete configuration.
     pub fn validate(&self) -> Result<(), String> {
-        self.symbol.validate().map_err(|e| format!("symbol: {}", e))?;
+        self.symbol
+            .validate()
+            .map_err(|e| format!("symbol: {}", e))?;
         self.data
             .validate_lenient()
             .map_err(|e| format!("data: {}", e))?;
@@ -261,7 +263,9 @@ impl DatasetConfig {
         self.sequence
             .validate()
             .map_err(|e| format!("sequence: {}", e))?;
-        self.labels.validate().map_err(|e| format!("labels: {}", e))?;
+        self.labels
+            .validate()
+            .map_err(|e| format!("labels: {}", e))?;
         self.split.validate().map_err(|e| format!("split: {}", e))?;
         self.processing
             .validate()
@@ -394,7 +398,7 @@ mod tests {
             DateRangeConfig::from_range("2025-02-03", "2025-02-07"),
         )
         .with_tlob_normalization();
-        
+
         assert_eq!(config.normalization.lob_prices, FeatureNormStrategy::None);
         assert!(!config.normalization.any_normalization());
     }
@@ -407,8 +411,11 @@ mod tests {
             DateRangeConfig::from_range("2025-02-03", "2025-02-07"),
         )
         .with_lobench_normalization();
-        
-        assert_eq!(config.normalization.lob_prices, FeatureNormStrategy::GlobalZScore);
+
+        assert_eq!(
+            config.normalization.lob_prices,
+            FeatureNormStrategy::GlobalZScore
+        );
         assert!(config.normalization.any_normalization());
     }
 
@@ -420,19 +427,19 @@ mod tests {
             DateRangeConfig::from_range("2025-02-03", "2025-02-07"),
         )
         .with_normalization(NormalizationConfig::deeplob());
-        
+
         let temp_dir = TempDir::new().unwrap();
         let toml_path = temp_dir.path().join("test_norm.toml");
-        
+
         config.save_toml(&toml_path).unwrap();
-        
+
         let loaded = {
             let contents = std::fs::read_to_string(&toml_path).unwrap();
             let mut config: DatasetConfig = toml::from_str(&contents).unwrap();
             config.data.input_dir = temp_dir.path().to_path_buf();
             config
         };
-        
+
         assert_eq!(loaded.normalization.lob_prices, FeatureNormStrategy::ZScore);
         assert_eq!(loaded.normalization.lob_sizes, FeatureNormStrategy::ZScore);
         assert_eq!(loaded.normalization.derived, FeatureNormStrategy::None);

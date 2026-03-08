@@ -96,19 +96,39 @@ pub use crate::sequence_builder::{
 // ============================================================================
 
 pub use crate::labeling::{
-    // Core labeling types
-    DeepLobLabelGenerator, DeepLobMethod, LabelConfig, LabelGenerator, LabelStats,
-    MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels, ThresholdStrategy,
-    TlobLabelGenerator, TrendLabel,
-    // Phase 1.5: Opportunity labeling (big move detection)
-    ConflictPriority, OpportunityConfig, OpportunityLabel, OpportunityLabelGenerator,
-    OpportunityStats,
     // Phase 1.5: Triple barrier labeling (profit target / stop-loss)
-    BarrierLabel, TimeoutStrategy, TripleBarrierConfig, TripleBarrierLabeler,
-    TripleBarrierOutput, TripleBarrierStats,
+    BarrierLabel,
+    // Phase 1.5: Opportunity labeling (big move detection)
+    ConflictPriority,
+    // Core labeling types
+    DeepLobLabelGenerator,
+    DeepLobMethod,
+    LabelConfig,
+    LabelGenerator,
+    LabelStats,
     // Phase 1.5: Magnitude export (regression targets)
-    MagnitudeConfig, MagnitudeGenerator, MagnitudeOutput, MagnitudeStats,
-    MultiHorizonMagnitudeOutput, ReturnData, ReturnType,
+    MagnitudeConfig,
+    MagnitudeGenerator,
+    MagnitudeOutput,
+    MagnitudeStats,
+    MultiHorizonConfig,
+    MultiHorizonLabelGenerator,
+    MultiHorizonLabels,
+    MultiHorizonMagnitudeOutput,
+    OpportunityConfig,
+    OpportunityLabel,
+    OpportunityLabelGenerator,
+    OpportunityStats,
+    ReturnData,
+    ReturnType,
+    ThresholdStrategy,
+    TimeoutStrategy,
+    TlobLabelGenerator,
+    TrendLabel,
+    TripleBarrierConfig,
+    TripleBarrierLabeler,
+    TripleBarrierOutput,
+    TripleBarrierStats,
 };
 
 // ============================================================================

@@ -97,34 +97,34 @@ struct EventMetadata {
 pub struct InstitutionalDetectorV2 {
     /// Window of recent events with metadata for windowed computation.
     events: VecDeque<EventMetadata>,
-    
+
     /// Maximum window size.
     window_size: usize,
-    
+
     /// Threshold for large orders (percentile, e.g., 90.0).
     large_percentile: f64,
-    
+
     /// Round lot size (e.g., 100 for US equities).
     round_lot_size: u32,
-    
+
     /// Active order tracker.
     orders: HashMap<u64, OrderState>,
-    
+
     /// Fill times for large bid orders (in nanoseconds).
     large_bid_fill_times: VecDeque<u64>,
-    
+
     /// Fill times for large ask orders.
     large_ask_fill_times: VecDeque<u64>,
-    
+
     /// Consecutive order sizes for clustering detection.
     consecutive_sizes: VecDeque<u32>,
-    
+
     /// Price counts for clustering detection.
     price_counts: HashMap<i64, usize>,
-    
+
     /// Last trade price (for sweep detection).
     last_trade_price: Option<i64>,
-    
+
     /// Warmup counter.
     event_count: usize,
 }
@@ -197,7 +197,7 @@ impl InstitutionalDetectorV2 {
     }
 
     /// Add statistics for a new event.
-    /// 
+    ///
     /// Note: sweep_count and mod_before_cancel_count are computed on-demand
     /// from event metadata to ensure accurate windowed statistics.
     fn add_event_stats(&mut self, event: &MboEvent) {
@@ -286,7 +286,7 @@ impl InstitutionalDetectorV2 {
     }
 
     /// Remove statistics for an evicted event.
-    /// 
+    ///
     /// Note: sweep_count and mod_before_cancel are computed on-demand from
     /// event metadata, so no counter updates needed here.
     fn remove_event_stats(&mut self, _event: &MboEvent) {
@@ -324,8 +324,8 @@ impl InstitutionalDetectorV2 {
         }
 
         sizes.sort_unstable();
-        let idx = ((sizes.len() as f64 * self.large_percentile / 100.0) as usize)
-            .min(sizes.len() - 1);
+        let idx =
+            ((sizes.len() as f64 * self.large_percentile / 100.0) as usize).min(sizes.len() - 1);
         sizes[idx]
     }
 
@@ -335,7 +335,7 @@ impl InstitutionalDetectorV2 {
     /// accurate windowed statistics without counter synchronization issues.
     pub fn extract_into(&mut self, output: &mut Vec<f64>) {
         let n = self.events.len() as f64;
-        
+
         if n < 10.0 {
             // Not enough data, output zeros
             output.extend_from_slice(&[0.0; FEATURE_COUNT]);
@@ -350,7 +350,7 @@ impl InstitutionalDetectorV2 {
             .map(|em| &em.event)
             .collect();
         let n_adds = add_events.len() as f64;
-        
+
         // Feature 0: Round lot ratio
         let round_lots = add_events
             .iter()
@@ -368,11 +368,7 @@ impl InstitutionalDetectorV2 {
             .iter()
             .filter(|e| e.size < self.round_lot_size && e.size > 0)
             .count() as f64;
-        let odd_lot_ratio = if n_adds > 0.0 {
-            odd_lots / n_adds
-        } else {
-            0.0
-        };
+        let odd_lot_ratio = if n_adds > 0.0 { odd_lots / n_adds } else { 0.0 };
         output.push(odd_lot_ratio);
 
         // Feature 2: Size clustering (std dev of consecutive sizes)

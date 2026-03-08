@@ -116,7 +116,13 @@ fn test_determinism_full_pipeline() {
                         if mismatches <= 5 {
                             eprintln!(
                                 "Mismatch seq[{}].features[{}][{}]: {} vs {} (diff={}, rel={})",
-                                i, j, k, v1, v2, diff, diff / scale
+                                i,
+                                j,
+                                k,
+                                v1,
+                                v2,
+                                diff,
+                                diff / scale
                             );
                         }
                     }
@@ -189,7 +195,10 @@ fn test_feature_layout_validation() {
                 assert!(
                     v.is_finite() && v > 0.0,
                     "Date {}, seq {}, ask_price[{}] = {} (expected > 0.0, finite)",
-                    date, seq_idx, i, v
+                    date,
+                    seq_idx,
+                    i,
+                    v
                 );
             }
 
@@ -199,7 +208,10 @@ fn test_feature_layout_validation() {
                 assert!(
                     v.is_finite() && v >= 0.0,
                     "Date {}, seq {}, ask_size[{}] = {} (expected >= 0.0, finite)",
-                    date, seq_idx, i, v
+                    date,
+                    seq_idx,
+                    i,
+                    v
                 );
             }
 
@@ -209,7 +221,10 @@ fn test_feature_layout_validation() {
                 assert!(
                     v.is_finite() && v > 0.0,
                     "Date {}, seq {}, bid_price[{}] = {} (expected > 0.0, finite)",
-                    date, seq_idx, i, v
+                    date,
+                    seq_idx,
+                    i,
+                    v
                 );
             }
 
@@ -219,7 +234,10 @@ fn test_feature_layout_validation() {
                 assert!(
                     v.is_finite() && v >= 0.0,
                     "Date {}, seq {}, bid_size[{}] = {} (expected >= 0.0, finite)",
-                    date, seq_idx, i, v
+                    date,
+                    seq_idx,
+                    i,
+                    v
                 );
             }
 
@@ -230,7 +248,11 @@ fn test_feature_layout_validation() {
             assert!(
                 mid.is_finite() && mid >= best_bid && mid <= best_ask,
                 "Date {}, seq {}: mid={} not in [bid={}, ask={}]",
-                date, seq_idx, mid, best_bid, best_ask
+                date,
+                seq_idx,
+                mid,
+                best_bid,
+                best_ask
             );
 
             // Index 41: spread > 0
@@ -238,7 +260,9 @@ fn test_feature_layout_validation() {
             assert!(
                 spread.is_finite() && spread >= 0.0,
                 "Date {}, seq {}: spread = {} (expected >= 0.0, finite)",
-                date, seq_idx, spread
+                date,
+                seq_idx,
+                spread
             );
 
             // Indices 48-83: MBO features all finite
@@ -247,7 +271,10 @@ fn test_feature_layout_validation() {
                 assert!(
                     v.is_finite(),
                     "Date {}, seq {}, mbo_feature[{}] = {} (not finite)",
-                    date, seq_idx, i, v
+                    date,
+                    seq_idx,
+                    i,
+                    v
                 );
             }
 
@@ -257,7 +284,10 @@ fn test_feature_layout_validation() {
                 assert!(
                     v.is_finite(),
                     "Date {}, seq {}, signal[{}] = {} (not finite)",
-                    date, seq_idx, i, v
+                    date,
+                    seq_idx,
+                    i,
+                    v
                 );
             }
 
@@ -266,7 +296,9 @@ fn test_feature_layout_validation() {
             assert!(
                 book_valid == 0.0 || book_valid == 1.0,
                 "Date {}, seq {}: book_valid = {} (expected 0.0 or 1.0)",
-                date, seq_idx, book_valid
+                date,
+                seq_idx,
+                book_valid
             );
 
             // Index 93 (time_regime): discrete set {0,1,2,3,4,5}
@@ -274,7 +306,9 @@ fn test_feature_layout_validation() {
             assert!(
                 [0.0, 1.0, 2.0, 3.0, 4.0, 5.0].contains(&time_regime),
                 "Date {}, seq {}: time_regime = {} (expected 0-5)",
-                date, seq_idx, time_regime
+                date,
+                seq_idx,
+                time_regime
             );
 
             // Index 94 (mbo_ready): 0.0 or 1.0
@@ -282,7 +316,9 @@ fn test_feature_layout_validation() {
             assert!(
                 mbo_ready == 0.0 || mbo_ready == 1.0,
                 "Date {}, seq {}: mbo_ready = {} (expected 0.0 or 1.0)",
-                date, seq_idx, mbo_ready
+                date,
+                seq_idx,
+                mbo_ready
             );
 
             // Index 97 (schema_version): must match contract
@@ -290,7 +326,10 @@ fn test_feature_layout_validation() {
             assert!(
                 (schema_v - contract::SCHEMA_VERSION).abs() < 0.001,
                 "Date {}, seq {}: schema_version = {} (expected {})",
-                date, seq_idx, schema_v, contract::SCHEMA_VERSION
+                date,
+                seq_idx,
+                schema_v,
+                contract::SCHEMA_VERSION
             );
         }
 
@@ -377,7 +416,13 @@ fn test_cross_day_state_isolation() {
                         if mismatches <= 5 {
                             eprintln!(
                                 "State leak: seq[{}][{}][{}] = {} vs {} (diff={}, rel={})",
-                                i, j, k, va, vb, diff, diff / scale
+                                i,
+                                j,
+                                k,
+                                va,
+                                vb,
+                                diff,
+                                diff / scale
                             );
                         }
                     }
@@ -447,7 +492,8 @@ fn test_signal_spot_check() {
         assert!(
             true_ofi.is_finite(),
             "seq {}: true_ofi is not finite: {}",
-            seq_idx, true_ofi
+            seq_idx,
+            true_ofi
         );
         if true_ofi > 0.0 {
             ofi_positive += 1;
@@ -462,7 +508,8 @@ fn test_signal_spot_check() {
         assert!(
             depth_norm_ofi.is_finite(),
             "seq {}: depth_norm_ofi is not finite: {}",
-            seq_idx, depth_norm_ofi
+            seq_idx,
+            depth_norm_ofi
         );
 
         // Index 86: executed_pressure
@@ -470,7 +517,8 @@ fn test_signal_spot_check() {
         assert!(
             executed_pressure.is_finite(),
             "seq {}: executed_pressure is not finite: {}",
-            seq_idx, executed_pressure
+            seq_idx,
+            executed_pressure
         );
         if executed_pressure > 0.0 {
             executed_positive += 1;
@@ -490,12 +538,15 @@ fn test_signal_spot_check() {
     assert!(
         ofi_positive > 0 && ofi_negative > 0,
         "OFI sign imbalance: +{}/-{}/zero={} -- expected both signs in a full day",
-        ofi_positive, ofi_negative, ofi_zero
+        ofi_positive,
+        ofi_negative,
+        ofi_zero
     );
     assert!(
         executed_positive > 0 && executed_negative > 0,
         "executed_pressure sign imbalance: +{}/{}- -- expected both signs",
-        executed_positive, executed_negative
+        executed_positive,
+        executed_negative
     );
 
     println!(
@@ -602,7 +653,8 @@ fn test_mbo_feature_statistics() {
     assert!(
         zero_variance_features.is_empty(),
         "MBO features with unexpected zero variance: {:?} (excluded known-zero: {:?})",
-        zero_variance_features, known_zero_indices
+        zero_variance_features,
+        known_zero_indices
     );
 
     // Cancel rate features (indices 50,51) should be in [0, 1]
@@ -611,7 +663,9 @@ fn test_mbo_feature_statistics() {
         assert!(
             mins[fi] >= -0.001 && maxs[fi] <= 1.001,
             "Cancel rate feature[{}] range [{}, {}] outside [0, 1]",
-            cancel_idx, mins[fi], maxs[fi]
+            cancel_idx,
+            mins[fi],
+            maxs[fi]
         );
     }
 
@@ -621,7 +675,8 @@ fn test_mbo_feature_statistics() {
         assert!(
             mins[fi] >= -0.001,
             "Trade rate feature[{}] min = {} (expected >= 0)",
-            trade_idx, mins[fi]
+            trade_idx,
+            mins[fi]
         );
     }
 
@@ -724,12 +779,15 @@ fn test_export_end_to_end() {
         labels.len()
     );
     assert_eq!(
-        sequences.shape()[0], result.n_sequences,
+        sequences.shape()[0],
+        result.n_sequences,
         "sequences.shape[0]={} != result.n_sequences={}",
-        sequences.shape()[0], result.n_sequences
+        sequences.shape()[0],
+        result.n_sequences
     );
     assert_eq!(
-        sequences.shape()[1], 100,
+        sequences.shape()[1],
+        100,
         "window_size={} != 100",
         sequences.shape()[1]
     );
@@ -752,8 +810,16 @@ fn test_export_end_to_end() {
             inf_count += 1;
         }
     }
-    assert_eq!(nan_count, 0, "Found {} NaN values in exported sequences", nan_count);
-    assert_eq!(inf_count, 0, "Found {} Inf values in exported sequences", inf_count);
+    assert_eq!(
+        nan_count, 0,
+        "Found {} NaN values in exported sequences",
+        nan_count
+    );
+    assert_eq!(
+        inf_count, 0,
+        "Found {} Inf values in exported sequences",
+        inf_count
+    );
 
     // --- Validate labels in {-1, 0, 1} ---
     for &label in labels.iter() {
@@ -766,8 +832,7 @@ fn test_export_end_to_end() {
 
     // --- Validate metadata JSON ---
     let meta_content = std::fs::read_to_string(&meta_path).expect("read metadata.json");
-    let meta: serde_json::Value =
-        serde_json::from_str(&meta_content).expect("parse metadata.json");
+    let meta: serde_json::Value = serde_json::from_str(&meta_content).expect("parse metadata.json");
 
     let meta_n_seq = meta["n_sequences"].as_u64().expect("n_sequences");
     assert_eq!(
@@ -777,7 +842,11 @@ fn test_export_end_to_end() {
     );
 
     let meta_window = meta["window_size"].as_u64().expect("window_size");
-    assert_eq!(meta_window, 100, "metadata.window_size={} != 100", meta_window);
+    assert_eq!(
+        meta_window, 100,
+        "metadata.window_size={} != 100",
+        meta_window
+    );
 
     let meta_features = meta["n_features"].as_u64().expect("n_features");
     assert_eq!(

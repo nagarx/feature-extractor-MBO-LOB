@@ -86,14 +86,8 @@ fn orders_per_level(order_tracker: &OrderTracker, lob: &LobState) -> f64 {
 /// HHI = Σ(share_i)² where share_i = volume_i / total_volume
 /// Range: [1/N, 1.0]. Low = well-distributed, High = concentrated.
 fn level_concentration(lob: &LobState) -> f64 {
-    let total_bid: u64 = lob.bid_sizes[..lob.levels]
-        .iter()
-        .map(|&s| s as u64)
-        .sum();
-    let total_ask: u64 = lob.ask_sizes[..lob.levels]
-        .iter()
-        .map(|&s| s as u64)
-        .sum();
+    let total_bid: u64 = lob.bid_sizes[..lob.levels].iter().map(|&s| s as u64).sum();
+    let total_ask: u64 = lob.ask_sizes[..lob.levels].iter().map(|&s| s as u64).sum();
     let total = total_bid + total_ask;
 
     if total == 0 {
@@ -246,6 +240,11 @@ mod tests {
         lob.ask_sizes[1] = 100;
         let result = depth_ticks_ask(&lob, 10_000_000);
         let expected = 200.0 / 300.0;
-        assert!((result - expected).abs() < 1e-6, "Expected {}, got {}", expected, result);
+        assert!(
+            (result - expected).abs() < 1e-6,
+            "Expected {}, got {}",
+            expected,
+            result
+        );
     }
 }

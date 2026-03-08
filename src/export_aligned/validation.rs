@@ -170,13 +170,14 @@ impl AlignedBatchExporter {
     ) {
         const SEVERE_MAJORITY_THRESHOLD: f64 = 0.80;
         const MINORITY_THRESHOLD: f64 = 0.05;
-        
+
         let mut warnings = Vec::new();
-        
+
         if to_rate > SEVERE_MAJORITY_THRESHOLD {
             warnings.push(format!(
                 "⚠️  SEVERE CLASS IMBALANCE at H{}: Timeout={:.1}% (>80%)",
-                horizon, to_rate * 100.0
+                horizon,
+                to_rate * 100.0
             ));
             warnings.push(format!(
                 "    → Models will achieve ~{:.0}% accuracy by predicting only Timeout",
@@ -184,39 +185,41 @@ impl AlignedBatchExporter {
             ));
             warnings.push(format!(
                 "    → Current barriers: PT={:.1}bps, SL={:.1}bps are TOO TIGHT",
-                profit_target_pct * 10000.0, stop_loss_pct * 10000.0
+                profit_target_pct * 10000.0,
+                stop_loss_pct * 10000.0
             ));
-            warnings.push(
-                "    → Recommendation: REDUCE barriers. Run calibration tool:".to_string()
-            );
+            warnings
+                .push("    → Recommendation: REDUCE barriers. Run calibration tool:".to_string());
             warnings.push(format!(
                 "       python tools/calibrate_triple_barrier.py --data-dir <export> --horizons {horizon}"
             ));
         }
-        
+
         if pt_rate < MINORITY_THRESHOLD && pt_rate > 0.0 {
             warnings.push(format!(
                 "⚠️  ProfitTarget only {:.1}% at H{}: May be too rare to learn",
-                pt_rate * 100.0, horizon
+                pt_rate * 100.0,
+                horizon
             ));
         }
         if sl_rate < MINORITY_THRESHOLD && sl_rate > 0.0 {
             warnings.push(format!(
                 "⚠️  StopLoss only {:.1}% at H{}: May be too rare to learn",
-                sl_rate * 100.0, horizon
+                sl_rate * 100.0,
+                horizon
             ));
         }
-        
+
         if pt_rate > 0.0 && sl_rate > 0.0 {
             let pt_sl_ratio = pt_rate / sl_rate;
-            if pt_sl_ratio > 5.0 || pt_sl_ratio < 0.2 {
+            if !(0.2..=5.0).contains(&pt_sl_ratio) {
                 warnings.push(format!(
                     "⚠️  PT/SL ratio {:.1}x at H{}: Consider adjusting barrier asymmetry",
                     pt_sl_ratio, horizon
                 ));
             }
         }
-        
+
         for warning in warnings {
             eprintln!("{}", warning);
         }

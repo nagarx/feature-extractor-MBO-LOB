@@ -514,7 +514,7 @@ impl MultiScaleWindow {
     pub fn try_build_all(&mut self) -> Option<MultiScaleSequence> {
         // STREAMING FIX: Return ALL accumulated sequences from streaming mode,
         // plus any final sequences that can be built from remaining buffer data.
-        
+
         // Try to build any remaining sequences from buffers
         if let Some(seq) = self.fast_builder.try_build_sequence() {
             self.accumulated_fast.push(seq);
@@ -539,7 +539,12 @@ impl MultiScaleWindow {
         let medium = std::mem::take(&mut self.accumulated_medium);
         let slow = std::mem::take(&mut self.accumulated_slow);
 
-        Some(MultiScaleSequence::new(fast, medium, slow, self.total_events))
+        Some(MultiScaleSequence::new(
+            fast,
+            medium,
+            slow,
+            self.total_events,
+        ))
     }
 
     /// Get the number of events in each scale's buffer.
@@ -909,11 +914,14 @@ mod tests {
 
         let ms = window.try_build_all();
         assert!(ms.is_some(), "Should produce sequences with 4000 events");
-        
+
         let ms = ms.unwrap();
         // All scales should have sequences
         assert!(!ms.fast().is_empty(), "Fast scale should have sequences");
-        assert!(!ms.medium().is_empty(), "Medium scale should have sequences");
+        assert!(
+            !ms.medium().is_empty(),
+            "Medium scale should have sequences"
+        );
         assert!(!ms.slow().is_empty(), "Slow scale should have sequences");
 
         // Check first timestamp is correct
@@ -1174,7 +1182,7 @@ mod tests {
         // STREAMING FIX: Buffer counts are now reduced because sequences are built during push
         // After push, buffers only contain what hasn't been consumed
         // With stride=1 and window=3, buffer length stays at 3 (ring buffer)
-        
+
         // Build and verify - now we get MULTIPLE sequences per scale
         let ms = window.try_build_all().unwrap();
 

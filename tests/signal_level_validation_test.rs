@@ -170,7 +170,10 @@ fn test_feature_layout_documentation() {
     // Signals: 84-97
     assert_eq!(raw_lob, 40, "Raw LOB should be 40 features");
     assert_eq!(raw_lob + derived, 48, "Derived should end at 47 (48 total)");
-    assert_eq!(raw_lob + derived + mbo, 84, "MBO should end at 83 (84 total)");
+    assert_eq!(
+        raw_lob + derived + mbo,
+        84,
+        "MBO should end at 83 (84 total)"
+    );
     assert_eq!(total, 98, "Total with signals should be 98");
 }
-

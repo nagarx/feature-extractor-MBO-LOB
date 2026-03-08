@@ -20,11 +20,7 @@ use mbo_lob_reconstructor::{Action, Side};
 /// - [0-5]: Event rates (add_rate_bid/ask, cancel_rate_bid/ask, trade_rate_bid/ask)
 /// - [6-9]: Net flow imbalances (order, cancel, trade, aggressive ratio)
 /// - [10-11]: Flow characteristics (volatility, regime)
-pub(super) fn extract(
-    medium: &MboWindow,
-    fast: &MboWindow,
-    slow: &MboWindow,
-) -> [f64; 12] {
+pub(super) fn extract(medium: &MboWindow, fast: &MboWindow, slow: &MboWindow) -> [f64; 12] {
     let duration = medium.duration_seconds();
 
     [
@@ -228,7 +224,11 @@ mod tests {
         }
         let w = make_window_with_events(&events);
         let flow = net_trade_flow(&w);
-        assert!(flow > 0.0, "More ask trades (buy-initiated) = bullish, got {}", flow);
+        assert!(
+            flow > 0.0,
+            "More ask trades (buy-initiated) = bullish, got {}",
+            flow
+        );
     }
 
     #[test]
@@ -248,7 +248,14 @@ mod tests {
     fn test_order_flow_volatility_insufficient_data() {
         let mut w = MboWindow::new(1000);
         for i in 0..40u64 {
-            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             w.push(event);
         }
         assert_eq!(order_flow_volatility(&w), 0.0);
@@ -258,11 +265,22 @@ mod tests {
     fn test_order_flow_volatility_constant_flow() {
         let mut w = MboWindow::new(1000);
         for i in 0..100u64 {
-            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             w.push(event);
         }
         let vol = order_flow_volatility(&w);
-        assert!(vol < 0.01, "Constant flow should have near-zero volatility, got {}", vol);
+        assert!(
+            vol < 0.01,
+            "Constant flow should have near-zero volatility, got {}",
+            vol
+        );
     }
 
     #[test]

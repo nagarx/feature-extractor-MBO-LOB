@@ -8,19 +8,14 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// Sampling strategy selection for export configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SamplingStrategyConfig {
     /// Sample every N shares traded
     VolumeBased,
     /// Sample every N events
+    #[default]
     EventBased,
-}
-
-impl Default for SamplingStrategyConfig {
-    fn default() -> Self {
-        Self::EventBased
-    }
 }
 
 /// Export-specific sampling configuration.

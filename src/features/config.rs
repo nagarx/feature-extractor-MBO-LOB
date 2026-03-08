@@ -272,9 +272,7 @@ impl FeatureConfig {
             return Err("mbo_window_size must be > 0 when MBO is enabled".to_string());
         }
         if self.include_signals && !self.include_derived {
-            return Err(
-                "include_signals requires include_derived to be enabled".to_string(),
-            );
+            return Err("include_signals requires include_derived to be enabled".to_string());
         }
         if self.include_signals && !self.include_mbo {
             return Err("include_signals requires include_mbo to be enabled".to_string());
@@ -296,9 +294,7 @@ impl FeatureConfig {
         self.experimental.validate()?;
 
         if self.experimental.enabled && !self.include_mbo {
-            return Err(
-                "experimental features require include_mbo to be enabled".to_string(),
-            );
+            return Err("experimental features require include_mbo to be enabled".to_string());
         }
         Ok(())
     }

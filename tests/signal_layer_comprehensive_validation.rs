@@ -154,9 +154,7 @@ fn test_01_production_readiness() {
     let batch_config = BatchConfig::default();
     let processor = BatchProcessor::new(pipeline_config, batch_config);
 
-    let output = processor
-        .process_files(&files)
-        .expect("Failed to process");
+    let output = processor.process_files(&files).expect("Failed to process");
 
     println!("Processing Stats:");
     println!("  Messages: {:>12}", output.total_messages());
@@ -245,23 +243,29 @@ fn test_02_signal_bounds() {
 
     // Expected bounds for each signal
     let expected_bounds: [(Option<f64>, Option<f64>); 14] = [
-        (None, None),                  // true_ofi: unbounded
-        (None, None),                  // depth_norm_ofi: unbounded
-        (None, None),                  // executed_pressure: unbounded
-        (Some(-100.0), Some(100.0)),   // signed_mp_delta_bps: ~[-100, 100] typically
-        (Some(-1.0), Some(1.0)),       // trade_asymmetry: [-1, 1]
-        (Some(-1.0), Some(1.0)),       // cancel_asymmetry: [-1, 1]
-        (Some(0.0), None),             // fragility_score: [0, ∞)
-        (Some(-1.0), Some(1.0)),       // depth_asymmetry: [-1, 1]
-        (Some(0.0), Some(1.0)),        // book_valid: {0, 1}
-        (Some(0.0), Some(4.0)),        // time_regime: {0, 1, 2, 3, 4}
-        (Some(0.0), Some(1.0)),        // mbo_ready: {0, 1}
-        (Some(0.0), None),             // dt_seconds: [0, ∞)
-        (Some(0.0), None),             // invalidity_delta: [0, ∞)
-        (Some(feature_extractor::contract::SCHEMA_VERSION), Some(feature_extractor::contract::SCHEMA_VERSION)),        // schema_version: must match contract
+        (None, None),                // true_ofi: unbounded
+        (None, None),                // depth_norm_ofi: unbounded
+        (None, None),                // executed_pressure: unbounded
+        (Some(-100.0), Some(100.0)), // signed_mp_delta_bps: ~[-100, 100] typically
+        (Some(-1.0), Some(1.0)),     // trade_asymmetry: [-1, 1]
+        (Some(-1.0), Some(1.0)),     // cancel_asymmetry: [-1, 1]
+        (Some(0.0), None),           // fragility_score: [0, ∞)
+        (Some(-1.0), Some(1.0)),     // depth_asymmetry: [-1, 1]
+        (Some(0.0), Some(1.0)),      // book_valid: {0, 1}
+        (Some(0.0), Some(4.0)),      // time_regime: {0, 1, 2, 3, 4}
+        (Some(0.0), Some(1.0)),      // mbo_ready: {0, 1}
+        (Some(0.0), None),           // dt_seconds: [0, ∞)
+        (Some(0.0), None),           // invalidity_delta: [0, ∞)
+        (
+            Some(feature_extractor::contract::SCHEMA_VERSION),
+            Some(feature_extractor::contract::SCHEMA_VERSION),
+        ), // schema_version: must match contract
     ];
 
-    println!("{:<25} {:>12} {:>12} {:>12} {:>12}", "Signal", "Min", "Max", "Mean", "StdDev");
+    println!(
+        "{:<25} {:>12} {:>12} {:>12} {:>12}",
+        "Signal", "Min", "Max", "Mean", "StdDev"
+    );
     println!("{}", "-".repeat(75));
 
     let mut all_passed = true;
@@ -358,10 +362,16 @@ fn test_03_ofi_properties() {
     // Check 1: Mean should be close to zero relative to std dev
     let mean_zscore = ofi_mean.abs() / ofi_std;
     println!("Validation:");
-    println!("  OFI mean z-score: {:.4} (should be < 0.5 for no bias)", mean_zscore);
-    
+    println!(
+        "  OFI mean z-score: {:.4} (should be < 0.5 for no bias)",
+        mean_zscore
+    );
+
     // Check 2: OFI should have significant variance
-    assert!(ofi_std > 100.0, "OFI should have significant variance for liquid stocks");
+    assert!(
+        ofi_std > 100.0,
+        "OFI should have significant variance for liquid stocks"
+    );
     println!("  OFI has significant variance: ✓");
 
     // Check 3: Normalized OFI should have smaller std dev than raw
@@ -369,8 +379,14 @@ fn test_03_ofi_properties() {
     println!("  Normalized OFI range reduced: ✓");
 
     // Check 4: OFI should have both positive and negative values
-    assert!(ofi_min < 0.0, "OFI should have negative values (sell pressure)");
-    assert!(ofi_max > 0.0, "OFI should have positive values (buy pressure)");
+    assert!(
+        ofi_min < 0.0,
+        "OFI should have negative values (sell pressure)"
+    );
+    assert!(
+        ofi_max > 0.0,
+        "OFI should have positive values (buy pressure)"
+    );
     println!("  OFI captures both buy and sell pressure: ✓");
 
     println!("\n✅ PASSED: OFI properties validated per Cont et al. (2014)");
@@ -422,11 +438,17 @@ fn test_04_cross_signal_correlations() {
     let corr_ofi_norm = compute_correlation(&true_ofi, &depth_norm_ofi);
     println!("  true_ofi ↔ depth_norm_ofi:     {:>7.4}", corr_ofi_norm);
     println!("    Expected: > 0.5 (related but depth normalization adds variance)");
-    assert!(corr_ofi_norm > 0.5, "OFI and normalized OFI should be positively correlated");
+    assert!(
+        corr_ofi_norm > 0.5,
+        "OFI and normalized OFI should be positively correlated"
+    );
 
     // 2. executed_pressure and trade_asymmetry should correlate
     let corr_exec_trade = compute_correlation(&executed_pressure, &trade_asymmetry);
-    println!("\n  executed_pressure ↔ trade_asymmetry: {:>7.4}", corr_exec_trade);
+    println!(
+        "\n  executed_pressure ↔ trade_asymmetry: {:>7.4}",
+        corr_exec_trade
+    );
     println!("    Expected: > 0.5 (both measure trade imbalance)");
     // Note: They measure similar things but with different normalizations
 
@@ -575,8 +597,14 @@ fn test_06_warmup_behavior() {
     let warm_pct = (warm_count as f64 / total) * 100.0;
 
     println!("Warmup Statistics:");
-    println!("  Cold samples (mbo_ready=0): {:>8} ({:>5.2}%)", cold_count, cold_pct);
-    println!("  Warm samples (mbo_ready=1): {:>8} ({:>5.2}%)", warm_count, warm_pct);
+    println!(
+        "  Cold samples (mbo_ready=0): {:>8} ({:>5.2}%)",
+        cold_count, cold_pct
+    );
+    println!(
+        "  Warm samples (mbo_ready=1): {:>8} ({:>5.2}%)",
+        warm_count, warm_pct
+    );
 
     // Validation:
     // 1. Should have some cold samples at start (warmup period)
@@ -645,7 +673,10 @@ fn test_07_schema_version() {
         let version = signals[13]; // schema_version at index 13
         let expected = feature_extractor::contract::SCHEMA_VERSION;
         if (version - expected).abs() > 0.001 {
-            eprintln!("Sample {} has schema_version = {}, expected {}", i, version, expected);
+            eprintln!(
+                "Sample {} has schema_version = {}, expected {}",
+                i, version, expected
+            );
             all_version_2 = false;
         }
     }
@@ -654,9 +685,16 @@ fn test_07_schema_version() {
     println!("Schema Version Check:");
     println!("  Expected: {}", expected);
     println!("  Samples checked: {}", all_signals.len());
-    println!("  All match: {}", if all_version_2 { "pass" } else { "FAIL" });
+    println!(
+        "  All match: {}",
+        if all_version_2 { "pass" } else { "FAIL" }
+    );
 
-    assert!(all_version_2, "All samples must have schema_version = {}", expected);
+    assert!(
+        all_version_2,
+        "All samples must have schema_version = {}",
+        expected
+    );
 
     println!("\n✅ PASSED: Schema version validated");
 }
@@ -713,18 +751,8 @@ fn test_08_asymmetry_signals() {
         println!("  StdDev: {:.4}", std_dev);
 
         // Validate bounds
-        assert!(
-            min >= -1.0 - 0.001,
-            "{} min {} below -1",
-            name,
-            min
-        );
-        assert!(
-            max <= 1.0 + 0.001,
-            "{} max {} above 1",
-            name,
-            max
-        );
+        assert!(min >= -1.0 - 0.001, "{} min {} below -1", name, min);
+        assert!(max <= 1.0 + 0.001, "{} max {} above 1", name, max);
         println!("  Bounds [-1, 1]: ✓\n");
     }
 
@@ -734,12 +762,27 @@ fn test_08_asymmetry_signals() {
     let depth_uses_range = depth_asymmetry.iter().any(|&x| x.abs() > 0.1);
 
     println!("Dynamic Range:");
-    println!("  trade_asymmetry uses range: {}", if trade_uses_range { "✓" } else { "✗" });
-    println!("  cancel_asymmetry uses range: {}", if cancel_uses_range { "✓" } else { "✗" });
-    println!("  depth_asymmetry uses range: {}", if depth_uses_range { "✓" } else { "✗" });
+    println!(
+        "  trade_asymmetry uses range: {}",
+        if trade_uses_range { "✓" } else { "✗" }
+    );
+    println!(
+        "  cancel_asymmetry uses range: {}",
+        if cancel_uses_range { "✓" } else { "✗" }
+    );
+    println!(
+        "  depth_asymmetry uses range: {}",
+        if depth_uses_range { "✓" } else { "✗" }
+    );
 
-    assert!(trade_uses_range, "trade_asymmetry should have dynamic values");
-    assert!(depth_uses_range, "depth_asymmetry should have dynamic values");
+    assert!(
+        trade_uses_range,
+        "trade_asymmetry should have dynamic values"
+    );
+    assert!(
+        depth_uses_range,
+        "depth_asymmetry should have dynamic values"
+    );
 
     println!("\n✅ PASSED: Asymmetry signals validated");
 }
@@ -753,7 +796,10 @@ fn test_08_asymmetry_signals() {
 fn test_00_run_all_validations() {
     if !test_data_available() {
         eprintln!("╔══════════════════════════════════════════════════════════════╗");
-        eprintln!("║  SKIPPING: Hot store not available at {}  ║", HOT_STORE_DIR);
+        eprintln!(
+            "║  SKIPPING: Hot store not available at {}  ║",
+            HOT_STORE_DIR
+        );
         eprintln!("╚══════════════════════════════════════════════════════════════╝");
         return;
     }
@@ -766,25 +812,25 @@ fn test_00_run_all_validations() {
 
     test_01_production_readiness();
     println!("\n{}\n", "=".repeat(70));
-    
+
     test_02_signal_bounds();
     println!("\n{}\n", "=".repeat(70));
-    
+
     test_03_ofi_properties();
     println!("\n{}\n", "=".repeat(70));
-    
+
     test_04_cross_signal_correlations();
     println!("\n{}\n", "=".repeat(70));
-    
+
     test_05_time_regime_distribution();
     println!("\n{}\n", "=".repeat(70));
-    
+
     test_06_warmup_behavior();
     println!("\n{}\n", "=".repeat(70));
-    
+
     test_07_schema_version();
     println!("\n{}\n", "=".repeat(70));
-    
+
     test_08_asymmetry_signals();
 
     println!("\n");
@@ -792,4 +838,3 @@ fn test_00_run_all_validations() {
     println!("║  ✅ ALL VALIDATIONS PASSED - PRODUCTION READY                ║");
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 }
-

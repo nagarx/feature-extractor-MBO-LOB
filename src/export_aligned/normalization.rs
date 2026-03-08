@@ -65,10 +65,7 @@ impl AlignedBatchExporter {
                 levels,
             };
 
-            let copied: Vec<Vec<Vec<f64>>> = sequences
-                .iter()
-                .map(|seq| seq.iter().map(|ts| ts.clone()).collect())
-                .collect();
+            let copied: Vec<Vec<Vec<f64>>> = sequences.iter().map(|seq| seq.to_vec()).collect();
 
             println!("    ✓ Raw values preserved (model handles normalization internally)");
             return Ok((copied, norm_params));
@@ -119,8 +116,7 @@ impl AlignedBatchExporter {
                 let mut norm_timestep = Vec::with_capacity(n_features);
 
                 // Ask prices (0-9)
-                for level in 0..levels {
-                    let value = timestep[level];
+                for (level, &value) in timestep[..levels].iter().enumerate() {
                     let norm_value = self.apply_normalization(
                         value,
                         &config.lob_prices,
@@ -203,9 +199,7 @@ impl AlignedBatchExporter {
                 }
 
                 // Signal features (84+): NEVER normalize (includes categoricals)
-                for i in 84..n_features {
-                    norm_timestep.push(timestep[i]);
-                }
+                norm_timestep.extend_from_slice(&timestep[84..n_features]);
 
                 norm_seq.push(norm_timestep);
             }
@@ -286,17 +280,17 @@ impl AlignedBatchExporter {
                     }
                 }
 
-                for i in 0..8 {
+                for (i, values) in derived_values.iter_mut().enumerate() {
                     let idx = 40 + i;
                     if idx < n_features {
-                        derived_values[i].push(timestep[idx]);
+                        values.push(timestep[idx]);
                     }
                 }
 
-                for i in 0..36 {
+                for (i, values) in mbo_values.iter_mut().enumerate() {
                     let idx = 48 + i;
                     if idx < n_features {
-                        mbo_values[i].push(timestep[idx]);
+                        values.push(timestep[idx]);
                     }
                 }
             }
@@ -390,8 +384,8 @@ impl AlignedBatchExporter {
             let values = &derived_values[i];
             if !values.is_empty() {
                 let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
-                let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                    / values.len() as f64;
+                let variance: f64 =
+                    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
                 derived_means[i] = mean;
                 derived_stds[i] = if variance > epsilon {
                     variance.sqrt()
@@ -407,8 +401,8 @@ impl AlignedBatchExporter {
             let values = &mbo_values[i];
             if !values.is_empty() {
                 let mean: f64 = values.iter().sum::<f64>() / values.len() as f64;
-                let variance: f64 = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                    / values.len() as f64;
+                let variance: f64 =
+                    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
                 mbo_means[i] = mean;
                 mbo_stds[i] = if variance > epsilon {
                     variance.sqrt()

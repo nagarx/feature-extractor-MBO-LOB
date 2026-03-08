@@ -40,16 +40,16 @@
 //! let signals = compute_signals(&features_84, &ofi_sample, timestamp_ns, invalidity_delta);
 //! ```
 
-mod time_regime;
 mod book_valid;
-mod ofi;
 mod compute;
 pub mod indices;
+mod ofi;
+mod time_regime;
 
-pub use time_regime::{TimeRegime, compute_time_regime, compute_time_regime_from_et};
 pub use book_valid::{is_book_valid, is_book_valid_from_lob};
+pub use compute::{compute_signals, compute_signals_with_book_valid, SignalVector};
 pub use ofi::{OfiComputer, OfiSample, MIN_WARMUP_STATE_CHANGES};
-pub use compute::{SignalVector, compute_signals, compute_signals_with_book_valid};
+pub use time_regime::{compute_time_regime, compute_time_regime_from_et, TimeRegime};
 
 // ============================================================================
 // Signal Context

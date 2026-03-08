@@ -487,13 +487,25 @@ fn test_label_encoding_triple_barrier_contract() {
     let enc = LabelEncoding::TripleBarrierClassIndex;
     assert_eq!(enc.valid_range(), (0, 2));
     assert_eq!(enc.num_classes(), 3);
-    assert_eq!(enc.class_names(), vec!["StopLoss", "Timeout", "ProfitTarget"]);
+    assert_eq!(
+        enc.class_names(),
+        vec!["StopLoss", "Timeout", "ProfitTarget"]
+    );
     assert_eq!(enc.strategy_name(), "Triple Barrier");
 
     let desc = enc.expected_range_description();
-    assert!(desc.contains("0=StopLoss"), "Expected '0=StopLoss' in: {desc}");
-    assert!(desc.contains("1=Timeout"), "Expected '1=Timeout' in: {desc}");
-    assert!(desc.contains("2=ProfitTarget"), "Expected '2=ProfitTarget' in: {desc}");
+    assert!(
+        desc.contains("0=StopLoss"),
+        "Expected '0=StopLoss' in: {desc}"
+    );
+    assert!(
+        desc.contains("1=Timeout"),
+        "Expected '1=Timeout' in: {desc}"
+    );
+    assert!(
+        desc.contains("2=ProfitTarget"),
+        "Expected '2=ProfitTarget' in: {desc}"
+    );
 }
 
 #[test]

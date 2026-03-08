@@ -341,7 +341,10 @@ mod tests {
         let sample = computer.sample_and_reset(1_000_000_000);
 
         assert_eq!(sample.ofi_bid, 80.0);
-        assert!(sample.ofi > 0.0, "Bid price improvement should be positive OFI");
+        assert!(
+            sample.ofi > 0.0,
+            "Bid price improvement should be positive OFI"
+        );
     }
 
     #[test]
@@ -389,7 +392,10 @@ mod tests {
         let sample = computer.sample_and_reset(1_000_000_000);
 
         assert_eq!(sample.ofi_ask, -80.0);
-        assert!(sample.ofi < 0.0, "Ask price improvement should be negative OFI");
+        assert!(
+            sample.ofi < 0.0,
+            "Ask price improvement should be negative OFI"
+        );
     }
 
     #[test]
@@ -410,7 +416,10 @@ mod tests {
         }
 
         assert!(computer.is_warm());
-        assert_eq!(computer.state_changes_since_reset(), MIN_WARMUP_STATE_CHANGES);
+        assert_eq!(
+            computer.state_changes_since_reset(),
+            MIN_WARMUP_STATE_CHANGES
+        );
     }
 
     #[test]

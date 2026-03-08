@@ -59,7 +59,10 @@ fn test_mbo_features_real_data_validation() {
     println!("\n╔══════════════════════════════════════════════════════════════╗");
     println!("║      MBO FEATURES REAL DATA VALIDATION (OPTIMIZED)           ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
-    println!("║ Files: {} hot store files                                    ║", files.len());
+    println!(
+        "║ Files: {} hot store files                                    ║",
+        files.len()
+    );
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 
     // Use first 3 files for validation
@@ -68,9 +71,9 @@ fn test_mbo_features_real_data_validation() {
     // Create optimized pipeline config with MBO features enabled
     let pipeline_config = PipelineBuilder::new()
         .lob_levels(10)
-        .with_derived_features()  // Enable derived features (8 features)
-        .with_mbo_features()      // Enable MBO features (36 features)
-        .event_sampling(1000)     // Sample every 1000 events for speed
+        .with_derived_features() // Enable derived features (8 features)
+        .with_mbo_features() // Enable MBO features (36 features)
+        .event_sampling(1000) // Sample every 1000 events for speed
         .window(100, 10)
         .build_config()
         .expect("Failed to create pipeline config");
@@ -83,7 +86,10 @@ fn test_mbo_features_real_data_validation() {
 
     let processor = BatchProcessor::new(pipeline_config, batch_config);
 
-    println!("🚀 Processing {} files using optimized parallel pipeline...\n", test_files.len());
+    println!(
+        "🚀 Processing {} files using optimized parallel pipeline...\n",
+        test_files.len()
+    );
 
     let start = std::time::Instant::now();
     let result = processor.process_files(&test_files);
@@ -114,7 +120,7 @@ fn test_mbo_features_real_data_validation() {
             //   - depth_ticks_ask: 25 → 48 + 25 = 73
 
             let mbo_feature_indices = [58, 66, 67, 68, 69, 70, 71, 72, 73];
-            
+
             let mut feature_sums: Vec<f64> = vec![0.0; mbo_feature_indices.len()];
             let mut feature_mins: Vec<f64> = vec![f64::MAX; mbo_feature_indices.len()];
             let mut feature_maxs: Vec<f64> = vec![f64::MIN; mbo_feature_indices.len()];
@@ -125,7 +131,7 @@ fn test_mbo_features_real_data_validation() {
                     .file_name()
                     .unwrap()
                     .to_string_lossy();
-                    
+
                 println!("\n📂 {}", day_name);
                 println!("   Sequences: {}", day_result.output.sequences.len());
                 println!("   Processing time: {:?}", day_result.elapsed);
@@ -136,7 +142,7 @@ fn test_mbo_features_real_data_validation() {
                 for seq in &day_result.output.sequences {
                     for timestep in &seq.features {
                         let feature_vec = timestep.as_ref();
-                        
+
                         // Check MBO features
                         for (i, &idx) in mbo_feature_indices.iter().enumerate() {
                             if idx < feature_vec.len() {
@@ -176,7 +182,10 @@ fn test_mbo_features_real_data_validation() {
                 "depth_ticks_ask",
             ];
 
-            println!("\n{:<25} {:>12} {:>12} {:>12}", "Feature", "Min", "Mean", "Max");
+            println!(
+                "\n{:<25} {:>12} {:>12} {:>12}",
+                "Feature", "Min", "Mean", "Max"
+            );
             println!("{}", "-".repeat(65));
 
             for (i, name) in feature_names.iter().enumerate() {
@@ -198,15 +207,23 @@ fn test_mbo_features_real_data_validation() {
             println!("   Inf values: {}", inf_count);
 
             // Assertions
-            assert_eq!(nan_count, 0, "Found {} NaN values in MBO features!", nan_count);
-            assert_eq!(inf_count, 0, "Found {} Inf values in MBO features!", inf_count);
+            assert_eq!(
+                nan_count, 0,
+                "Found {} NaN values in MBO features!",
+                nan_count
+            );
+            assert_eq!(
+                inf_count, 0,
+                "Found {} Inf values in MBO features!",
+                inf_count
+            );
             assert!(total_sequences > 0, "No sequences generated!");
 
             // Validate feature ranges for implemented features
             // size_concentration and level_concentration should be in [0, 1]
             let size_conc_idx = 2; // index in our array
             let level_conc_idx = 6;
-            
+
             if feature_counts[size_conc_idx] > 0 {
                 assert!(
                     feature_mins[size_conc_idx] >= 0.0,
@@ -236,7 +253,7 @@ fn test_mbo_features_real_data_validation() {
             // depth_ticks should be >= 0
             let depth_bid_idx = 7;
             let depth_ask_idx = 8;
-            
+
             if feature_counts[depth_bid_idx] > 0 {
                 assert!(
                     feature_mins[depth_bid_idx] >= 0.0,
@@ -244,7 +261,7 @@ fn test_mbo_features_real_data_validation() {
                     feature_mins[depth_bid_idx]
                 );
             }
-            
+
             if feature_counts[depth_ask_idx] > 0 {
                 assert!(
                     feature_mins[depth_ask_idx] >= 0.0,
@@ -304,17 +321,21 @@ fn test_parallel_vs_sequential_consistency() {
     let seq_config = BatchConfig::new()
         .with_threads(1)
         .with_hot_store_dir(HOT_STORE_DIR);
-    
+
     let seq_processor = BatchProcessor::new(pipeline_config.clone(), seq_config);
-    let seq_result = seq_processor.process_files(&test_files).expect("Sequential failed");
+    let seq_result = seq_processor
+        .process_files(&test_files)
+        .expect("Sequential failed");
 
     // Process with 4 threads (parallel)
     let par_config = BatchConfig::new()
         .with_threads(4)
         .with_hot_store_dir(HOT_STORE_DIR);
-    
+
     let par_processor = BatchProcessor::new(pipeline_config, par_config);
-    let par_result = par_processor.process_files(&test_files).expect("Parallel failed");
+    let par_result = par_processor
+        .process_files(&test_files)
+        .expect("Parallel failed");
 
     // Compare results
     assert_eq!(

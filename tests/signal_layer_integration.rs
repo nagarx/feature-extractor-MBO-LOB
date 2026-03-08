@@ -46,7 +46,10 @@ fn get_test_files() -> Vec<String> {
 #[ignore] // Run with: cargo test --test signal_layer_integration -- --ignored
 fn test_signal_layer_feature_count() {
     if !test_data_available() {
-        eprintln!("Skipping test: Hot store data not available at {}", HOT_STORE_DIR);
+        eprintln!(
+            "Skipping test: Hot store data not available at {}",
+            HOT_STORE_DIR
+        );
         return;
     }
 
@@ -112,7 +115,10 @@ fn test_signal_layer_feature_count() {
 #[ignore] // Run with: cargo test --test signal_layer_integration -- --ignored
 fn test_signal_values_in_expected_ranges() {
     if !test_data_available() {
-        eprintln!("Skipping test: Hot store data not available at {}", HOT_STORE_DIR);
+        eprintln!(
+            "Skipping test: Hot store data not available at {}",
+            HOT_STORE_DIR
+        );
         return;
     }
 
@@ -140,7 +146,8 @@ fn test_signal_values_in_expected_ranges() {
         .expect("Failed to process files");
 
     // Track signal statistics
-    let mut signal_stats = vec![(f64::MAX, f64::MIN, 0.0, 0u64); feature_extractor::contract::SIGNAL_COUNT];
+    let mut signal_stats =
+        vec![(f64::MAX, f64::MIN, 0.0, 0u64); feature_extractor::contract::SIGNAL_COUNT];
 
     // Collect statistics from all feature vectors
     for result in output.results.iter() {
@@ -168,7 +175,10 @@ fn test_signal_values_in_expected_ranges() {
 
     // Validate signal ranges
     println!("\nSignal Statistics:");
-    println!("{:<25} {:>12} {:>12} {:>12}", "Signal", "Min", "Max", "Mean");
+    println!(
+        "{:<25} {:>12} {:>12} {:>12}",
+        "Signal", "Min", "Max", "Mean"
+    );
     println!("{}", "-".repeat(65));
 
     let signal_names = [
@@ -275,7 +285,10 @@ fn test_signal_values_in_expected_ranges() {
 #[ignore] // Run with: cargo test --test signal_layer_integration -- --ignored
 fn test_ofi_warmup_behavior() {
     if !test_data_available() {
-        eprintln!("Skipping test: Hot store data not available at {}", HOT_STORE_DIR);
+        eprintln!(
+            "Skipping test: Hot store data not available at {}",
+            HOT_STORE_DIR
+        );
         return;
     }
 
@@ -340,7 +353,10 @@ fn test_ofi_warmup_behavior() {
 #[ignore] // Run with: cargo test --test signal_layer_integration -- --ignored
 fn test_signals_are_finite() {
     if !test_data_available() {
-        eprintln!("Skipping test: Hot store data not available at {}", HOT_STORE_DIR);
+        eprintln!(
+            "Skipping test: Hot store data not available at {}",
+            HOT_STORE_DIR
+        );
         return;
     }
 

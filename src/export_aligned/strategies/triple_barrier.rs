@@ -9,6 +9,8 @@ use crate::pipeline::PipelineOutput;
 use mbo_lob_reconstructor::Result;
 use std::collections::HashMap;
 
+type LabelMatrix = (Vec<usize>, Vec<Vec<i8>>, HashMap<String, usize>);
+
 impl AlignedBatchExporter {
     /// Triple Barrier labeling strategy with optional volatility scaling.
     pub(crate) fn labeling_triple_barrier(
@@ -245,18 +247,14 @@ impl AlignedBatchExporter {
 
         let n = log_returns.len() as f64;
         let mean = log_returns.iter().sum::<f64>() / n;
-        let var = log_returns
-            .iter()
-            .map(|r| (r - mean).powi(2))
-            .sum::<f64>()
-            / (n - 1.0);
+        let var = log_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
         var.sqrt()
     }
 
     /// Build label matrix for Triple Barrier labeling.
     fn build_triple_barrier_label_matrix(
         all_labels: &[Vec<(usize, BarrierLabel, usize, f64)>],
-    ) -> Result<(Vec<usize>, Vec<Vec<i8>>, HashMap<String, usize>)> {
+    ) -> Result<LabelMatrix> {
         use std::collections::BTreeSet;
 
         let mut valid_indices: Option<BTreeSet<usize>> = None;

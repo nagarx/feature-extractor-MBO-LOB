@@ -94,8 +94,8 @@ fn test_min_interval_stored_correctly() {
     assert!(sampler2.should_sample(100, t0)); // First sample
 
     let t_too_soon = t0 + min_interval_ns - 1; // 1 nanosecond too soon
-    // Note: accumulated_volume is 0 after first sample, adding 100 meets threshold
-    // But time check should fail
+                                               // Note: accumulated_volume is 0 after first sample, adding 100 meets threshold
+                                               // But time check should fail
     assert!(
         !sampler2.should_sample(100, t_too_soon),
         "Should NOT sample when time is insufficient (1 ns too soon)"
@@ -159,7 +159,7 @@ fn test_api_consistency_with_config() {
 
     // Use non-zero base time to avoid edge case where last_sample_time == 0
     let t0: u64 = 1_000_000_000; // 1 second
-    
+
     // Create sampler with 10ms minimum interval
     let mut sampler = VolumeBasedSampler::new(100, ten_milliseconds_ns);
     assert!(sampler.should_sample(100, t0)); // First sample
@@ -178,4 +178,3 @@ fn test_api_consistency_with_config() {
         "Should sample at 10ms when minimum is 10ms"
     );
 }
-

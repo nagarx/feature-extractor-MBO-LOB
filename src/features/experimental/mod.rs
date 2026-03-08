@@ -167,9 +167,7 @@ impl ExperimentalConfig {
             return Err("volatility_fast_window must be >= 10".to_string());
         }
         if self.volatility_slow_window < self.volatility_fast_window {
-            return Err(
-                "volatility_slow_window must be >= volatility_fast_window".to_string(),
-            );
+            return Err("volatility_slow_window must be >= volatility_fast_window".to_string());
         }
         if self.institutional_window < 20 {
             return Err("institutional_window must be >= 20".to_string());
@@ -316,18 +314,17 @@ mod tests {
     fn test_all_groups() {
         let config = ExperimentalConfig::new().with_all_groups();
         assert!(config.enabled);
-        
-        let expected = institutional_v2::FEATURE_COUNT 
-            + volatility::FEATURE_COUNT 
+
+        let expected = institutional_v2::FEATURE_COUNT
+            + volatility::FEATURE_COUNT
             + seasonality::FEATURE_COUNT;
         assert_eq!(config.feature_count(), expected);
     }
 
     #[test]
     fn test_specific_groups() {
-        let config = ExperimentalConfig::new()
-            .with_groups(vec!["volatility".to_string()]);
-        
+        let config = ExperimentalConfig::new().with_groups(vec!["volatility".to_string()]);
+
         assert!(config.enabled);
         assert_eq!(config.feature_count(), volatility::FEATURE_COUNT);
     }
@@ -337,7 +334,7 @@ mod tests {
         let mut config = ExperimentalConfig::new();
         config.enabled = true;
         config.groups = vec!["invalid_group".to_string()];
-        
+
         assert!(config.validate().is_err());
     }
 }

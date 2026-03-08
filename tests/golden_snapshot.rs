@@ -52,9 +52,7 @@ fn build_config() -> PipelineConfig {
         .expect("Failed to build 98-feature config")
 }
 
-fn extract_golden_vectors(
-    output: &feature_extractor::PipelineOutput,
-) -> Vec<Vec<f64>> {
+fn extract_golden_vectors(output: &feature_extractor::PipelineOutput) -> Vec<Vec<f64>> {
     let start = WARMUP_SKIP;
     let end = (start + GOLDEN_COUNT).min(output.sequences.len());
 
@@ -134,8 +132,7 @@ fn test_golden_snapshot_regression() {
     }
 
     let fixture_content = std::fs::read_to_string(&fixture_file).expect("read fixture");
-    let fixture: GoldenFixture =
-        serde_json::from_str(&fixture_content).expect("parse fixture");
+    let fixture: GoldenFixture = serde_json::from_str(&fixture_content).expect("parse fixture");
 
     assert_eq!(
         fixture.schema_version,
@@ -152,8 +149,7 @@ fn test_golden_snapshot_regression() {
         contract::STABLE_FEATURE_COUNT
     );
     assert_eq!(
-        fixture.vector_count,
-        GOLDEN_COUNT,
+        fixture.vector_count, GOLDEN_COUNT,
         "Fixture vector_count mismatch"
     );
 
@@ -167,8 +163,10 @@ fn test_golden_snapshot_regression() {
     let mut nondeterministic_mismatches = 0u64;
     let mut total_checked = 0u64;
 
-    for (vec_idx, (current, golden)) in
-        current_vectors.iter().zip(fixture.vectors.iter()).enumerate()
+    for (vec_idx, (current, golden)) in current_vectors
+        .iter()
+        .zip(fixture.vectors.iter())
+        .enumerate()
     {
         assert_eq!(
             current.len(),
@@ -219,7 +217,8 @@ fn test_golden_snapshot_regression() {
     }
 
     assert_eq!(
-        deterministic_mismatches, 0,
+        deterministic_mismatches,
+        0,
         "Golden snapshot REGRESSION: {} deterministic mismatches in {} checks. \
          If changes are intentional, delete {} and re-run to regenerate.",
         deterministic_mismatches,

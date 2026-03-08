@@ -40,8 +40,7 @@
 
 use feature_extractor::batch::{BatchConfig, BatchProcessor, ConsoleProgress, ErrorMode};
 use feature_extractor::export::{
-    DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo,
-    ExportLabelConfig, SymbolConfig,
+    DataPathConfig, DatasetConfig, DateRangeConfig, ExperimentInfo, ExportLabelConfig, SymbolConfig,
 };
 use feature_extractor::AlignedBatchExporter;
 use std::fs;
@@ -213,22 +212,10 @@ fn print_config_summary(config: &DatasetConfig) {
     println!("│ Features:   {:<49} │", config.feature_count());
     println!("│");
     println!("│ Feature Configuration:");
-    println!(
-        "│   LOB Levels:    {}",
-        config.features.lob_levels
-    );
-    println!(
-        "│   Include Derived: {}",
-        config.features.include_derived
-    );
-    println!(
-        "│   Include MBO:     {}",
-        config.features.include_mbo
-    );
-    println!(
-        "│   Include Signals: {}",
-        config.features.include_signals
-    );
+    println!("│   LOB Levels:    {}", config.features.lob_levels);
+    println!("│   Include Derived: {}", config.features.include_derived);
+    println!("│   Include MBO:     {}", config.features.include_mbo);
+    println!("│   Include Signals: {}", config.features.include_signals);
     println!("│");
     println!("│ Label Configuration:");
     println!(
@@ -236,15 +223,9 @@ fn print_config_summary(config: &DatasetConfig) {
         config.labels.strategy.description()
     );
     if config.labels.is_multi_horizon() {
-        println!(
-            "│   Horizons:       {:?}",
-            config.labels.horizons
-        );
+        println!("│   Horizons:       {:?}", config.labels.horizons);
     } else {
-        println!(
-            "│   Horizon:        {}",
-            config.labels.horizon
-        );
+        println!("│   Horizon:        {}", config.labels.horizon);
     }
     // Triple Barrier specific display
     if config.labels.strategy.is_triple_barrier() {
@@ -262,7 +243,8 @@ fn print_config_summary(config: &DatasetConfig) {
                 sl * 10000.0
             );
         }
-        if let (Some(pt), Some(sl)) = (config.labels.profit_target_pct, config.labels.stop_loss_pct) {
+        if let (Some(pt), Some(sl)) = (config.labels.profit_target_pct, config.labels.stop_loss_pct)
+        {
             if sl > 0.0 {
                 println!("│   Risk/Reward:    {:.2}:1", pt / sl);
             }
@@ -273,10 +255,7 @@ fn print_config_summary(config: &DatasetConfig) {
     } else {
         // TLOB/Opportunity display
         if !config.labels.strategy.is_opportunity() {
-            println!(
-                "│   Smoothing:      {}",
-                config.labels.smoothing_window
-            );
+            println!("│   Smoothing:      {}", config.labels.smoothing_window);
         }
         println!(
             "│   Threshold:      {} ({:.1} bps)",
@@ -440,22 +419,18 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
 
         // Log normalization strategy
         if config.normalization.any_normalization() {
-            println!(
-                "    📊 Normalization: {}",
-                config.normalization.summary()
-            );
+            println!("    📊 Normalization: {}", config.normalization.summary());
         } else {
             println!("    📊 Normalization: NONE (raw export)");
         }
 
         // Configure exporter based on labeling strategy
         // Priority: Triple Barrier > Opportunity > Multi-horizon TLOB > Single-horizon TLOB
-        let exporter = if let Some((tb_configs, horizons)) = config.labels.to_triple_barrier_configs() {
+        let exporter = if let Some((tb_configs, horizons)) =
+            config.labels.to_triple_barrier_configs()
+        {
             // Triple Barrier labeling (trade outcome prediction)
-            println!(
-                "    📊 Triple Barrier mode: {:?} horizons",
-                horizons
-            );
+            println!("    📊 Triple Barrier mode: {:?} horizons", horizons);
             println!(
                 "       Base profit target: {:.4}% ({:.1} bps)",
                 tb_configs[0].profit_target_pct * 100.0,
@@ -545,14 +520,8 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║              Aligned Export Complete                         ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
-    println!(
-        "║  Days processed: {:<44} ║",
-        total_days_processed
-    );
-    println!(
-        "║  Sequences exported: {:<40} ║",
-        total_sequences_exported
-    );
+    println!("║  Days processed: {:<44} ║", total_days_processed);
+    println!("║  Sequences exported: {:<40} ║", total_sequences_exported);
     if config.labels.is_multi_horizon() {
         let horizons = &config.labels.horizons;
         println!(
@@ -561,7 +530,10 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
         );
         println!(
             "║  Horizons: {:<50} ║",
-            format!("{:?}", horizons).chars().take(50).collect::<String>()
+            format!("{:?}", horizons)
+                .chars()
+                .take(50)
+                .collect::<String>()
         );
         println!(
             "║  Labels shape: {:<46} ║",
@@ -572,22 +544,27 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
             "║  Label mode: {:<48} ║",
             format!("Single-horizon (h={})", config.labels.horizon)
         );
-        println!(
-            "║  Labels shape: {:<46} ║",
-            "[N]"
-        );
+        println!("║  Labels shape: {:<46} ║", "[N]");
     }
-    println!(
-        "║  Alignment: {:<49} ║",
-        "1:1 (sequence ↔ label)"
-    );
+    println!("║  Alignment: {:<49} ║", "1:1 (sequence ↔ label)");
     println!(
         "║  Sequences format: {:<42} ║",
-        format!("[N, {}, {}]", pipeline_config.sequence.window_size, config.feature_count())
+        format!(
+            "[N, {}, {}]",
+            pipeline_config.sequence.window_size,
+            config.feature_count()
+        )
     );
     println!(
         "║  Output directory: {:<42} ║",
-        config.data.output_dir.display().to_string().chars().take(42).collect::<String>()
+        config
+            .data
+            .output_dir
+            .display()
+            .to_string()
+            .chars()
+            .take(42)
+            .collect::<String>()
     );
     println!("╚══════════════════════════════════════════════════════════════╝");
 
@@ -596,7 +573,10 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
 
 /// Compute the config hash for provenance tracking.
 fn compute_config_hash(config: &DatasetConfig) -> String {
-    format!("{:x}", md5::compute(serde_json::to_string(config).unwrap_or_default()))
+    format!(
+        "{:x}",
+        md5::compute(serde_json::to_string(config).unwrap_or_default())
+    )
 }
 
 /// Save dataset manifest for reproducibility
@@ -635,11 +615,7 @@ fn save_manifest(
     let config_copy_path = config.data.output_dir.join("export_config.toml");
     config.save_toml(&config_copy_path)?;
 
-    println!(
-        "📋 Saved manifest: {}",
-        manifest_path.display()
-    );
+    println!("📋 Saved manifest: {}", manifest_path.display());
 
     Ok(())
 }
-

@@ -122,11 +122,22 @@ mod tests {
         let mut tracker = OrderTracker::new();
         let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, 1);
         tracker.process_event(&add);
-        let cancel = MboEvent::new(1_000_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, 1);
+        let cancel = MboEvent::new(
+            1_000_000_000,
+            Action::Cancel,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            1,
+        );
         tracker.process_event(&cancel);
 
         let median = median_order_lifetime(&tracker);
-        assert!((median - 1.0).abs() < 0.001, "Expected 1.0s, got {}", median);
+        assert!(
+            (median - 1.0).abs() < 0.001,
+            "Expected 1.0s, got {}",
+            median
+        );
     }
 
     #[test]
@@ -136,11 +147,22 @@ mod tests {
             let lifetime_ns = (i + 1) * 1_000_000_000;
             let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, i);
             tracker.process_event(&add);
-            let cancel = MboEvent::new(lifetime_ns, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            let cancel = MboEvent::new(
+                lifetime_ns,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             tracker.process_event(&cancel);
         }
         let median = median_order_lifetime(&tracker);
-        assert!((median - 3.0).abs() < 0.001, "Median of [1,2,3,4,5] should be 3.0, got {}", median);
+        assert!(
+            (median - 3.0).abs() < 0.001,
+            "Median of [1,2,3,4,5] should be 3.0, got {}",
+            median
+        );
     }
 
     #[test]
@@ -150,11 +172,22 @@ mod tests {
             let lifetime_ns = (i + 1) * 1_000_000_000;
             let add = MboEvent::new(0, Action::Add, Side::Bid, 100_000_000_000, 100, i);
             tracker.process_event(&add);
-            let cancel = MboEvent::new(lifetime_ns, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            let cancel = MboEvent::new(
+                lifetime_ns,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             tracker.process_event(&cancel);
         }
         let median = median_order_lifetime(&tracker);
-        assert!((median - 2.5).abs() < 0.001, "Median of [1,2,3,4] should be 2.5, got {}", median);
+        assert!(
+            (median - 2.5).abs() < 0.001,
+            "Median of [1,2,3,4] should be 2.5, got {}",
+            median
+        );
     }
 
     #[test]
@@ -179,11 +212,25 @@ mod tests {
     fn test_cancel_to_add_ratio_normal() {
         let mut w = MboWindow::new(1000);
         for i in 0..10u64 {
-            let event = MboEvent::new(i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             w.push(event);
         }
         for i in 10..15u64 {
-            let event = MboEvent::new(i * 1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             w.push(event);
         }
 
@@ -195,7 +242,14 @@ mod tests {
     fn test_cancel_to_add_ratio_no_adds() {
         let mut w = MboWindow::new(1000);
         for i in 0..5u64 {
-            let event = MboEvent::new(i * 1_000_000, Action::Cancel, Side::Bid, 100_000_000_000, 100, i);
+            let event = MboEvent::new(
+                i * 1_000_000,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                i,
+            );
             w.push(event);
         }
         assert_eq!(cancel_to_add_ratio(&w), 10.0);

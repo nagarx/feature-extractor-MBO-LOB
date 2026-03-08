@@ -32,23 +32,28 @@ fn create_test_lob() -> LobState {
 #[test]
 fn test_extract_into_matches_base_feature_count() {
     // Without signals, extract_into should produce exactly base_feature_count() features
-    let config = FeatureConfig::new(10)
-        .with_derived(true)
-        .with_mbo(true);
-    
+    let config = FeatureConfig::new(10).with_derived(true).with_mbo(true);
+
     let mut extractor = FeatureExtractor::with_config(config);
     let lob = create_test_lob();
-    
+
     // Warm up MBO
     for i in 0..100 {
         extractor.process_mbo_event(MboEvent::new(
-            i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i
+            i * 1_000_000,
+            Action::Add,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            i,
         ));
     }
-    
+
     let mut output = Vec::new();
-    extractor.extract_into(&lob, &mut output).expect("extraction should succeed");
-    
+    extractor
+        .extract_into(&lob, &mut output)
+        .expect("extraction should succeed");
+
     // This should pass: base_feature_count() == output.len()
     assert_eq!(
         output.len(),
@@ -63,17 +68,19 @@ fn test_base_feature_count_excludes_signals() {
         .with_derived(true)
         .with_mbo(true)
         .with_signals(true);
-    
+
     let extractor = FeatureExtractor::with_config(config);
-    
+
     // base_feature_count should be 84 (40 raw + 8 derived + 36 MBO)
     // total_feature_count should be 98 (84 + 14 signals)
     assert_eq!(
-        extractor.base_feature_count(), 84,
+        extractor.base_feature_count(),
+        84,
         "base_feature_count should be 84 (without signals)"
     );
     assert_eq!(
-        extractor.feature_count(), 98,
+        extractor.feature_count(),
+        98,
         "feature_count should be 98 (with signals)"
     );
 }
@@ -85,30 +92,34 @@ fn test_extract_into_produces_base_features_only() {
         .with_derived(true)
         .with_mbo(true)
         .with_signals(true);
-    
+
     let mut extractor = FeatureExtractor::with_config(config);
     let lob = create_test_lob();
-    
+
     // Warm up MBO
     for i in 0..100 {
         extractor.process_mbo_event(MboEvent::new(
-            i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i
+            i * 1_000_000,
+            Action::Add,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            i,
         ));
     }
-    
+
     let mut output = Vec::new();
-    extractor.extract_into(&lob, &mut output).expect("extraction should succeed");
-    
+    extractor
+        .extract_into(&lob, &mut output)
+        .expect("extraction should succeed");
+
     // extract_into produces base features only (84)
     assert_eq!(
         output.len(),
         extractor.base_feature_count(),
         "extract_into() produces base features only, not signals"
     );
-    assert_eq!(
-        output.len(), 84,
-        "Base features should be 84 (40 + 8 + 36)"
-    );
+    assert_eq!(output.len(), 84, "Base features should be 84 (40 + 8 + 36)");
 }
 
 // ============================================================================
@@ -117,38 +128,43 @@ fn test_extract_into_produces_base_features_only() {
 
 #[test]
 fn test_extract_with_signals_produces_full_feature_vector() {
-    
     let config = FeatureConfig::new(10)
         .with_derived(true)
         .with_mbo(true)
         .with_signals(true);
-    
+
     let mut extractor = FeatureExtractor::with_config(config);
     let lob = create_test_lob();
-    
+
     // Warm up MBO
     for i in 0..100 {
         extractor.process_mbo_event(MboEvent::new(
-            i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i
+            i * 1_000_000,
+            Action::Add,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            i,
         ));
     }
-    
+
     // Update OFI state (simulate LOB transitions)
     for i in 0..150 {
         let mut lob_variant = lob.clone();
         lob_variant.bid_sizes[0] = 100 + (i % 50);
         extractor.update_ofi(&lob_variant);
     }
-    
+
     let ctx = SignalContext {
         timestamp_ns: 1_000_000_000_000,
         invalidity_delta: 0,
     };
-    
+
     let mut output = Vec::new();
-    extractor.extract_with_signals(&lob, &ctx, &mut output)
+    extractor
+        .extract_with_signals(&lob, &ctx, &mut output)
         .expect("extraction with signals should succeed");
-    
+
     // Should produce full 98 features
     assert_eq!(
         output.len(),
@@ -156,7 +172,8 @@ fn test_extract_with_signals_produces_full_feature_vector() {
         "extract_with_signals() should produce feature_count() features"
     );
     assert_eq!(
-        output.len(), 98,
+        output.len(),
+        98,
         "Full feature vector should be 98 (84 base + 14 signals)"
     );
 }
@@ -167,22 +184,25 @@ fn test_update_ofi_tracks_state_changes() {
         .with_derived(true)
         .with_mbo(true)
         .with_signals(true);
-    
+
     let mut extractor = FeatureExtractor::with_config(config);
-    
+
     // Initially no state changes
     assert!(!extractor.is_signals_warm(), "Should not be warm initially");
-    
+
     let lob = create_test_lob();
-    
+
     // Update OFI 100+ times (MIN_WARMUP_STATE_CHANGES)
     for i in 0..150 {
         let mut lob_variant = lob.clone();
         lob_variant.bid_sizes[0] = 100 + (i % 50);
         extractor.update_ofi(&lob_variant);
     }
-    
-    assert!(extractor.is_signals_warm(), "Should be warm after 100+ updates");
+
+    assert!(
+        extractor.is_signals_warm(),
+        "Should be warm after 100+ updates"
+    );
 }
 
 #[test]
@@ -191,44 +211,44 @@ fn test_reset_clears_ofi_state() {
         .with_derived(true)
         .with_mbo(true)
         .with_signals(true);
-    
+
     let mut extractor = FeatureExtractor::with_config(config);
     let lob = create_test_lob();
-    
+
     // Update OFI to warm state
     for i in 0..150 {
         let mut lob_variant = lob.clone();
         lob_variant.bid_sizes[0] = 100 + (i % 50);
         extractor.update_ofi(&lob_variant);
     }
-    
+
     assert!(extractor.is_signals_warm());
-    
+
     // Reset should clear OFI state
     extractor.reset();
-    
-    assert!(!extractor.is_signals_warm(), "reset() should clear OFI warmup state");
+
+    assert!(
+        !extractor.is_signals_warm(),
+        "reset() should clear OFI warmup state"
+    );
 }
 
 #[test]
 fn test_extract_with_signals_disabled_returns_error() {
-    
     // Signals NOT enabled
-    let config = FeatureConfig::new(10)
-        .with_derived(true)
-        .with_mbo(true);
-    
+    let config = FeatureConfig::new(10).with_derived(true).with_mbo(true);
+
     let mut extractor = FeatureExtractor::with_config(config);
     let lob = create_test_lob();
-    
+
     let ctx = SignalContext {
         timestamp_ns: 1_000_000_000_000,
         invalidity_delta: 0,
     };
-    
+
     let mut output = Vec::new();
     let result = extractor.extract_with_signals(&lob, &ctx, &mut output);
-    
+
     assert!(
         result.is_err(),
         "extract_with_signals() should fail when signals are disabled"
@@ -242,37 +262,44 @@ fn test_extract_with_signals_disabled_returns_error() {
 #[test]
 fn test_signals_have_correct_indices() {
     use feature_extractor::features::signals::indices;
-    
+
     let config = FeatureConfig::new(10)
         .with_derived(true)
         .with_mbo(true)
         .with_signals(true);
-    
+
     let mut extractor = FeatureExtractor::with_config(config);
     let lob = create_test_lob();
-    
+
     // Warm up MBO
     for i in 0..100 {
         extractor.process_mbo_event(MboEvent::new(
-            i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i
+            i * 1_000_000,
+            Action::Add,
+            Side::Bid,
+            100_000_000_000,
+            100,
+            i,
         ));
     }
-    
+
     // Update OFI
     for i in 0..150 {
         let mut lob_variant = lob.clone();
         lob_variant.bid_sizes[0] = 100 + (i % 50);
         extractor.update_ofi(&lob_variant);
     }
-    
+
     let ctx = SignalContext {
         timestamp_ns: 1_000_000_000_000,
         invalidity_delta: 0,
     };
-    
+
     let mut output = Vec::new();
-    extractor.extract_with_signals(&lob, &ctx, &mut output).unwrap();
-    
+    extractor
+        .extract_with_signals(&lob, &ctx, &mut output)
+        .unwrap();
+
     // Verify schema_version at correct index
     // Note: Hard-coded expected value is intentional for contract testing.
     // If schema version changes, this test SHOULD fail to force conscious review.
@@ -282,7 +309,7 @@ fn test_signals_have_correct_indices() {
         indices::SCHEMA_VERSION,
         output[indices::SCHEMA_VERSION]
     );
-    
+
     // Verify book_valid is binary (0 or 1)
     let book_valid = output[indices::BOOK_VALID];
     assert!(
@@ -290,7 +317,7 @@ fn test_signals_have_correct_indices() {
         "book_valid should be 0 or 1, got {}",
         book_valid
     );
-    
+
     // Verify time_regime is in valid range [0, 4]
     let time_regime = output[indices::TIME_REGIME];
     assert!(
@@ -310,37 +337,55 @@ fn test_feature_extraction_not_tied_to_specific_config() {
     let configs = vec![
         ("raw_only", FeatureConfig::new(10)),
         ("with_derived", FeatureConfig::new(10).with_derived(true)),
-        ("with_mbo", FeatureConfig::new(10).with_derived(true).with_mbo(true)),
-        ("full", FeatureConfig::new(10).with_derived(true).with_mbo(true).with_signals(true)),
+        (
+            "with_mbo",
+            FeatureConfig::new(10).with_derived(true).with_mbo(true),
+        ),
+        (
+            "full",
+            FeatureConfig::new(10)
+                .with_derived(true)
+                .with_mbo(true)
+                .with_signals(true),
+        ),
     ];
-    
+
     let lob = create_test_lob();
-    
+
     for (name, config) in configs {
         let expected_base = config.base_feature_count();
         let expected_total = config.feature_count();
-        
+
         let mut extractor = FeatureExtractor::with_config(config.clone());
-        
+
         // Warm up MBO if enabled
         if config.include_mbo {
             for i in 0..100 {
                 extractor.process_mbo_event(MboEvent::new(
-                    i * 1_000_000, Action::Add, Side::Bid, 100_000_000_000, 100, i
+                    i * 1_000_000,
+                    Action::Add,
+                    Side::Bid,
+                    100_000_000_000,
+                    100,
+                    i,
                 ));
             }
         }
-        
+
         let mut output = Vec::new();
-        extractor.extract_into(&lob, &mut output).expect("extraction should succeed");
-        
+        extractor
+            .extract_into(&lob, &mut output)
+            .expect("extraction should succeed");
+
         assert_eq!(
-            output.len(), expected_base,
+            output.len(),
+            expected_base,
             "Config '{}': extract_into should produce {} features, got {}",
-            name, expected_base, output.len()
+            name,
+            expected_base,
+            output.len()
         );
-        
+
         println!("{}: base={}, total={}", name, expected_base, expected_total);
     }
 }
-

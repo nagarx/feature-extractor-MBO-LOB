@@ -76,7 +76,7 @@ fn create_synthetic_98_feature_output(n_sequences: usize, window_size: usize) ->
                 f.push(-0.05 * ((t as f64).cos())); // 89: cancel_asymmetry
                 f.push(0.5 + 0.1 * (t as f64)); // 90: fragility_score
                 f.push(0.2 * ((t as f64).sin())); // 91: depth_asymmetry
-                // CATEGORICAL features - must NOT be normalized
+                                                  // CATEGORICAL features - must NOT be normalized
                 f.push(1.0); // 92: book_valid (binary: 0 or 1)
                 f.push(2.0); // 93: time_regime (categorical: 0-4)
                 f.push(1.0); // 94: mbo_ready (binary: 0 or 1)
@@ -144,7 +144,10 @@ fn test_exporter_with_tlob_paper_normalization() {
         .with_normalization(NormalizationConfig::tlob_paper());
 
     let norm_config = exporter.normalization_config();
-    assert!(!norm_config.any_normalization(), "TLOB paper should have no pre-normalization");
+    assert!(
+        !norm_config.any_normalization(),
+        "TLOB paper should have no pre-normalization"
+    );
 }
 
 #[test]
@@ -193,11 +196,14 @@ fn test_exporter_with_custom_normalization() {
         .with_lob_sizes(FeatureNormStrategy::MinMax)
         .with_derived(FeatureNormStrategy::ZScore);
 
-    let exporter = AlignedBatchExporter::new("test_output", config, 100, 10)
-        .with_normalization(custom_norm);
+    let exporter =
+        AlignedBatchExporter::new("test_output", config, 100, 10).with_normalization(custom_norm);
 
     let norm_config = exporter.normalization_config();
-    assert_eq!(norm_config.lob_prices, FeatureNormStrategy::PercentageChange);
+    assert_eq!(
+        norm_config.lob_prices,
+        FeatureNormStrategy::PercentageChange
+    );
     assert_eq!(norm_config.lob_sizes, FeatureNormStrategy::MinMax);
     assert_eq!(norm_config.derived, FeatureNormStrategy::ZScore);
 }
@@ -209,7 +215,10 @@ fn test_exporter_default_normalization_is_raw() {
 
     // Default should be raw (no normalization) for TLOB paper compatibility
     let norm_config = exporter.normalization_config();
-    assert!(!norm_config.any_normalization(), "Default should be raw (no normalization)");
+    assert!(
+        !norm_config.any_normalization(),
+        "Default should be raw (no normalization)"
+    );
 }
 
 // ============================================================================
@@ -222,7 +231,11 @@ fn test_synthetic_98_feature_output_creation() {
 
     assert_eq!(output.sequences.len(), 10);
     assert_eq!(output.sequences[0].features.len(), 50);
-    assert_eq!(output.sequences[0].features[0].len(), 98, "Should have 98 features");
+    assert_eq!(
+        output.sequences[0].features[0].len(),
+        98,
+        "Should have 98 features"
+    );
 }
 
 #[test]
@@ -269,7 +282,7 @@ fn test_synthetic_output_categorical_values() {
 #[test]
 fn test_raw_preset_has_no_normalization() {
     let config = NormalizationConfig::raw();
-    
+
     assert_eq!(config.lob_prices, FeatureNormStrategy::None);
     assert_eq!(config.lob_sizes, FeatureNormStrategy::None);
     assert_eq!(config.derived, FeatureNormStrategy::None);
@@ -282,7 +295,7 @@ fn test_raw_preset_has_no_normalization() {
 fn test_tlob_paper_equals_raw() {
     let raw = NormalizationConfig::raw();
     let tlob_paper = NormalizationConfig::tlob_paper();
-    
+
     assert_eq!(raw.lob_prices, tlob_paper.lob_prices);
     assert_eq!(raw.lob_sizes, tlob_paper.lob_sizes);
     assert_eq!(raw.derived, tlob_paper.derived);
@@ -337,9 +350,15 @@ fn test_feature_norm_strategy_requires_statistics() {
 #[test]
 fn test_feature_norm_strategy_descriptions() {
     assert!(FeatureNormStrategy::None.description().contains("Raw"));
-    assert!(FeatureNormStrategy::ZScore.description().contains("Z-score"));
-    assert!(FeatureNormStrategy::GlobalZScore.description().contains("Global"));
-    assert!(FeatureNormStrategy::MarketStructure.description().contains("Market"));
+    assert!(FeatureNormStrategy::ZScore
+        .description()
+        .contains("Z-score"));
+    assert!(FeatureNormStrategy::GlobalZScore
+        .description()
+        .contains("Global"));
+    assert!(FeatureNormStrategy::MarketStructure
+        .description()
+        .contains("Market"));
 }
 
 // ============================================================================
@@ -357,7 +376,7 @@ fn test_normalization_config_validation_invalid_bilinear_scale() {
     let mut config = NormalizationConfig::default();
     config.bilinear_scale_factor = 0.0;
     assert!(config.validate().is_err());
-    
+
     config.bilinear_scale_factor = -1.0;
     assert!(config.validate().is_err());
 }
@@ -374,7 +393,11 @@ fn test_normalization_config_validation_valid_references() {
     for ref_price in &["mid_price", "first_ask", "first_bid"] {
         let mut config = NormalizationConfig::default();
         config.reference_price = ref_price.to_string();
-        assert!(config.validate().is_ok(), "reference_price '{}' should be valid", ref_price);
+        assert!(
+            config.validate().is_ok(),
+            "reference_price '{}' should be valid",
+            ref_price
+        );
     }
 }
 
@@ -386,10 +409,10 @@ fn test_normalization_config_validation_valid_references() {
 fn test_exporter_normalization_config_accessor() {
     let config = LabelConfig::new(50, 5, 0.002);
     let norm_config = NormalizationConfig::lobench();
-    
+
     let exporter = AlignedBatchExporter::new("test_output", config, 100, 10)
         .with_normalization(norm_config.clone());
-    
+
     // Verify accessor returns the same config
     let retrieved = exporter.normalization_config();
     assert_eq!(retrieved.lob_prices, norm_config.lob_prices);
@@ -402,13 +425,13 @@ fn test_exporter_normalization_config_accessor() {
 #[test]
 fn test_exporter_chained_builders() {
     let config = LabelConfig::new(50, 5, 0.002);
-    
+
     // Test that all builder methods can be chained
     let exporter = AlignedBatchExporter::new("test_output", config, 100, 10)
         .with_tensor_format(TensorFormat::Flat)
         .with_normalization(NormalizationConfig::deeplob())
         .with_multi_horizon_labels(MultiHorizonConfig::fi2010());
-    
+
     assert!(exporter.is_tensor_formatted());
     assert!(exporter.is_multi_horizon());
     assert!(exporter.normalization_config().any_normalization());
@@ -431,7 +454,7 @@ bilinear_scale_factor = 100.0
 "#;
 
     let config: NormalizationConfig = toml::from_str(toml_str).expect("Failed to parse TOML");
-    
+
     assert_eq!(config.lob_prices, FeatureNormStrategy::GlobalZScore);
     assert_eq!(config.lob_sizes, FeatureNormStrategy::ZScore);
     assert_eq!(config.derived, FeatureNormStrategy::None);
@@ -445,7 +468,7 @@ bilinear_scale_factor = 100.0
 fn test_normalization_config_toml_defaults() {
     // Empty TOML should use defaults (all None)
     let config: NormalizationConfig = toml::from_str("").expect("Failed to parse empty TOML");
-    
+
     assert_eq!(config.lob_prices, FeatureNormStrategy::None);
     assert_eq!(config.lob_sizes, FeatureNormStrategy::None);
     assert_eq!(config.derived, FeatureNormStrategy::None);
@@ -456,10 +479,10 @@ fn test_normalization_config_toml_defaults() {
 #[test]
 fn test_normalization_config_toml_roundtrip() {
     let original = NormalizationConfig::lobench();
-    
+
     let toml_str = toml::to_string(&original).expect("Failed to serialize");
     let loaded: NormalizationConfig = toml::from_str(&toml_str).expect("Failed to deserialize");
-    
+
     assert_eq!(original.lob_prices, loaded.lob_prices);
     assert_eq!(original.lob_sizes, loaded.lob_sizes);
     assert_eq!(original.derived, loaded.derived);
@@ -472,7 +495,7 @@ fn test_normalization_config_toml_roundtrip() {
 // ============================================================================
 
 /// Test that raw normalization produces unchanged output.
-/// 
+///
 /// This test verifies that when using NormalizationConfig::raw():
 /// 1. All feature values remain exactly as input
 /// 2. No statistical transformation is applied
@@ -481,39 +504,43 @@ fn test_normalization_config_toml_roundtrip() {
 fn test_export_with_raw_normalization_preserves_values() {
     use std::fs;
     use tempfile::TempDir;
-    
+
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let output_path = temp_dir.path().join("test_raw_export");
-    
+
     let label_config = LabelConfig::new(50, 10, 0.002);
     let output = create_synthetic_98_feature_output(20, 100);
-    
+
     // Store original values for comparison
     let original_first_seq: Vec<Vec<f64>> = output.sequences[0]
         .features
         .iter()
         .map(|arc| arc.to_vec())
         .collect();
-    
+
     let exporter = AlignedBatchExporter::new(&output_path, label_config, 100, 10)
         .with_normalization(NormalizationConfig::raw());
-    
+
     // Verify the exporter has raw config
     assert!(!exporter.normalization_config().any_normalization());
-    
+
     // Export (this will create files)
     let result = exporter.export_day("test_day", &output);
-    
+
     // The export might fail if we don't have enough data for labels, but we can still
     // verify the configuration was set correctly
     match result {
         Ok(export) => {
-            assert!(export.n_sequences > 0, "Should have exported some sequences");
-            
+            assert!(
+                export.n_sequences > 0,
+                "Should have exported some sequences"
+            );
+
             // Verify metadata file exists and contains normalization info
             let metadata_path = output_path.join("test_day_metadata.json");
             if metadata_path.exists() {
-                let metadata_str = fs::read_to_string(&metadata_path).expect("Failed to read metadata");
+                let metadata_str =
+                    fs::read_to_string(&metadata_path).expect("Failed to read metadata");
                 // Metadata should indicate no normalization was applied or raw strategy
                 assert!(
                     metadata_str.contains("normalization") || metadata_str.contains("none"),
@@ -532,7 +559,7 @@ fn test_export_with_raw_normalization_preserves_values() {
             );
         }
     }
-    
+
     // Verify first sequence features haven't been modified in memory
     // (The original Arc references should still have the same values)
     for (t, original_ts) in original_first_seq.iter().enumerate() {
@@ -541,7 +568,10 @@ fn test_export_with_raw_normalization_preserves_values() {
             assert!(
                 (current_ts[f] - original_val).abs() < 1e-10,
                 "Feature value should not change: seq[0][{}][{}] was {} now {}",
-                t, f, original_val, current_ts[f]
+                t,
+                f,
+                original_val,
+                current_ts[f]
             );
         }
     }
@@ -552,7 +582,7 @@ fn test_export_with_raw_normalization_preserves_values() {
 fn test_categorical_signals_never_normalized() {
     // The categorical signal indices
     let categorical_indices = vec![92, 93, 94, 97];
-    
+
     // Test each preset
     let presets = vec![
         ("raw", NormalizationConfig::raw()),
@@ -562,7 +592,7 @@ fn test_categorical_signals_never_normalized() {
         ("lobench", NormalizationConfig::lobench()),
         ("fi2010", NormalizationConfig::fi2010()),
     ];
-    
+
     for (name, preset) in presets {
         // Signals should always be None (no normalization)
         assert_eq!(
@@ -572,7 +602,7 @@ fn test_categorical_signals_never_normalized() {
             name
         );
     }
-    
+
     // Also verify categorical indices are in the signals range (84-97)
     for idx in &categorical_indices {
         assert!(
@@ -590,19 +620,19 @@ fn test_zscore_normalization_statistical_properties() {
     let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let mean = 3.0; // (1+2+3+4+5) / 5
     let std = 1.4142135623730951; // sqrt(((1-3)^2 + (2-3)^2 + (3-3)^2 + (4-3)^2 + (5-3)^2) / 5)
-    
+
     // Z-score transform: (x - mean) / std
-    let normalized: Vec<f64> = values.iter()
-        .map(|&x| (x - mean) / std)
-        .collect();
-    
+    let normalized: Vec<f64> = values.iter().map(|&x| (x - mean) / std).collect();
+
     // Verify normalized values have mean ≈ 0 and std ≈ 1
     let norm_mean: f64 = normalized.iter().sum::<f64>() / normalized.len() as f64;
-    let norm_variance: f64 = normalized.iter()
+    let norm_variance: f64 = normalized
+        .iter()
         .map(|&x| (x - norm_mean).powi(2))
-        .sum::<f64>() / normalized.len() as f64;
+        .sum::<f64>()
+        / normalized.len() as f64;
     let norm_std = norm_variance.sqrt();
-    
+
     assert!(
         norm_mean.abs() < 1e-10,
         "Normalized mean should be ≈ 0, got {}",
@@ -621,34 +651,32 @@ fn test_market_structure_preserves_spread() {
     // Create test data with ask > bid at each level
     let ask_prices = vec![100.00, 100.01, 100.02, 100.03, 100.04];
     let bid_prices = vec![99.99, 99.98, 99.97, 99.96, 99.95];
-    
+
     // Combine for shared statistics (market structure approach)
-    let all_prices: Vec<f64> = ask_prices.iter()
+    let all_prices: Vec<f64> = ask_prices
+        .iter()
         .chain(bid_prices.iter())
         .copied()
         .collect();
-    
+
     // Compute shared mean and std
     let mean: f64 = all_prices.iter().sum::<f64>() / all_prices.len() as f64;
-    let variance: f64 = all_prices.iter()
-        .map(|&x| (x - mean).powi(2))
-        .sum::<f64>() / all_prices.len() as f64;
+    let variance: f64 =
+        all_prices.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / all_prices.len() as f64;
     let std = variance.sqrt().max(1e-8);
-    
+
     // Normalize using shared statistics
-    let norm_asks: Vec<f64> = ask_prices.iter()
-        .map(|&x| (x - mean) / std)
-        .collect();
-    let norm_bids: Vec<f64> = bid_prices.iter()
-        .map(|&x| (x - mean) / std)
-        .collect();
-    
+    let norm_asks: Vec<f64> = ask_prices.iter().map(|&x| (x - mean) / std).collect();
+    let norm_bids: Vec<f64> = bid_prices.iter().map(|&x| (x - mean) / std).collect();
+
     // Verify: normalized ask > normalized bid at each level
     for i in 0..5 {
         assert!(
             norm_asks[i] > norm_bids[i],
             "Spread should be preserved after normalization: level {} ask {} > bid {}",
-            i, norm_asks[i], norm_bids[i]
+            i,
+            norm_asks[i],
+            norm_bids[i]
         );
     }
 }
@@ -658,19 +686,22 @@ fn test_market_structure_preserves_spread() {
 fn test_percentage_change_normalization() {
     let reference = 100.0;
     let values = vec![101.0, 99.0, 100.5, 98.5, 102.0];
-    
+
     // Percentage change: (x - ref) / ref
-    let normalized: Vec<f64> = values.iter()
+    let normalized: Vec<f64> = values
+        .iter()
         .map(|&x| (x - reference) / reference)
         .collect();
-    
+
     // Verify expected values
     let expected = vec![0.01, -0.01, 0.005, -0.015, 0.02];
     for (i, (&norm, &exp)) in normalized.iter().zip(expected.iter()).enumerate() {
         assert!(
             (norm - exp).abs() < 1e-10,
             "Percentage change at {} should be {}, got {}",
-            i, exp, norm
+            i,
+            exp,
+            norm
         );
     }
 }
@@ -683,9 +714,18 @@ fn test_percentage_change_normalization() {
 fn test_normalization_strategy_display_format() {
     // Verify Display impl for NormalizationStrategy (from export_aligned.rs)
     assert_eq!(NormalizationStrategy::None.to_string(), "none");
-    assert_eq!(NormalizationStrategy::PerFeatureZScore.to_string(), "per_feature_zscore");
-    assert_eq!(NormalizationStrategy::MarketStructureZScore.to_string(), "market_structure_zscore");
-    assert_eq!(NormalizationStrategy::GlobalZScore.to_string(), "global_zscore");
+    assert_eq!(
+        NormalizationStrategy::PerFeatureZScore.to_string(),
+        "per_feature_zscore"
+    );
+    assert_eq!(
+        NormalizationStrategy::MarketStructureZScore.to_string(),
+        "market_structure_zscore"
+    );
+    assert_eq!(
+        NormalizationStrategy::GlobalZScore.to_string(),
+        "global_zscore"
+    );
     assert_eq!(NormalizationStrategy::Bilinear.to_string(), "bilinear");
 }
 
@@ -700,7 +740,7 @@ fn test_normalization_params_contains_config_info() {
         10000,
         10,
     );
-    
+
     // Verify all fields are populated
     assert_eq!(params.price_means.len(), 10);
     assert_eq!(params.price_stds.len(), 10);
@@ -709,68 +749,81 @@ fn test_normalization_params_contains_config_info() {
     assert_eq!(params.sample_count, 10000);
     assert_eq!(params.levels, 10);
     assert!(!params.feature_layout.is_empty());
-    
+
     // Serialize to JSON and verify structure
     let json = serde_json::to_string_pretty(&params).expect("Failed to serialize");
-    assert!(json.contains("strategy"), "JSON should contain strategy field");
-    assert!(json.contains("price_means"), "JSON should contain price_means");
-    assert!(json.contains("sample_count"), "JSON should contain sample_count");
+    assert!(
+        json.contains("strategy"),
+        "JSON should contain strategy field"
+    );
+    assert!(
+        json.contains("price_means"),
+        "JSON should contain price_means"
+    );
+    assert!(
+        json.contains("sample_count"),
+        "JSON should contain sample_count"
+    );
 }
 
 /// Test that exported metadata includes normalization information.
 #[test]
 fn test_exported_metadata_includes_normalization_info() {
     use tempfile::TempDir;
-    
+
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let output_path = temp_dir.path().join("test_metadata_export");
-    
+
     let label_config = LabelConfig::new(50, 10, 0.002);
     let output = create_synthetic_98_feature_output(20, 100);
-    
+
     let exporter = AlignedBatchExporter::new(&output_path, label_config, 100, 10)
         .with_normalization(NormalizationConfig::raw());
-    
+
     // Export should succeed
     let result = exporter.export_day("test_day", &output);
     assert!(result.is_ok(), "Export should succeed");
-    
+
     // Check metadata file exists
     let metadata_path = output_path.join("test_day_metadata.json");
     assert!(metadata_path.exists(), "Metadata file should exist");
-    
+
     // Read and parse metadata
     let metadata_str = std::fs::read_to_string(&metadata_path).expect("Failed to read metadata");
-    let metadata: serde_json::Value = serde_json::from_str(&metadata_str).expect("Failed to parse metadata");
-    
+    let metadata: serde_json::Value =
+        serde_json::from_str(&metadata_str).expect("Failed to parse metadata");
+
     // Verify normalization section exists
     assert!(
         metadata.get("normalization").is_some(),
         "Metadata should contain 'normalization' section"
     );
-    
+
     let norm_section = metadata.get("normalization").unwrap();
-    
+
     // Verify strategy is present
     assert!(
         norm_section.get("strategy").is_some(),
         "Normalization section should contain 'strategy'"
     );
-    
+
     // Verify the normalization params file reference
     assert!(
         norm_section.get("params_file").is_some(),
         "Normalization section should reference params file"
     );
-    
+
     // Check normalization params file exists
     let norm_params_path = output_path.join("test_day_normalization.json");
-    assert!(norm_params_path.exists(), "Normalization params file should exist");
-    
+    assert!(
+        norm_params_path.exists(),
+        "Normalization params file should exist"
+    );
+
     // Verify normalization params content
     let norm_params = NormalizationParams::load_json(&norm_params_path)
         .expect("Failed to load normalization params");
-    
+
     // For raw export, strategy should be None
     assert_eq!(
         norm_params.strategy,
@@ -783,65 +836,71 @@ fn test_exported_metadata_includes_normalization_info() {
 #[test]
 fn test_exported_metadata_with_zscore_normalization() {
     use tempfile::TempDir;
-    
+
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let output_path = temp_dir.path().join("test_zscore_export");
-    
+
     let label_config = LabelConfig::new(50, 10, 0.002);
     let output = create_synthetic_98_feature_output(20, 100);
-    
+
     // Use TLOB repo style (global z-score)
     let exporter = AlignedBatchExporter::new(&output_path, label_config, 100, 10)
         .with_normalization(NormalizationConfig::tlob_repo());
-    
+
     let result = exporter.export_day("test_day", &output);
     assert!(result.is_ok(), "Export should succeed");
-    
+
     // Check normalization params file
     let norm_params_path = output_path.join("test_day_normalization.json");
     let norm_params = NormalizationParams::load_json(&norm_params_path)
         .expect("Failed to load normalization params");
-    
+
     // For TLOB repo export with GlobalZScore, strategy should be GlobalZScore
     assert_eq!(
         norm_params.strategy,
         NormalizationStrategy::GlobalZScore,
         "TLOB repo export should have strategy = GlobalZScore"
     );
-    
+
     // Verify statistics were computed
     assert!(norm_params.sample_count > 0, "Sample count should be > 0");
-    assert!(!norm_params.price_means.iter().all(|&x| x == 0.0), "Price means should be non-zero");
-    assert!(!norm_params.price_stds.iter().all(|&x| x == 1.0), "Price stds should be computed");
+    assert!(
+        !norm_params.price_means.iter().all(|&x| x == 0.0),
+        "Price means should be non-zero"
+    );
+    assert!(
+        !norm_params.price_stds.iter().all(|&x| x == 1.0),
+        "Price stds should be computed"
+    );
 }
 
 /// Test that exported sequences file has correct shape.
 #[test]
 fn test_exported_sequences_shape() {
     use tempfile::TempDir;
-    
+
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let output_path = temp_dir.path().join("test_shape_export");
-    
+
     let label_config = LabelConfig::new(50, 10, 0.002);
     let window_size = 100;
     let n_features = 98;
     let output = create_synthetic_98_feature_output(20, window_size);
-    
+
     let exporter = AlignedBatchExporter::new(&output_path, label_config, window_size, 10)
         .with_normalization(NormalizationConfig::raw());
-    
+
     let result = exporter.export_day("test_day", &output);
     let export = result.expect("Export should succeed");
-    
+
     // Verify shape in export result
     assert_eq!(export.seq_shape.0, window_size, "Window size should match");
     assert_eq!(export.seq_shape.1, n_features, "Feature count should be 98");
-    
+
     // Verify sequences file exists
     let sequences_path = output_path.join("test_day_sequences.npy");
     assert!(sequences_path.exists(), "Sequences file should exist");
-    
+
     // Verify labels file exists
     let labels_path = output_path.join("test_day_labels.npy");
     assert!(labels_path.exists(), "Labels file should exist");

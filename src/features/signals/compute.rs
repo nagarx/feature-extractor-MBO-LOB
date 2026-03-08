@@ -1,9 +1,9 @@
 //! Signal computation -- the main API for producing the 14-signal vector.
 
-use crate::contract::{FLOAT_CMP_EPS, SCHEMA_VERSION, SIGNAL_COUNT};
 use super::indices;
 use super::ofi::OfiSample;
 use super::time_regime::compute_time_regime;
+use crate::contract::{FLOAT_CMP_EPS, SCHEMA_VERSION, SIGNAL_COUNT};
 
 /// Indices of MBO features used for signal computation.
 /// These are in the 84-feature base vector.
@@ -53,7 +53,7 @@ impl SignalVector {
     /// Returns `None` if index is out of range.
     #[inline]
     pub fn get(&self, absolute_index: usize) -> Option<f64> {
-        if absolute_index >= indices::TRUE_OFI && absolute_index <= indices::SCHEMA_VERSION {
+        if (indices::TRUE_OFI..=indices::SCHEMA_VERSION).contains(&absolute_index) {
             Some(self.signals[absolute_index - indices::TRUE_OFI])
         } else {
             None
@@ -328,7 +328,10 @@ mod tests {
         let signals = compute_signals(&features, &ofi_sample, 0, 0);
 
         assert_eq!(signals.signals[2], -5.0);
-        assert!(signals.signals[2] < 0.0, "More sells should give negative pressure");
+        assert!(
+            signals.signals[2] < 0.0,
+            "More sells should give negative pressure"
+        );
     }
 
     #[test]
@@ -342,7 +345,10 @@ mod tests {
         let signals = compute_signals(&features, &ofi_sample, 0, 0);
 
         assert_eq!(signals.signals[5], 0.5);
-        assert!(signals.signals[5] > 0.0, "More ask cancels should be bullish");
+        assert!(
+            signals.signals[5] > 0.0,
+            "More ask cancels should be bullish"
+        );
     }
 
     #[test]
@@ -356,7 +362,10 @@ mod tests {
         let signals = compute_signals(&features, &ofi_sample, 0, 0);
 
         assert_eq!(signals.signals[5], -0.6);
-        assert!(signals.signals[5] < 0.0, "More bid cancels should be bearish");
+        assert!(
+            signals.signals[5] < 0.0,
+            "More bid cancels should be bearish"
+        );
     }
 
     #[test]
@@ -385,7 +394,10 @@ mod tests {
 
         // signed_mp_delta_bps = (100.01 - 100) / 100 * 10000 = 1 bp
         assert!((signals.signals[3] - 1.0).abs() < 0.01);
-        assert!(signals.signals[3] > 0.0, "Microprice above mid should be positive");
+        assert!(
+            signals.signals[3] > 0.0,
+            "Microprice above mid should be positive"
+        );
     }
 
     #[test]

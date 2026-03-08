@@ -83,7 +83,10 @@ fn test_triple_barrier_trend_reversal_scenario() {
     // At least some entries near peak should hit stop-loss (the sharp reversal)
     // We use a more lenient assertion since the exact timing depends on barrier levels
     assert!(
-        stop_losses_near_peak > 0 || near_peak_labels.iter().any(|(_, l, _, _)| *l == BarrierLabel::Timeout),
+        stop_losses_near_peak > 0
+            || near_peak_labels
+                .iter()
+                .any(|(_, l, _, _)| *l == BarrierLabel::Timeout),
         "Entries near peak should stop out or timeout. Got {} stop-losses out of {}",
         stop_losses_near_peak,
         near_peak_labels.len()
@@ -544,4 +547,3 @@ fn test_constant_prices_edge_case() {
         assert!(data.min_return.abs() < 1e-15);
     }
 }
-

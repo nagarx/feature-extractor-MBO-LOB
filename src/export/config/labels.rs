@@ -200,7 +200,9 @@ impl ExportTimeoutStrategy {
         match self {
             Self::LabelAsTimeout => crate::labeling::TimeoutStrategy::LabelAsTimeout,
             Self::UseReturnSign => crate::labeling::TimeoutStrategy::UseReturnSign,
-            Self::UseFractionalThreshold => crate::labeling::TimeoutStrategy::UseFractionalThreshold,
+            Self::UseFractionalThreshold => {
+                crate::labeling::TimeoutStrategy::UseFractionalThreshold
+            }
         }
     }
 }
@@ -497,7 +499,7 @@ impl ExportThresholdStrategy {
             } => {
                 if *target_proportion <= 0.0 || *target_proportion > 0.5 {
                     return Err(
-                        "Quantile target_proportion must be in range (0.0, 0.5]".to_string(),
+                        "Quantile target_proportion must be in range (0.0, 0.5]".to_string()
                     );
                 }
                 if *window_size == 0 {
@@ -540,10 +542,9 @@ impl ExportThresholdStrategy {
                 target_proportion * 100.0,
                 window_size
             ),
-            Self::TlobDynamic { divisor, .. } => format!(
-                "TLOB Dynamic: mean(|pct_change|) / {} (global)",
-                divisor
-            ),
+            Self::TlobDynamic { divisor, .. } => {
+                format!("TLOB Dynamic: mean(|pct_change|) / {} (global)", divisor)
+            }
         }
     }
 
@@ -703,7 +704,6 @@ pub struct ExportLabelConfig {
     //
     // Research Reference:
     // López de Prado, M. (2018). "Advances in Financial Machine Learning", Chapter 3.
-
     /// Triple Barrier: profit target percentage (upper barrier).
     ///
     /// The trade is labeled as ProfitTarget (class 2) if the price rises
@@ -808,7 +808,6 @@ pub struct ExportLabelConfig {
     //
     // When provided, these arrays must have the same length as `horizons`.
     // If not provided, the global `profit_target_pct` / `stop_loss_pct` is used.
-
     /// Triple Barrier: per-horizon profit target percentages.
     ///
     /// Allows setting different profit targets for each horizon, which is
@@ -865,7 +864,6 @@ pub struct ExportLabelConfig {
     // Reference:
     // López de Prado (2018), Ch. 3: Barriers should adapt to volatility.
     // Calibrate with: tools/calibrate_triple_barrier.py --per-day
-
     /// Enable volatility-adaptive barrier scaling (Schema 3.3+).
     ///
     /// When true, barriers are scaled per-day based on realized volatility:
@@ -906,7 +904,10 @@ pub struct ExportLabelConfig {
     ///
     /// Prevents absurdly tight barriers on extremely low-volatility days.
     /// Default: 0.3 (barriers can shrink to 30% of base).
-    #[serde(default = "default_volatility_floor", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_volatility_floor",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub volatility_floor: Option<f64>,
 
     /// Maximum scaling factor for volatility scaling.
@@ -914,7 +915,10 @@ pub struct ExportLabelConfig {
     /// Prevents absurdly wide barriers on extremely high-volatility days
     /// (e.g., earnings, market crashes).
     /// Default: 3.0 (barriers can grow to 300% of base).
-    #[serde(default = "default_volatility_cap", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_volatility_cap",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub volatility_cap: Option<f64>,
 }
 
@@ -1104,7 +1108,7 @@ impl ExportLabelConfig {
             conflict_priority: None, // Not used for Triple Barrier
             horizon: max_horizon,
             horizons,
-            smoothing_window: 1, // Not used for Triple Barrier
+            smoothing_window: 1,          // Not used for Triple Barrier
             threshold: profit_target_pct, // For backward compat in description()
             threshold_strategy: None,
             profit_target_pct: Some(profit_target_pct),
@@ -1547,9 +1551,7 @@ impl ExportLabelConfig {
     /// let multi_config = config.to_multi_horizon_config().unwrap();
     /// assert_eq!(multi_config.horizons().len(), 5);
     /// ```
-    pub fn to_multi_horizon_config(
-        &self,
-    ) -> Option<crate::labeling::MultiHorizonConfig> {
+    pub fn to_multi_horizon_config(&self) -> Option<crate::labeling::MultiHorizonConfig> {
         if !self.is_multi_horizon() {
             return None;
         }
@@ -1590,10 +1592,7 @@ impl ExportLabelConfig {
         }
 
         let horizons = self.effective_horizons();
-        let conflict_priority = self
-            .conflict_priority
-            .unwrap_or_default()
-            .to_internal();
+        let conflict_priority = self.conflict_priority.unwrap_or_default().to_internal();
 
         let configs: Vec<crate::labeling::OpportunityConfig> = horizons
             .iter()
@@ -1646,10 +1645,7 @@ impl ExportLabelConfig {
         }
 
         let horizons = self.effective_horizons();
-        let timeout_strategy = self
-            .timeout_strategy
-            .unwrap_or_default()
-            .to_internal();
+        let timeout_strategy = self.timeout_strategy.unwrap_or_default().to_internal();
         let min_hold = self.min_holding_period;
 
         // Determine whether to use per-horizon or global barriers
@@ -1681,8 +1677,7 @@ impl ExportLabelConfig {
                 .map(|(i, &max_horizon)| {
                     let pt = profit_targets[i];
                     let sl = stop_losses[i];
-                    let mut config =
-                        crate::labeling::TripleBarrierConfig::new(pt, sl, max_horizon);
+                    let mut config = crate::labeling::TripleBarrierConfig::new(pt, sl, max_horizon);
                     config = config.with_timeout_strategy(timeout_strategy);
                     if let Some(min_hold_period) = min_hold {
                         config = config.with_min_holding_period(min_hold_period);
@@ -1699,7 +1694,7 @@ impl ExportLabelConfig {
     }
 
     /// Create Triple Barrier configs using global (single) barrier values.
-    /// 
+    ///
     /// This is the backward-compatible path where all horizons share the same
     /// profit_target_pct and stop_loss_pct.
     fn to_triple_barrier_configs_global(
@@ -1709,17 +1704,17 @@ impl ExportLabelConfig {
         let stop_loss = self.stop_loss_pct?;
 
         let horizons = self.effective_horizons();
-        let timeout_strategy = self
-            .timeout_strategy
-            .unwrap_or_default()
-            .to_internal();
+        let timeout_strategy = self.timeout_strategy.unwrap_or_default().to_internal();
         let min_hold = self.min_holding_period;
 
         let configs: Vec<crate::labeling::TripleBarrierConfig> = horizons
             .iter()
             .map(|&max_horizon| {
-                let mut config =
-                    crate::labeling::TripleBarrierConfig::new(profit_target, stop_loss, max_horizon);
+                let mut config = crate::labeling::TripleBarrierConfig::new(
+                    profit_target,
+                    stop_loss,
+                    max_horizon,
+                );
                 config = config.with_timeout_strategy(timeout_strategy);
                 if let Some(min_hold_period) = min_hold {
                     config = config.with_min_holding_period(min_hold_period);
@@ -1761,7 +1756,7 @@ impl ExportLabelConfig {
     pub fn validate(&self) -> Result<(), String> {
         // Validate horizons (common to all strategies)
         if self.is_multi_horizon() {
-            if self.horizons.iter().any(|&h| h == 0) {
+            if self.horizons.contains(&0) {
                 return Err("All horizons must be > 0".to_string());
             }
         } else if self.horizon == 0 {
@@ -1789,7 +1784,8 @@ impl ExportLabelConfig {
 
                 // Validate threshold for TLOB (typically 2-100 bps)
                 if let Some(ref ts) = self.threshold_strategy {
-                    ts.validate().map_err(|e| format!("threshold_strategy: {}", e))?;
+                    ts.validate()
+                        .map_err(|e| format!("threshold_strategy: {}", e))?;
                 } else {
                     if self.threshold <= 0.0 {
                         return Err("threshold must be > 0".to_string());
@@ -1805,7 +1801,9 @@ impl ExportLabelConfig {
                     return Err("threshold must be > 0 for opportunity labeling".to_string());
                 }
                 if self.threshold > 0.5 {
-                    return Err("threshold > 50% seems unreasonable for opportunity detection".to_string());
+                    return Err(
+                        "threshold > 50% seems unreasonable for opportunity detection".to_string(),
+                    );
                 }
             }
             LabelingStrategy::TripleBarrier => {
@@ -1902,7 +1900,8 @@ impl ExportLabelConfig {
                         if pt > 0.5 {
                             return Err(format!(
                                 "profit_targets[{}] > 50% seems unreasonable, got {:.2}%",
-                                i, pt * 100.0
+                                i,
+                                pt * 100.0
                             ));
                         }
                     }
@@ -1928,7 +1927,8 @@ impl ExportLabelConfig {
                         if sl > 0.5 {
                             return Err(format!(
                                 "stop_losses[{}] > 50% seems unreasonable, got {:.2}%",
-                                i, sl * 100.0
+                                i,
+                                sl * 100.0
                             ));
                         }
                     }
@@ -1938,7 +1938,8 @@ impl ExportLabelConfig {
                 if self.profit_targets.is_some() != self.stop_losses.is_some() {
                     return Err(
                         "If using per-horizon barriers, both profit_targets and stop_losses \
-                         must be provided together".to_string()
+                         must be provided together"
+                            .to_string(),
                     );
                 }
 
@@ -1953,10 +1954,7 @@ impl ExportLabelConfig {
                     }
                     let vol_ref = self.volatility_reference.unwrap();
                     if vol_ref <= 0.0 {
-                        return Err(format!(
-                            "volatility_reference must be > 0, got {}",
-                            vol_ref
-                        ));
+                        return Err(format!("volatility_reference must be > 0, got {}", vol_ref));
                     }
                     if vol_ref > 0.1 {
                         return Err(format!(
@@ -1967,11 +1965,9 @@ impl ExportLabelConfig {
                     }
 
                     if self.profit_targets.is_none() || self.stop_losses.is_none() {
-                        return Err(
-                            "volatility_scaling requires per-horizon barriers \
+                        return Err("volatility_scaling requires per-horizon barriers \
                              (profit_targets and stop_losses) as base values"
-                                .to_string(),
-                        );
+                            .to_string());
                     }
 
                     if let Some(floor) = self.volatility_floor {
@@ -1984,10 +1980,7 @@ impl ExportLabelConfig {
                     }
                     if let Some(cap) = self.volatility_cap {
                         if cap < 1.0 {
-                            return Err(format!(
-                                "volatility_cap must be >= 1.0, got {}",
-                                cap
-                            ));
+                            return Err(format!("volatility_cap must be >= 1.0, got {}", cap));
                         }
                         if cap > 100.0 {
                             return Err(format!(
@@ -2035,7 +2028,9 @@ impl ExportLabelConfig {
                     .unwrap_or_else(|| "LargerMagnitude".to_string());
                 format!(
                     "Opportunity: {}, threshold={:.4}%, conflict_priority={}",
-                    horizons_str, self.threshold * 100.0, priority_str
+                    horizons_str,
+                    self.threshold * 100.0,
+                    priority_str
                 )
             }
             LabelingStrategy::TripleBarrier => {
@@ -2079,7 +2074,10 @@ mod tests {
     #[test]
     fn test_label_config_default_is_single_horizon() {
         let config = ExportLabelConfig::default();
-        assert!(!config.is_multi_horizon(), "Default should be single-horizon mode");
+        assert!(
+            !config.is_multi_horizon(),
+            "Default should be single-horizon mode"
+        );
         assert_eq!(config.horizon, 50);
         assert!(config.horizons.is_empty());
         assert_eq!(config.smoothing_window, 10);
@@ -2240,7 +2238,10 @@ mod tests {
         assert!(result.is_err());
         // Updated to match new error message format
         let err_msg = result.unwrap_err();
-        assert!(err_msg.contains("smoothing_window") && err_msg.contains("should be <= minimum horizon"));
+        assert!(
+            err_msg.contains("smoothing_window")
+                && err_msg.contains("should be <= minimum horizon")
+        );
     }
 
     #[test]
@@ -2250,7 +2251,9 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         assert!(
-            result.unwrap_err().contains("smoothing_window (20) should be <= minimum horizon (10)"),
+            result
+                .unwrap_err()
+                .contains("smoothing_window (20) should be <= minimum horizon (10)"),
             "Should reject smoothing > min horizon"
         );
     }
@@ -2287,7 +2290,10 @@ mod tests {
         // Should contain single horizon, not horizons array
         assert!(toml_str.contains("horizon = 100"));
         assert!(toml_str.contains("smoothing_window = 20"));
-        assert!(!toml_str.contains("horizons"), "Empty horizons should be skipped");
+        assert!(
+            !toml_str.contains("horizons"),
+            "Empty horizons should be skipped"
+        );
     }
 
     #[test]
@@ -2432,14 +2438,17 @@ threshold = 0.0008
         assert!(!fixed.needs_global_computation());
         assert!(!rolling.needs_global_computation());
         assert!(!quantile.needs_global_computation());
-        assert!(tlob_dynamic.needs_global_computation(), "TlobDynamic should need global computation");
+        assert!(
+            tlob_dynamic.needs_global_computation(),
+            "TlobDynamic should need global computation"
+        );
     }
 
     #[test]
     fn test_threshold_strategy_tlob_dynamic_toml_serialization() {
         let strategy = ExportThresholdStrategy::tlob_dynamic(0.0008, 2.0);
         let toml_str = toml::to_string(&strategy).expect("Should serialize TlobDynamic");
-        
+
         // Verify it contains expected fields
         assert!(toml_str.contains("tlob_dynamic") || toml_str.contains("type"));
         assert!(toml_str.contains("fallback"));
@@ -2453,10 +2462,10 @@ threshold = 0.0008
             fallback = 0.0008
             divisor = 2.0
         "#;
-        
-        let strategy: ExportThresholdStrategy = toml::from_str(toml_str)
-            .expect("Should deserialize TlobDynamic");
-        
+
+        let strategy: ExportThresholdStrategy =
+            toml::from_str(toml_str).expect("Should deserialize TlobDynamic");
+
         assert!(matches!(
             strategy,
             ExportThresholdStrategy::TlobDynamic { fallback, divisor }
@@ -2468,8 +2477,9 @@ threshold = 0.0008
     fn test_threshold_strategy_tlob_dynamic_toml_roundtrip() {
         let original = ExportThresholdStrategy::tlob_dynamic(0.0005, 3.0);
         let toml_str = toml::to_string(&original).expect("Should serialize");
-        let loaded: ExportThresholdStrategy = toml::from_str(&toml_str).expect("Should deserialize");
-        
+        let loaded: ExportThresholdStrategy =
+            toml::from_str(&toml_str).expect("Should deserialize");
+
         assert_eq!(original, loaded);
     }
 
@@ -2483,7 +2493,7 @@ threshold = 0.0008
 
         assert!(config.is_multi_horizon());
         assert_eq!(config.horizons.len(), 3);
-        
+
         // Check the threshold strategy was set correctly
         let thresh_strategy = config.effective_threshold_strategy();
         assert!(matches!(
