@@ -455,7 +455,10 @@ impl MultiScaleWindow {
 
         // Fast scale: increment and check decimation
         self.fast_counter += 1;
-        if self.fast_counter.is_multiple_of(self.config.fast.decimation) {
+        if self
+            .fast_counter
+            .is_multiple_of(self.config.fast.decimation)
+        {
             // Clone Arc (8 bytes) not Vec (672 bytes)
             let _ = self.fast_builder.push_arc(timestamp, features.clone());
             // STREAMING FIX: Try to build sequence immediately after push
@@ -466,7 +469,10 @@ impl MultiScaleWindow {
 
         // Medium scale: increment and check decimation
         self.medium_counter += 1;
-        if self.medium_counter.is_multiple_of(self.config.medium.decimation) {
+        if self
+            .medium_counter
+            .is_multiple_of(self.config.medium.decimation)
+        {
             // Clone Arc (8 bytes) not Vec (672 bytes)
             let _ = self.medium_builder.push_arc(timestamp, features.clone());
             // STREAMING FIX: Try to build sequence immediately after push
@@ -477,7 +483,10 @@ impl MultiScaleWindow {
 
         // Slow scale: increment and check decimation
         self.slow_counter += 1;
-        if self.slow_counter.is_multiple_of(self.config.slow.decimation) {
+        if self
+            .slow_counter
+            .is_multiple_of(self.config.slow.decimation)
+        {
             // Move Arc (no clone needed for last consumer)
             let _ = self.slow_builder.push_arc(timestamp, features);
             // STREAMING FIX: Try to build sequence immediately after push
