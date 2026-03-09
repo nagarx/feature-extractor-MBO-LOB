@@ -7,6 +7,9 @@
 //! Usage: add `mod common;` at the top of your integration test file, then use
 //! `common::HOT_STORE_DIR`, `common::find_mbo_file("20250203")`, etc.
 
+pub mod assertions;
+pub mod fixtures;
+
 use std::path::{Path, PathBuf};
 
 /// Decompressed MBO files (`.mbo.dbn`), preferred for speed.
@@ -78,7 +81,7 @@ pub fn find_any_hot_store_file() -> Option<PathBuf> {
         .ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "dbn"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "dbn"))
         .collect();
     entries.sort();
     entries.into_iter().next()

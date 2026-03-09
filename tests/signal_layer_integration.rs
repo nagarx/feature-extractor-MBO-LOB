@@ -3,25 +3,20 @@
 //! This test validates the complete signal layer (14 signals, indices 84-97)
 //! using real market data through the batch processing pipeline.
 //!
-//! Run with: cargo test --features "parallel,databento" --test signal_layer_integration --release -- --ignored
+//! Run with: cargo test --features "parallel,databento" --test signal_layer_integration --release
 
 #![cfg(feature = "parallel")]
+#![cfg(feature = "extended_validation")]
+
+mod common;
 
 use feature_extractor::batch::{BatchConfig, BatchProcessor};
 use feature_extractor::builder::PipelineBuilder;
 use std::path::Path;
 
-// Expected data directory (hot store - decompressed DBN files)
-const HOT_STORE_DIR: &str = "../data/hot_store";
-
-/// Check if test data is available.
-fn test_data_available() -> bool {
-    Path::new(HOT_STORE_DIR).exists()
-}
-
 /// Get test files (first 1 day for quick testing).
 fn get_test_files() -> Vec<String> {
-    let path = Path::new(HOT_STORE_DIR);
+    let path = Path::new(common::HOT_STORE_DIR);
     if !path.exists() {
         return vec![];
     }
@@ -43,15 +38,8 @@ fn get_test_files() -> Vec<String> {
 }
 
 #[test]
-#[ignore] // Run with: cargo test --test signal_layer_integration -- --ignored
 fn test_signal_layer_feature_count() {
-    if !test_data_available() {
-        eprintln!(
-            "Skipping test: Hot store data not available at {}",
-            HOT_STORE_DIR
-        );
-        return;
-    }
+    skip_if_no_data!();
 
     let files = get_test_files();
     if files.is_empty() {
@@ -112,15 +100,8 @@ fn test_signal_layer_feature_count() {
 }
 
 #[test]
-#[ignore] // Run with: cargo test --test signal_layer_integration -- --ignored
 fn test_signal_values_in_expected_ranges() {
-    if !test_data_available() {
-        eprintln!(
-            "Skipping test: Hot store data not available at {}",
-            HOT_STORE_DIR
-        );
-        return;
-    }
+    skip_if_no_data!();
 
     let files = get_test_files();
     if files.is_empty() {
@@ -282,15 +263,8 @@ fn test_signal_values_in_expected_ranges() {
 }
 
 #[test]
-#[ignore] // Run with: cargo test --test signal_layer_integration -- --ignored
 fn test_ofi_warmup_behavior() {
-    if !test_data_available() {
-        eprintln!(
-            "Skipping test: Hot store data not available at {}",
-            HOT_STORE_DIR
-        );
-        return;
-    }
+    skip_if_no_data!();
 
     let files = get_test_files();
     if files.is_empty() {
@@ -350,15 +324,8 @@ fn test_ofi_warmup_behavior() {
 }
 
 #[test]
-#[ignore] // Run with: cargo test --test signal_layer_integration -- --ignored
 fn test_signals_are_finite() {
-    if !test_data_available() {
-        eprintln!(
-            "Skipping test: Hot store data not available at {}",
-            HOT_STORE_DIR
-        );
-        return;
-    }
+    skip_if_no_data!();
 
     let files = get_test_files();
     if files.is_empty() {

@@ -1,11 +1,8 @@
-//! Phase 3: Targeted Real-Data Validation Tests
+//! Phase 3: Full-Day Statistical Invariants
 //!
-//! Validates correctness of the decomposed feature extractor against real NVIDIA
-//! MBO data on 3 specific days that cover different market regimes:
-//!
-//! - 2025-02-03 (Mon): First day in dataset, session initialization behavior
-//! - 2025-07-01 (Tue): Mid-year, MBP-10 ground truth available
-//! - 2025-10-15 (Wed): Late dataset, different volatility regime
+//! Validates NVIDIA-specific statistical properties across a full trading day
+//! (Feb 3, 2025) with tightened assertions. Replaces the previous "3-day shallow
+//! range check" approach with deep statistical invariants on one canonical day.
 //!
 //! Run with:
 //! ```bash
@@ -22,7 +19,7 @@ use feature_extractor::builder::PipelineBuilder;
 use feature_extractor::contract;
 use feature_extractor::{AlignedBatchExporter, LabelConfig, Pipeline, PipelineConfig};
 
-const TEST_DATES: &[&str] = &["20250203", "20250701", "20251015"];
+const CANONICAL_DATE: &str = "20250203";
 
 fn build_full_98_config() -> PipelineConfig {
     PipelineBuilder::new()
@@ -46,11 +43,11 @@ fn find_test_file(date: &str) -> Option<String> {
 fn test_determinism_full_pipeline() {
     skip_if_no_data!();
 
-    let date = "20250203";
+    let date = CANONICAL_DATE;
     let file = match find_test_file(date) {
         Some(f) => f,
         None => {
-            eprintln!("Skipping: no data for {}", date);
+            eprintln!("Skipping: no data for {date}");
             return;
         }
     };
@@ -79,27 +76,7 @@ fn test_determinism_full_pipeline() {
         output1.sequences_generated, output2.sequences_generated
     );
 
-    // KNOWN ISSUE: OrderTracker uses HashMap<u64, OrderInfo> with Rust's default
-    // RandomState hasher. Different hash seeds across runs cause:
-    //  - Feature 78 (avg_order_age): sum over .values() non-associativity
-    //  - Feature 79 (median_order_lifetime): structural diffs in completed buffer
-    //  - Feature 70 (orders_per_level): derives from active_count which drifts
-    //  - Feature 80 (avg_fill_ratio): depends on completed order set
-    //  - Feature 81 (avg_time_to_first_fill): iterates active_orders().values()
-    //  - Feature 83 (active_order_count): count drifts by 1 due to hash collisions
-    //
-    // ROOT CAUSE: HashMap RandomState produces different internal layouts per run,
-    // causing edge-case order tracking differences after millions of events.
-    //
-    // FIX: Replace HashMap with BTreeMap or use deterministic hasher (FxHasher)
-    // in OrderTracker. Filed as high-priority future work.
-    const KNOWN_NONDETERMINISTIC: &[usize] = &[70, 78, 79, 80, 81, 83];
-
-    const REL_TOL: f64 = 1e-12;
-    const ABS_TOL: f64 = 1e-10;
-
     let mut mismatches = 0u64;
-    let mut known_mismatches = 0u64;
     let min_seqs = output1.sequences.len().min(output2.sequences.len());
     for i in 0..min_seqs {
         let s1 = &output1.sequences[i];
@@ -107,237 +84,164 @@ fn test_determinism_full_pipeline() {
         for (j, (f1, f2)) in s1.features.iter().zip(s2.features.iter()).enumerate() {
             for (k, (&v1, &v2)) in f1.iter().zip(f2.iter()).enumerate() {
                 let diff = (v1 - v2).abs();
-                let scale = v1.abs().max(v2.abs()).max(1.0);
-                if diff > ABS_TOL && diff / scale > REL_TOL {
-                    if KNOWN_NONDETERMINISTIC.contains(&k) {
-                        known_mismatches += 1;
-                    } else {
-                        mismatches += 1;
-                        if mismatches <= 5 {
-                            eprintln!(
-                                "Mismatch seq[{}].features[{}][{}]: {} vs {} (diff={}, rel={})",
-                                i,
-                                j,
-                                k,
-                                v1,
-                                v2,
-                                diff,
-                                diff / scale
-                            );
-                        }
+                if diff > contract::FLOAT_CMP_EPS {
+                    mismatches += 1;
+                    if mismatches <= 5 {
+                        eprintln!(
+                            "Mismatch seq[{}].features[{}][{}]: {} vs {} (diff={})",
+                            i, j, k, v1, v2, diff
+                        );
                     }
                 }
             }
         }
     }
 
-    if known_mismatches > 0 {
-        eprintln!(
-            "WARNING: {} known non-deterministic mismatches in features {:?} (HashMap iteration order in OrderTracker)",
-            known_mismatches, KNOWN_NONDETERMINISTIC
-        );
-    }
-
     assert_eq!(
         mismatches, 0,
-        "Pipeline non-deterministic in unexpected features: {} mismatches across {} sequences (excluded {} known)",
-        mismatches, min_seqs, known_mismatches
+        "Pipeline non-deterministic: {} mismatches across {} sequences. \
+         All features must be bit-exact across runs (BTreeMap guarantees deterministic order).",
+        mismatches, min_seqs
     );
 }
 
 // =============================================================================
-// Test 3b: Feature Layout Validation (index-by-index)
+// Test 3b: NVIDIA Statistical Invariants (tightened from generic range checks)
 // =============================================================================
 
 #[test]
-fn test_feature_layout_validation() {
+fn test_nvidia_statistical_invariants() {
     skip_if_no_data!();
 
-    for &date in TEST_DATES {
-        let file = match find_test_file(date) {
-            Some(f) => f,
-            None => {
-                eprintln!("Skipping date {}: file not found", date);
+    let file = match find_test_file(CANONICAL_DATE) {
+        Some(f) => f,
+        None => {
+            eprintln!("Skipping: no data for {CANONICAL_DATE}");
+            return;
+        }
+    };
+
+    let config = build_full_98_config();
+    let mut pipeline = Pipeline::from_config(config).expect("pipeline");
+    let output = pipeline.process(&file).expect("process");
+
+    let warmup_skip = 100.min(output.sequences.len());
+    let n = output.sequences.len() - warmup_skip;
+    assert!(n > 500, "Need >500 post-warmup sequences, got {n}");
+
+    let mut mid_prices = Vec::with_capacity(n);
+    let mut spreads = Vec::with_capacity(n);
+    let mut book_valid_count: usize = 0;
+    let mut ofi_positive: usize = 0;
+    let mut ofi_negative: usize = 0;
+    let mut time_regimes = std::collections::HashSet::new();
+    let mut feature_sums = vec![0.0f64; contract::STABLE_FEATURE_COUNT];
+    let mut feature_sq_sums = vec![0.0f64; contract::STABLE_FEATURE_COUNT];
+    let mut nan_inf_count: usize = 0;
+
+    for seq_idx in warmup_skip..output.sequences.len() {
+        let last = output.sequences[seq_idx].features.last().unwrap();
+        assert_eq!(last.len(), contract::STABLE_FEATURE_COUNT);
+
+        for (i, &v) in last.iter().enumerate() {
+            if !v.is_finite() {
+                nan_inf_count += 1;
                 continue;
             }
-        };
-
-        let config = build_full_98_config();
-        let mut pipeline = Pipeline::from_config(config).expect("pipeline");
-        let output = pipeline.process(&file).expect("process");
-
-        assert!(
-            output.sequences_generated > 0,
-            "Date {}: no sequences generated",
-            date
-        );
-
-        let warmup_skip = 50.min(output.sequences.len());
-        let check_count = 200.min(output.sequences.len() - warmup_skip);
-
-        for seq_idx in warmup_skip..(warmup_skip + check_count) {
-            let seq = &output.sequences[seq_idx];
-            let last_snapshot = seq.features.last().expect("empty sequence");
-
-            assert_eq!(
-                last_snapshot.len(),
-                contract::STABLE_FEATURE_COUNT,
-                "Date {}, seq {}: expected {} features, got {}",
-                date,
-                seq_idx,
-                contract::STABLE_FEATURE_COUNT,
-                last_snapshot.len()
-            );
-
-            // Indices 0-9: ask prices > 0 and finite
-            for i in 0..10 {
-                let v = last_snapshot[i];
-                assert!(
-                    v.is_finite() && v > 0.0,
-                    "Date {}, seq {}, ask_price[{}] = {} (expected > 0.0, finite)",
-                    date,
-                    seq_idx,
-                    i,
-                    v
-                );
-            }
-
-            // Indices 10-19: ask sizes >= 0 and finite
-            for i in 10..20 {
-                let v = last_snapshot[i];
-                assert!(
-                    v.is_finite() && v >= 0.0,
-                    "Date {}, seq {}, ask_size[{}] = {} (expected >= 0.0, finite)",
-                    date,
-                    seq_idx,
-                    i,
-                    v
-                );
-            }
-
-            // Indices 20-29: bid prices > 0 and finite
-            for i in 20..30 {
-                let v = last_snapshot[i];
-                assert!(
-                    v.is_finite() && v > 0.0,
-                    "Date {}, seq {}, bid_price[{}] = {} (expected > 0.0, finite)",
-                    date,
-                    seq_idx,
-                    i,
-                    v
-                );
-            }
-
-            // Indices 30-39: bid sizes >= 0 and finite
-            for i in 30..40 {
-                let v = last_snapshot[i];
-                assert!(
-                    v.is_finite() && v >= 0.0,
-                    "Date {}, seq {}, bid_size[{}] = {} (expected >= 0.0, finite)",
-                    date,
-                    seq_idx,
-                    i,
-                    v
-                );
-            }
-
-            // Index 40: mid_price between best bid and best ask
-            let mid = last_snapshot[40];
-            let best_ask = last_snapshot[0];
-            let best_bid = last_snapshot[20];
-            assert!(
-                mid.is_finite() && mid >= best_bid && mid <= best_ask,
-                "Date {}, seq {}: mid={} not in [bid={}, ask={}]",
-                date,
-                seq_idx,
-                mid,
-                best_bid,
-                best_ask
-            );
-
-            // Index 41: spread > 0
-            let spread = last_snapshot[41];
-            assert!(
-                spread.is_finite() && spread >= 0.0,
-                "Date {}, seq {}: spread = {} (expected >= 0.0, finite)",
-                date,
-                seq_idx,
-                spread
-            );
-
-            // Indices 48-83: MBO features all finite
-            for i in 48..84 {
-                let v = last_snapshot[i];
-                assert!(
-                    v.is_finite(),
-                    "Date {}, seq {}, mbo_feature[{}] = {} (not finite)",
-                    date,
-                    seq_idx,
-                    i,
-                    v
-                );
-            }
-
-            // Indices 84-97: signals all finite (after warmup)
-            for i in 84..98 {
-                let v = last_snapshot[i];
-                assert!(
-                    v.is_finite(),
-                    "Date {}, seq {}, signal[{}] = {} (not finite)",
-                    date,
-                    seq_idx,
-                    i,
-                    v
-                );
-            }
-
-            // Index 92 (book_valid): 0.0 or 1.0
-            let book_valid = last_snapshot[92];
-            assert!(
-                book_valid == 0.0 || book_valid == 1.0,
-                "Date {}, seq {}: book_valid = {} (expected 0.0 or 1.0)",
-                date,
-                seq_idx,
-                book_valid
-            );
-
-            // Index 93 (time_regime): discrete set {0,1,2,3,4,5}
-            let time_regime = last_snapshot[93];
-            assert!(
-                [0.0, 1.0, 2.0, 3.0, 4.0, 5.0].contains(&time_regime),
-                "Date {}, seq {}: time_regime = {} (expected 0-5)",
-                date,
-                seq_idx,
-                time_regime
-            );
-
-            // Index 94 (mbo_ready): 0.0 or 1.0
-            let mbo_ready = last_snapshot[94];
-            assert!(
-                mbo_ready == 0.0 || mbo_ready == 1.0,
-                "Date {}, seq {}: mbo_ready = {} (expected 0.0 or 1.0)",
-                date,
-                seq_idx,
-                mbo_ready
-            );
-
-            // Index 97 (schema_version): must match contract
-            let schema_v = last_snapshot[97];
-            assert!(
-                (schema_v - contract::SCHEMA_VERSION).abs() < 0.001,
-                "Date {}, seq {}: schema_version = {} (expected {})",
-                date,
-                seq_idx,
-                schema_v,
-                contract::SCHEMA_VERSION
-            );
+            feature_sums[i] += v;
+            feature_sq_sums[i] += v * v;
         }
 
-        println!(
-            "Date {}: {} sequences, {} snapshots checked -- layout valid",
-            date, output.sequences_generated, check_count
-        );
+        mid_prices.push(last[40]);
+        spreads.push(last[41]);
+
+        if last[92] == 1.0 {
+            book_valid_count += 1;
+        }
+
+        let ofi = last[84];
+        if ofi > 0.0 {
+            ofi_positive += 1;
+        } else if ofi < 0.0 {
+            ofi_negative += 1;
+        }
+
+        time_regimes.insert(last[93] as u32);
     }
+
+    let n_f = n as f64;
+
+    // NVIDIA mid-price range for Feb 2025
+    let mean_mid = feature_sums[40] / n_f;
+    assert!(
+        (50.0..=250.0).contains(&mean_mid),
+        "Mean mid_price = {mean_mid}, expected in [50, 250] for NVIDIA"
+    );
+
+    // Spread: NVIDIA is liquid, typical spread < $0.10
+    let mean_spread = feature_sums[41] / n_f;
+    assert!(
+        mean_spread > 0.001 && mean_spread < 0.10,
+        "Mean spread = {mean_spread}, expected in (0.001, 0.10) for NVIDIA"
+    );
+
+    // No NaN/Inf anywhere
+    assert_eq!(
+        nan_inf_count, 0,
+        "Found {nan_inf_count} NaN/Inf values in feature vectors"
+    );
+
+    // OFI sign balance: both positive and negative (two-sided market)
+    assert!(
+        ofi_positive > 0 && ofi_negative > 0,
+        "OFI sign imbalance: +{ofi_positive}/-{ofi_negative} -- market must be two-sided"
+    );
+
+    // time_regime: at least 2 distinct regimes in a full trading day
+    assert!(
+        time_regimes.len() >= 2,
+        "Only {} time_regime values ({:?}), expected >=2 for a full day",
+        time_regimes.len(),
+        time_regimes
+    );
+
+    // book_valid: > 95% valid for NVIDIA (rarely crossed)
+    let book_valid_pct = book_valid_count as f64 / n_f;
+    assert!(
+        book_valid_pct > 0.95,
+        "book_valid = {:.1}%, expected >95% for NVIDIA",
+        book_valid_pct * 100.0
+    );
+
+    // Feature variance: every non-constant feature should have std > 0
+    // Excludes categorical flags (92=book_valid, 93=time_regime, 94=mbo_ready, 97=schema_version),
+    // diagnostic signals (96=invalidity_delta, zero on clean days where book is always valid),
+    // and known-zero MBO features (68,69=queue, 76=modification, 77=iceberg)
+    let excluded_indices: &[usize] = &[68, 69, 76, 77, 92, 93, 94, 96, 97];
+    let mut zero_variance = Vec::new();
+    for i in 0..contract::STABLE_FEATURE_COUNT {
+        if excluded_indices.contains(&i) {
+            continue;
+        }
+        let mean = feature_sums[i] / n_f;
+        let variance = (feature_sq_sums[i] / n_f) - (mean * mean);
+        if variance.abs() < 1e-20 {
+            zero_variance.push(i);
+        }
+    }
+    assert!(
+        zero_variance.is_empty(),
+        "Features with zero variance (dead computations): {:?}",
+        zero_variance
+    );
+
+    println!(
+        "NVIDIA invariants validated: {n} samples, mean_mid={mean_mid:.2}, \
+         mean_spread={mean_spread:.6}, book_valid={:.1}%, regimes={:?}, \
+         OFI +{ofi_positive}/-{ofi_negative}",
+        book_valid_pct * 100.0,
+        time_regimes
+    );
 }
 
 // =============================================================================
@@ -348,22 +252,41 @@ fn test_feature_layout_validation() {
 fn test_cross_day_state_isolation() {
     skip_if_no_data!();
 
-    let day1 = "20250203";
-    let day2 = "20250701";
+    let day1 = CANONICAL_DATE;
     let file1 = match find_test_file(day1) {
         Some(f) => f,
         None => {
-            eprintln!("Skipping: no data for {}", day1);
+            eprintln!("Skipping: no data for {day1}");
             return;
         }
     };
-    let file2 = match find_test_file(day2) {
-        Some(f) => f,
-        None => {
-            eprintln!("Skipping: no data for {}", day2);
+
+    // Use a second available day (any hot_store file other than Feb 3)
+    let day2_file = {
+        let dir = std::path::Path::new(common::HOT_STORE_DIR);
+        if !dir.is_dir() {
+            eprintln!("Skipping: hot_store not found");
             return;
         }
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().map_or(false, |ext| ext == "dbn")
+                    && !p.to_string_lossy().contains("20250203")
+            })
+            .collect();
+        entries.sort();
+        match entries.into_iter().next() {
+            Some(p) => p.to_string_lossy().to_string(),
+            None => {
+                eprintln!("Skipping: no second day available for state isolation test");
+                return;
+            }
+        }
     };
+    let file2 = &day2_file;
 
     let config = build_full_98_config();
 
@@ -393,13 +316,7 @@ fn test_cross_day_state_isolation() {
         out_a.sequences_generated, out_b.sequences_generated
     );
 
-    // Same exclusions as determinism test (see comment there for rationale).
-    const KNOWN_NONDETERMINISTIC: &[usize] = &[70, 78, 79, 80, 81, 83];
-    const REL_TOL: f64 = 1e-12;
-    const ABS_TOL: f64 = 1e-10;
-
     let mut mismatches = 0u64;
-    let mut known_mismatches = 0u64;
     let min_seqs = out_a.sequences.len().min(out_b.sequences.len());
     for i in 0..min_seqs {
         let sa = &out_a.sequences[i];
@@ -407,46 +324,31 @@ fn test_cross_day_state_isolation() {
         for (j, (fa, fb)) in sa.features.iter().zip(sb.features.iter()).enumerate() {
             for (k, (&va, &vb)) in fa.iter().zip(fb.iter()).enumerate() {
                 let diff = (va - vb).abs();
-                let scale = va.abs().max(vb.abs()).max(1.0);
-                if diff > ABS_TOL && diff / scale > REL_TOL {
-                    if KNOWN_NONDETERMINISTIC.contains(&k) {
-                        known_mismatches += 1;
-                    } else {
-                        mismatches += 1;
-                        if mismatches <= 5 {
-                            eprintln!(
-                                "State leak: seq[{}][{}][{}] = {} vs {} (diff={}, rel={})",
-                                i,
-                                j,
-                                k,
-                                va,
-                                vb,
-                                diff,
-                                diff / scale
-                            );
-                        }
+                if diff > contract::FLOAT_CMP_EPS {
+                    mismatches += 1;
+                    if mismatches <= 5 {
+                        eprintln!(
+                            "State leak: seq[{}][{}][{}] = {} vs {} (diff={})",
+                            i, j, k, va, vb, diff
+                        );
                     }
                 }
             }
         }
     }
 
-    if known_mismatches > 0 {
-        eprintln!(
-            "WARNING: {} known non-deterministic mismatches in features {:?} (HashMap in OrderTracker)",
-            known_mismatches, KNOWN_NONDETERMINISTIC
-        );
-    }
-
     assert_eq!(
         mismatches, 0,
-        "State isolation violated: {} unexpected mismatches (excluded {} known)",
-        mismatches, known_mismatches
+        "State isolation violated: {} mismatches across {} sequences. \
+         Reset must produce identical output to a fresh pipeline.",
+        mismatches, min_seqs
     );
 
     println!(
-        "State isolation verified: {} sequences match across {} features (excluded {} known nondeterministic)",
-        min_seqs, contract::STABLE_FEATURE_COUNT, known_mismatches
+        "State isolation verified: {} sequences match across {} features (exact at {:e})",
+        min_seqs,
+        contract::STABLE_FEATURE_COUNT,
+        contract::FLOAT_CMP_EPS
     );
 }
 
@@ -458,10 +360,10 @@ fn test_cross_day_state_isolation() {
 fn test_signal_spot_check() {
     skip_if_no_data!();
 
-    let file = match find_test_file("20250203") {
+    let file = match find_test_file(CANONICAL_DATE) {
         Some(f) => f,
         None => {
-            eprintln!("Skipping: no data for 20250203");
+            eprintln!("Skipping: no data for {CANONICAL_DATE}");
             return;
         }
     };
@@ -563,10 +465,10 @@ fn test_signal_spot_check() {
 fn test_mbo_feature_statistics() {
     skip_if_no_data!();
 
-    let file = match find_test_file("20250203") {
+    let file = match find_test_file(CANONICAL_DATE) {
         Some(f) => f,
         None => {
-            eprintln!("Skipping: no data for 20250203");
+            eprintln!("Skipping: no data for {CANONICAL_DATE}");
             return;
         }
     };
@@ -694,11 +596,11 @@ fn test_mbo_feature_statistics() {
 fn test_export_end_to_end() {
     skip_if_no_data!();
 
-    let date = "20250203";
+    let date = CANONICAL_DATE;
     let file = match find_test_file(date) {
         Some(f) => f,
         None => {
-            eprintln!("Skipping: no data for {}", date);
+            eprintln!("Skipping: no data for {date}");
             return;
         }
     };

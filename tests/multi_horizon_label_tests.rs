@@ -7,6 +7,7 @@
 //! 4. Performance: No excessive allocations
 //! 5. Research alignment: Results match paper specifications
 
+use feature_extractor::contract;
 use feature_extractor::labeling::{
     LabelConfig, MultiHorizonConfig, MultiHorizonLabelGenerator, ThresholdStrategy,
     TlobLabelGenerator, TrendLabel,
@@ -343,7 +344,7 @@ fn test_percentage_change_accuracy() {
 
     let expected_change = (125.0 - 105.0) / 105.0; // ≈ 0.190476
     assert!(
-        (change - expected_change).abs() < 1e-10,
+        (change - expected_change).abs() < contract::FLOAT_CMP_EPS,
         "Expected change {}, got {}",
         expected_change,
         change

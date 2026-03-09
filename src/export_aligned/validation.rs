@@ -1,10 +1,121 @@
-//! Export validation: alignment checks, spread verification, class balance.
+//! Export validation: alignment checks, spread verification, class balance, NaN/Inf scanning.
 
 use super::types::LabelEncoding;
 use super::AlignedBatchExporter;
+use crate::contract;
 use mbo_lob_reconstructor::Result;
 
+/// Per-feature NaN/Inf counts from a full sequence scan.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(super) struct NanInfReport {
+    pub is_clean: bool,
+    pub total_values_scanned: usize,
+    pub nan_count: usize,
+    pub inf_count: usize,
+    /// Feature indices that contained at least one NaN or Inf.
+    pub affected_features: Vec<usize>,
+}
+
 impl AlignedBatchExporter {
+    /// Scan all aligned sequences for NaN/Inf values AFTER normalization.
+    ///
+    /// Normalization can itself introduce NaN (e.g., dividing by zero std for a
+    /// constant feature), so this scan must run after normalization and before
+    /// NPY write. Returns a hard error if any non-finite value is found --
+    /// per RULE.md section 8: never silently write corrupt data.
+    pub(super) fn scan_for_nan_inf(&self, sequences: &[Vec<Vec<f64>>]) -> Result<NanInfReport> {
+        let mut total_scanned: usize = 0;
+        let mut nan_count: usize = 0;
+        let mut inf_count: usize = 0;
+        let n_features = sequences
+            .first()
+            .and_then(|s| s.first())
+            .map(|t| t.len())
+            .unwrap_or(0);
+        let mut feature_nan = vec![0usize; n_features];
+        let mut feature_inf = vec![0usize; n_features];
+
+        for seq in sequences {
+            for timestep in seq {
+                for (i, &val) in timestep.iter().enumerate() {
+                    total_scanned += 1;
+                    if val.is_nan() {
+                        nan_count += 1;
+                        if i < n_features {
+                            feature_nan[i] += 1;
+                        }
+                    } else if val.is_infinite() {
+                        inf_count += 1;
+                        if i < n_features {
+                            feature_inf[i] += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        let affected_features: Vec<usize> = (0..n_features)
+            .filter(|&i| feature_nan[i] > 0 || feature_inf[i] > 0)
+            .collect();
+
+        let is_clean = nan_count == 0 && inf_count == 0;
+
+        if !is_clean {
+            let detail: Vec<String> = affected_features
+                .iter()
+                .map(|&i| {
+                    format!(
+                        "feature[{}]: {} NaN, {} Inf",
+                        i, feature_nan[i], feature_inf[i]
+                    )
+                })
+                .collect();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Export integrity check FAILED: {} NaN + {} Inf in {} values. \
+                     Affected features: [{}]",
+                    nan_count,
+                    inf_count,
+                    total_scanned,
+                    detail.join("; ")
+                ),
+            )
+            .into());
+        }
+
+        Ok(NanInfReport {
+            is_clean,
+            total_values_scanned: total_scanned,
+            nan_count,
+            inf_count,
+            affected_features,
+        })
+    }
+
+    /// Assert that the feature count matches a valid contract count.
+    ///
+    /// Catches misconfiguration before corrupt data reaches disk. The only valid
+    /// feature counts are `STABLE_FEATURE_COUNT` (98) and `FULL_FEATURE_COUNT` (116).
+    pub(super) fn validate_feature_count(&self, n_features: usize) -> Result<()> {
+        let valid_counts = [contract::STABLE_FEATURE_COUNT, contract::FULL_FEATURE_COUNT];
+        if !valid_counts.contains(&n_features) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Feature count {} does not match any contract count {:?}. \
+                     Expected {} (stable) or {} (full). Check FeatureConfig.",
+                    n_features,
+                    valid_counts,
+                    contract::STABLE_FEATURE_COUNT,
+                    contract::FULL_FEATURE_COUNT,
+                ),
+            )
+            .into());
+        }
+        Ok(())
+    }
     /// Verify RAW spread integrity BEFORE normalization (DIAGNOSTIC)
     pub(super) fn verify_raw_spreads(&self, sequences: &[Vec<Vec<f64>>]) -> Result<()> {
         if sequences.is_empty() {

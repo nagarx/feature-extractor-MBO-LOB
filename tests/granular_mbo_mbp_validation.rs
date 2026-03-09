@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Granular Cross-Validation: MBO Reconstruction vs MBP-10 Ground Truth
 //!
 //! This test performs detailed, granular validation to find any potential issues

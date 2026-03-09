@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Comprehensive Real-World Validation of MBO Features
 //!
 //! This test validates all implemented MBO features against real NVIDIA data
@@ -9,6 +10,8 @@
 
 #![cfg(all(feature = "parallel", feature = "databento"))]
 
+mod common;
+
 use feature_extractor::batch::{BatchConfig, BatchProcessor, ErrorMode};
 use feature_extractor::PipelineBuilder;
 use std::path::Path;
@@ -17,11 +20,9 @@ use std::path::Path;
 // Test Configuration
 // ============================================================================
 
-const HOT_STORE_DIR: &str = "../data/hot_store";
-
 /// Get hot store files for testing
 fn get_hot_store_files() -> Vec<String> {
-    let hot_store_path = Path::new(HOT_STORE_DIR);
+    let hot_store_path = Path::new(common::HOT_STORE_DIR);
 
     if !hot_store_path.exists() {
         return Vec::new();
@@ -82,7 +83,7 @@ fn test_mbo_features_real_data_validation() {
     let batch_config = BatchConfig::new()
         .with_threads(4)
         .with_error_mode(ErrorMode::FailFast)
-        .with_hot_store_dir(HOT_STORE_DIR);
+        .with_hot_store_dir(common::HOT_STORE_DIR);
 
     let processor = BatchProcessor::new(pipeline_config, batch_config);
 
@@ -320,7 +321,7 @@ fn test_parallel_vs_sequential_consistency() {
     // Process with 1 thread (sequential)
     let seq_config = BatchConfig::new()
         .with_threads(1)
-        .with_hot_store_dir(HOT_STORE_DIR);
+        .with_hot_store_dir(common::HOT_STORE_DIR);
 
     let seq_processor = BatchProcessor::new(pipeline_config.clone(), seq_config);
     let seq_result = seq_processor
@@ -330,7 +331,7 @@ fn test_parallel_vs_sequential_consistency() {
     // Process with 4 threads (parallel)
     let par_config = BatchConfig::new()
         .with_threads(4)
-        .with_hot_store_dir(HOT_STORE_DIR);
+        .with_hot_store_dir(common::HOT_STORE_DIR);
 
     let par_processor = BatchProcessor::new(pipeline_config, par_config);
     let par_result = par_processor

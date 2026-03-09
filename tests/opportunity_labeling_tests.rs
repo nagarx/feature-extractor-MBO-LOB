@@ -4,6 +4,7 @@
 //! the feature extraction pipeline and verify correctness across different
 //! configurations.
 
+use feature_extractor::contract;
 use feature_extractor::{
     ConflictPriority, OpportunityConfig, OpportunityLabel, OpportunityLabelGenerator,
 };
@@ -298,7 +299,7 @@ fn test_opportunity_stats_analysis() {
     let (up, no, down) = stats.class_balance();
     let sum = up + no + down;
     assert!(
-        (sum - 1.0).abs() < 1e-10,
+        (sum - 1.0).abs() < contract::FLOAT_CMP_EPS,
         "Class balance should sum to 1.0, got {}",
         sum
     );
@@ -419,7 +420,7 @@ fn test_edge_case_exact_threshold() {
 
     // max_return = 3% exactly, should NOT trigger (strict >)
     assert!(
-        (*max_return - 0.03).abs() < 1e-10,
+        (*max_return - 0.03).abs() < contract::FLOAT_CMP_EPS,
         "max_return should be exactly 3%"
     );
     assert_eq!(

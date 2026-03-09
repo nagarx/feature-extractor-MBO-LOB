@@ -7,7 +7,10 @@
 
 #![cfg(feature = "parallel")]
 
+mod common;
+
 use feature_extractor::batch::{BatchConfig, BatchProcessor};
+use feature_extractor::contract;
 use feature_extractor::export::{
     DataPathConfig, DatasetConfig, DateRangeConfig, FeatureSetConfig, SymbolConfig,
 };
@@ -16,10 +19,6 @@ use std::sync::Arc;
 
 /// Test directory path for hot store data
 const HOT_STORE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/hot_store");
-
-fn hot_store_exists() -> bool {
-    Path::new(HOT_STORE_PATH).exists()
-}
 
 #[test]
 fn test_dataset_config_feature_counts() {
@@ -129,10 +128,7 @@ fn test_symbol_config_filename_patterns() {
 #[ignore = "Requires real data files"]
 #[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_98_feature_export_with_real_data() {
-    if !hot_store_exists() {
-        eprintln!("Skipping: Hot store not found at {}", HOT_STORE_PATH);
-        return;
-    }
+    skip_if_no_data!();
 
     // Create configuration pointing to hot store
     let config = DatasetConfig::new(
@@ -228,7 +224,7 @@ fn test_threshold_strategy_backward_compatibility() {
     let strategy = config.effective_threshold_strategy();
     match strategy {
         ExportThresholdStrategy::Fixed { value } => {
-            assert!((value - 0.0008).abs() < 1e-10);
+            assert!((value - 0.0008).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected Fixed strategy for legacy config"),
     }
@@ -257,7 +253,7 @@ fn test_threshold_strategy_fixed_from_toml() {
     match strategy {
         ExportThresholdStrategy::Fixed { value } => {
             // Should use threshold_strategy.value, not threshold field
-            assert!((value - 0.002).abs() < 1e-10);
+            assert!((value - 0.002).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected Fixed strategy"),
     }
@@ -266,7 +262,7 @@ fn test_threshold_strategy_fixed_from_toml() {
     let internal = strategy.to_internal();
     match internal {
         ThresholdStrategy::Fixed(v) => {
-            assert!((v - 0.002).abs() < 1e-10);
+            assert!((v - 0.002).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected internal Fixed strategy"),
     }
@@ -298,8 +294,8 @@ fn test_threshold_strategy_rolling_spread_from_toml() {
             fallback,
         } => {
             assert_eq!(window_size, 1000);
-            assert!((multiplier - 1.5).abs() < 1e-10);
-            assert!((fallback - 0.0008).abs() < 1e-10);
+            assert!((multiplier - 1.5).abs() < contract::FLOAT_CMP_EPS);
+            assert!((fallback - 0.0008).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected RollingSpread strategy"),
     }
@@ -313,8 +309,8 @@ fn test_threshold_strategy_rolling_spread_from_toml() {
             fallback,
         } => {
             assert_eq!(window_size, 1000);
-            assert!((multiplier - 1.5).abs() < 1e-10);
-            assert!((fallback - 0.0008).abs() < 1e-10);
+            assert!((multiplier - 1.5).abs() < contract::FLOAT_CMP_EPS);
+            assert!((fallback - 0.0008).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected internal RollingSpread strategy"),
     }
@@ -345,9 +341,9 @@ fn test_threshold_strategy_quantile_from_toml() {
             window_size,
             fallback,
         } => {
-            assert!((target_proportion - 0.33).abs() < 1e-10);
+            assert!((target_proportion - 0.33).abs() < contract::FLOAT_CMP_EPS);
             assert_eq!(window_size, 5000);
-            assert!((fallback - 0.0008).abs() < 1e-10);
+            assert!((fallback - 0.0008).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected Quantile strategy"),
     }
@@ -360,9 +356,9 @@ fn test_threshold_strategy_quantile_from_toml() {
             window_size,
             fallback,
         } => {
-            assert!((target_proportion - 0.33).abs() < 1e-10);
+            assert!((target_proportion - 0.33).abs() < contract::FLOAT_CMP_EPS);
             assert_eq!(window_size, 5000);
-            assert!((fallback - 0.0008).abs() < 1e-10);
+            assert!((fallback - 0.0008).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected internal Quantile strategy"),
     }
@@ -416,7 +412,7 @@ fn test_export_label_config_builders() {
         Some(ExportThresholdStrategy::Quantile {
             target_proportion, ..
         }) => {
-            assert!((target_proportion - 0.33).abs() < 1e-10);
+            assert!((target_proportion - 0.33).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected Quantile strategy from balanced()"),
     }
@@ -428,7 +424,7 @@ fn test_export_label_config_builders() {
 
     match &config.threshold_strategy {
         Some(ExportThresholdStrategy::RollingSpread { multiplier, .. }) => {
-            assert!((multiplier - 1.5).abs() < 1e-10);
+            assert!((multiplier - 1.5).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected RollingSpread strategy from spread_adaptive()"),
     }
@@ -460,7 +456,7 @@ fn test_multi_horizon_config_conversion_with_strategy() {
         ThresholdStrategy::Quantile {
             target_proportion, ..
         } => {
-            assert!((target_proportion - 0.33).abs() < 1e-10);
+            assert!((target_proportion - 0.33).abs() < contract::FLOAT_CMP_EPS);
         }
         _ => panic!("Expected Quantile strategy in MultiHorizonConfig"),
     }
@@ -553,7 +549,7 @@ fn test_full_config_toml_roundtrip() {
             window_size,
             ..
         } => {
-            assert!((target_proportion - 0.33).abs() < 1e-10);
+            assert!((target_proportion - 0.33).abs() < contract::FLOAT_CMP_EPS);
             assert_eq!(window_size, 5000);
         }
         _ => panic!("Expected Quantile strategy from full config"),

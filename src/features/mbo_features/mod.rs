@@ -1102,4 +1102,526 @@ mod tests {
             "Eviction should either record completed orders or reduce tracker size"
         );
     }
+
+    /// Synthetic formula-level test for all 36 MBO features.
+    ///
+    /// Feeds 8 hand-crafted events through MboAggregator(fast=5, medium=10, slow=20),
+    /// then verifies every feature against independently computed expected values.
+    /// This catches formula regressions, counter bugs, and window eviction errors.
+    ///
+    /// Event scenario:
+    ///   e1: t=1s Add/Bid   size=100 id=1  (cancelled at e4)
+    ///   e2: t=2s Add/Bid   size=200 id=2  (remains active)
+    ///   e3: t=3s Add/Ask   size=150 id=3  (fully filled at e6)
+    ///   e4: t=4s Cancel/Bid         id=1  → completed, fill_ratio=0.0
+    ///   e5: t=5s Add/Ask   size=300 id=4  (cancelled at e7)
+    ///   e6: t=6s Trade/Ask size=150 id=3  → completed, fill_ratio=1.0
+    ///   e7: t=7s Cancel/Ask         id=4  → completed, fill_ratio=0.0
+    ///   e8: t=8s Add/Bid   size=200 id=5  (remains active)
+    ///
+    /// After processing:
+    ///   Active: {id=2, id=5}
+    ///   Completed: [id=1(3.0s, 0.0), id=3(3.0s, 1.0), id=4(2.0s, 0.0)]
+    ///   Fast window (cap=5): [e4..e8], first_ts=1e9 (stale), last_ts=8e9
+    ///   Medium/Slow: all 8 events, duration=7.0s
+    #[test]
+    fn test_mbo_formula_synthetic_all_36_features() {
+        use crate::contract::{DIVISION_GUARD_EPS, FLOAT_CMP_EPS};
+
+        let mut agg = MboAggregator::with_windows(5, 10, 20);
+
+        let events = [
+            MboEvent::new(
+                1_000_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                1,
+            ),
+            MboEvent::new(
+                2_000_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                200,
+                2,
+            ),
+            MboEvent::new(
+                3_000_000_000,
+                Action::Add,
+                Side::Ask,
+                100_010_000_000,
+                150,
+                3,
+            ),
+            MboEvent::new(
+                4_000_000_000,
+                Action::Cancel,
+                Side::Bid,
+                100_000_000_000,
+                100,
+                1,
+            ),
+            MboEvent::new(
+                5_000_000_000,
+                Action::Add,
+                Side::Ask,
+                100_010_000_000,
+                300,
+                4,
+            ),
+            MboEvent::new(
+                6_000_000_000,
+                Action::Trade,
+                Side::Ask,
+                100_010_000_000,
+                150,
+                3,
+            ),
+            MboEvent::new(
+                7_000_000_000,
+                Action::Cancel,
+                Side::Ask,
+                100_010_000_000,
+                300,
+                4,
+            ),
+            MboEvent::new(
+                8_000_000_000,
+                Action::Add,
+                Side::Bid,
+                100_000_000_000,
+                200,
+                5,
+            ),
+        ];
+        for event in &events {
+            agg.process_event(event.clone());
+        }
+
+        let mut lob = LobState::new(10);
+        lob.best_bid = Some(100_000_000_000);
+        lob.best_ask = Some(100_010_000_000);
+        lob.bid_prices[0] = 100_000_000_000;
+        lob.bid_prices[1] = 99_990_000_000;
+        lob.bid_sizes[0] = 500;
+        lob.bid_sizes[1] = 300;
+        lob.ask_prices[0] = 100_010_000_000;
+        lob.ask_prices[1] = 100_020_000_000;
+        lob.ask_sizes[0] = 400;
+        lob.ask_sizes[1] = 200;
+
+        let features = agg.extract_features(&lob);
+        assert_eq!(
+            features.len(),
+            36,
+            "MBO feature vector must have 36 elements"
+        );
+        for (i, &v) in features.iter().enumerate() {
+            assert!(v.is_finite(), "Feature[{}] is not finite: {}", i, v);
+        }
+
+        let tol = FLOAT_CMP_EPS;
+        let eps = DIVISION_GUARD_EPS;
+
+        let assert_feat = |idx: usize, expected: f64, name: &str| {
+            let actual = features[idx];
+            let diff = (actual - expected).abs();
+            assert!(
+                diff < tol,
+                "Feature[{}] '{}': expected {:.15e}, got {:.15e}, diff {:.2e}",
+                idx,
+                name,
+                expected,
+                actual,
+                diff
+            );
+        };
+
+        // ═══ FLOW FEATURES [0-11] ═══
+        // Medium window: add_bid=3, add_ask=2, cancel_bid=1, cancel_ask=1,
+        //                trade_bid=0, trade_ask=1. Duration = 7.0s.
+        let dur = 7.0_f64;
+        assert_feat(0, 3.0 / dur, "add_rate_bid");
+        assert_feat(1, 2.0 / dur, "add_rate_ask");
+        assert_feat(2, 1.0 / dur, "cancel_rate_bid");
+        assert_feat(3, 1.0 / dur, "cancel_rate_ask");
+        assert_feat(4, 0.0, "trade_rate_bid");
+        assert_feat(5, 1.0 / dur, "trade_rate_ask");
+
+        // net_order_flow = (add_bid - add_ask) / (total_adds + eps) = 1/(5+eps)
+        assert_feat(6, 1.0 / (5.0 + eps), "net_order_flow");
+
+        // net_cancel_flow = (cancel_ask - cancel_bid) / (total_cancels + eps) = 0/(2+eps)
+        assert_feat(7, 0.0, "net_cancel_flow");
+
+        // net_trade_flow = (trade_ask - trade_bid) / (total_trades + eps) = 1/(1+eps)
+        assert_feat(8, 1.0 / (1.0 + eps), "net_trade_flow");
+
+        // aggressive_order_ratio = trades / (adds + trades + eps) = 1/(6+eps)
+        assert_feat(9, 1.0 / (6.0 + eps), "aggressive_order_ratio");
+
+        // order_flow_volatility: 8 events < 50 minimum → 0.0
+        assert_feat(10, 0.0, "order_flow_volatility");
+
+        // flow_regime_indicator: fast net_flow=0/(2+eps)=0, slow net_flow≈0.2
+        // ratio = 0.0 / max(|slow_flow|, 0.01) = 0.0
+        assert_feat(11, 0.0, "flow_regime_indicator");
+
+        // ═══ SIZE FEATURES [12-19] ═══
+        // Event sizes in medium window: [100, 200, 150, 100, 300, 150, 300, 200]
+        // Sorted: [100, 100, 150, 150, 200, 200, 300, 300]
+        // n=8: p25=sizes[2]=150, p50=sizes[4]=200, p75=sizes[6]=300, p90=sizes[7]=300
+        assert_feat(12, 150.0, "size_p25");
+        assert_feat(13, 200.0, "size_p50");
+        assert_feat(14, 300.0, "size_p75");
+        assert_feat(15, 300.0, "size_p90");
+
+        let sizes: [f64; 8] = [100.0, 200.0, 150.0, 100.0, 300.0, 150.0, 300.0, 200.0];
+        let size_total: f64 = sizes.iter().sum(); // 1500.0
+        let n = sizes.len() as f64; // 8.0
+        let mean = size_total / n; // 187.5
+        let variance: f64 = sizes.iter().map(|&s| (s - mean) * (s - mean)).sum::<f64>() / n;
+        let std = variance.sqrt();
+
+        // size_zscore = (last_event_size - mean) / (std + eps)
+        assert_feat(16, (200.0 - mean) / (std + eps), "size_zscore");
+
+        // large_order_ratio: threshold=p90=300, count(size > 300) = 0
+        assert_feat(17, 0.0, "large_order_ratio");
+
+        // size_skewness = E[((x-μ)/σ)³]
+        let expected_skew: f64 = sizes
+            .iter()
+            .map(|&s| {
+                let z = (s - mean) / std;
+                z * z * z
+            })
+            .sum::<f64>()
+            / n;
+        assert_feat(18, expected_skew, "size_skewness");
+
+        // size_concentration = HHI = Σ(size_i / total)²
+        let expected_hhi: f64 = sizes
+            .iter()
+            .map(|&s| {
+                let share = s / size_total;
+                share * share
+            })
+            .sum();
+        assert_feat(19, expected_hhi, "size_concentration");
+
+        // ═══ QUEUE FEATURES [20-25] ═══
+        // No queue tracker → first two features = 0.0
+        assert_feat(20, 0.0, "avg_queue_position");
+        assert_feat(21, 0.0, "queue_volume_ahead");
+
+        // orders_per_level: 2 active orders / 4 active price levels = 0.5
+        assert_feat(22, 2.0 / 4.0, "orders_per_level");
+
+        // level_concentration: HHI of LOB volumes
+        // total = 500+300+400+200 = 1400
+        let lob_total = 1400.0_f64;
+        let lob_hhi = (500.0_f64 * 500.0 + 300.0 * 300.0 + 400.0 * 400.0 + 200.0 * 200.0)
+            / (lob_total * lob_total);
+        assert_feat(23, lob_hhi, "level_concentration");
+
+        // depth_ticks_bid: L0 500*0 + L1 300*1 = 300, total_vol=800
+        assert_feat(24, 300.0 / 800.0, "depth_ticks_bid");
+
+        // depth_ticks_ask: L0 400*0 + L1 200*1 = 200, total_vol=600
+        assert_feat(25, 200.0 / 600.0, "depth_ticks_ask");
+
+        // ═══ INSTITUTIONAL FEATURES [26-29] ═══
+        // large_order_frequency: p90=300, count(>300)=0 → 0.0/7.0 = 0.0
+        assert_feat(26, 0.0, "large_order_frequency");
+
+        // large_order_imbalance: no large orders → 0/(0+eps) = 0.0
+        assert_feat(27, 0.0, "large_order_imbalance");
+
+        // modification_score: completed_mods=[0,0,0] → 0/3 = 0.0
+        assert_feat(28, 0.0, "modification_score");
+
+        // iceberg_proxy: fill_ratio*(mod_score/10).min(1) = (1/3)*0 = 0.0
+        assert_feat(29, 0.0, "iceberg_proxy");
+
+        // ═══ LIFECYCLE FEATURES [30-35] ═══
+        // avg_order_age: {id=2: (8-2)/1e9=6.0s, id=5: (8-8)/1e9=0.0s} → 6.0/2 = 3.0
+        assert_feat(30, 3.0, "avg_order_age");
+
+        // median_order_lifetime: completed=[3.0, 3.0, 2.0] sorted=[2.0,3.0,3.0] → 3.0
+        assert_feat(31, 3.0, "median_order_lifetime");
+
+        // avg_fill_ratio: completed=[0.0, 1.0, 0.0] → 1.0/3.0
+        assert_feat(32, 1.0 / 3.0, "avg_fill_ratio");
+
+        // avg_time_to_first_fill: active orders {id=2,id=5} have no fills → 0.0
+        assert_feat(33, 0.0, "avg_time_to_first_fill");
+
+        // cancel_to_add_ratio: cancels=2, adds=5 → 2/5 = 0.4
+        assert_feat(34, 2.0 / 5.0, "cancel_to_add_ratio");
+
+        // active_order_count: 2 active orders
+        assert_feat(35, 2.0, "active_order_count");
+    }
+
+    /// Synthetic sign convention test (RULE.md §10).
+    ///
+    /// Verifies that MBO directional features follow the pipeline convention:
+    ///   > 0 = Bullish / Buy pressure
+    ///   < 0 = Bearish / Sell pressure
+    ///   = 0 = Neutral
+    ///
+    /// Three scenarios:
+    ///   Bull: more bid adds + ask trades → positive flow features
+    ///   Bear: more ask adds + bid-side trades → negative flow features
+    ///   Neutral: symmetric activity → zero flow features
+    #[test]
+    fn test_sign_convention_synthetic() {
+        use mbo_lob_reconstructor::LobState;
+
+        let mut lob = LobState::new(10);
+        lob.best_bid = Some(100_000_000_000);
+        lob.best_ask = Some(100_010_000_000);
+        lob.bid_prices[0] = 100_000_000_000;
+        lob.ask_prices[0] = 100_010_000_000;
+        lob.bid_sizes[0] = 500;
+        lob.ask_sizes[0] = 500;
+
+        let tol = 1e-10;
+
+        // ── Scenario 1: BULL PRESSURE ──
+        // More bid adds (buyers posting), more ask trades (buyers aggressing)
+        {
+            let mut agg = MboAggregator::with_windows(100, 200, 400);
+            let bull_events = [
+                MboEvent::new(
+                    1_000_000_000,
+                    Action::Add,
+                    Side::Bid,
+                    100_000_000_000,
+                    100,
+                    1,
+                ),
+                MboEvent::new(
+                    2_000_000_000,
+                    Action::Add,
+                    Side::Bid,
+                    100_000_000_000,
+                    200,
+                    2,
+                ),
+                MboEvent::new(
+                    3_000_000_000,
+                    Action::Add,
+                    Side::Bid,
+                    100_000_000_000,
+                    150,
+                    3,
+                ),
+                MboEvent::new(
+                    4_000_000_000,
+                    Action::Add,
+                    Side::Ask,
+                    100_010_000_000,
+                    100,
+                    4,
+                ),
+                MboEvent::new(
+                    5_000_000_000,
+                    Action::Trade,
+                    Side::Ask,
+                    100_010_000_000,
+                    100,
+                    4,
+                ),
+                MboEvent::new(
+                    6_000_000_000,
+                    Action::Trade,
+                    Side::Ask,
+                    100_010_000_000,
+                    50,
+                    5,
+                ),
+            ];
+            for e in &bull_events {
+                agg.process_event(e.clone());
+            }
+            let feats = agg.extract_features(&lob);
+
+            // net_order_flow = (add_bid - add_ask) / (total_adds + eps)
+            // = (3 - 1) / (4 + eps) > 0 (bullish: more bid adds)
+            assert!(
+                feats[6] > tol,
+                "BULL: net_order_flow should be > 0 (got {})",
+                feats[6]
+            );
+
+            // net_trade_flow = (trade_ask - trade_bid) / (total_trades + eps)
+            // = (2 - 0) / (2 + eps) > 0 (bullish: buyer aggression)
+            assert!(
+                feats[8] > tol,
+                "BULL: net_trade_flow should be > 0 (got {})",
+                feats[8]
+            );
+        }
+
+        // ── Scenario 2: BEAR PRESSURE ──
+        // More ask adds (sellers posting), more bid trades (sellers aggressing)
+        {
+            let mut agg = MboAggregator::with_windows(100, 200, 400);
+            let bear_events = [
+                MboEvent::new(
+                    1_000_000_000,
+                    Action::Add,
+                    Side::Ask,
+                    100_010_000_000,
+                    100,
+                    1,
+                ),
+                MboEvent::new(
+                    2_000_000_000,
+                    Action::Add,
+                    Side::Ask,
+                    100_010_000_000,
+                    200,
+                    2,
+                ),
+                MboEvent::new(
+                    3_000_000_000,
+                    Action::Add,
+                    Side::Ask,
+                    100_010_000_000,
+                    150,
+                    3,
+                ),
+                MboEvent::new(
+                    4_000_000_000,
+                    Action::Add,
+                    Side::Bid,
+                    100_000_000_000,
+                    100,
+                    4,
+                ),
+                MboEvent::new(
+                    5_000_000_000,
+                    Action::Trade,
+                    Side::Bid,
+                    100_000_000_000,
+                    100,
+                    4,
+                ),
+                MboEvent::new(
+                    6_000_000_000,
+                    Action::Trade,
+                    Side::Bid,
+                    100_000_000_000,
+                    50,
+                    5,
+                ),
+            ];
+            for e in &bear_events {
+                agg.process_event(e.clone());
+            }
+            let feats = agg.extract_features(&lob);
+
+            // net_order_flow = (add_bid - add_ask) / (total_adds + eps)
+            // = (1 - 3) / (4 + eps) < 0 (bearish: more ask adds)
+            assert!(
+                feats[6] < -tol,
+                "BEAR: net_order_flow should be < 0 (got {})",
+                feats[6]
+            );
+
+            // net_trade_flow = (trade_ask - trade_bid) / (total_trades + eps)
+            // = (0 - 2) / (2 + eps) < 0 (bearish: seller aggression)
+            assert!(
+                feats[8] < -tol,
+                "BEAR: net_trade_flow should be < 0 (got {})",
+                feats[8]
+            );
+        }
+
+        // ── Scenario 3: NEUTRAL ──
+        // Perfectly symmetric activity on both sides
+        {
+            let mut agg = MboAggregator::with_windows(100, 200, 400);
+            let neutral_events = [
+                MboEvent::new(
+                    1_000_000_000,
+                    Action::Add,
+                    Side::Bid,
+                    100_000_000_000,
+                    100,
+                    1,
+                ),
+                MboEvent::new(
+                    2_000_000_000,
+                    Action::Add,
+                    Side::Ask,
+                    100_010_000_000,
+                    100,
+                    2,
+                ),
+                MboEvent::new(
+                    3_000_000_000,
+                    Action::Trade,
+                    Side::Bid,
+                    100_000_000_000,
+                    50,
+                    1,
+                ),
+                MboEvent::new(
+                    4_000_000_000,
+                    Action::Trade,
+                    Side::Ask,
+                    100_010_000_000,
+                    50,
+                    2,
+                ),
+                MboEvent::new(
+                    5_000_000_000,
+                    Action::Cancel,
+                    Side::Bid,
+                    100_000_000_000,
+                    50,
+                    1,
+                ),
+                MboEvent::new(
+                    6_000_000_000,
+                    Action::Cancel,
+                    Side::Ask,
+                    100_010_000_000,
+                    50,
+                    2,
+                ),
+            ];
+            for e in &neutral_events {
+                agg.process_event(e.clone());
+            }
+            let feats = agg.extract_features(&lob);
+
+            // net_order_flow = (add_bid - add_ask) / (total + eps) = 0
+            assert!(
+                feats[6].abs() < tol,
+                "NEUTRAL: net_order_flow should be ~0 (got {})",
+                feats[6]
+            );
+
+            // net_cancel_flow = (cancel_ask - cancel_bid) / (total + eps) = 0
+            assert!(
+                feats[7].abs() < tol,
+                "NEUTRAL: net_cancel_flow should be ~0 (got {})",
+                feats[7]
+            );
+
+            // net_trade_flow = (trade_ask - trade_bid) / (total + eps) = 0
+            assert!(
+                feats[8].abs() < tol,
+                "NEUTRAL: net_trade_flow should be ~0 (got {})",
+                feats[8]
+            );
+        }
+    }
 }

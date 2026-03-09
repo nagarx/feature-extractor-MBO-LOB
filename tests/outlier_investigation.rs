@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Outlier Investigation Tests
 //!
 //! Deep investigation of the large price errors found in comprehensive validation.

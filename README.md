@@ -2,7 +2,7 @@
 
 High-performance feature extraction library for Limit Order Book (LOB) and Market-by-Order (MBO) data, designed for deep learning model training in high-frequency trading.
 
-[![Rust](https://img.shields.io/badge/rust-1.83%2B-blue.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.94%2B-blue.svg)](https://www.rust-lang.org/)
 [![Build Status](https://github.com/nagarx/feature-extractor-MBO-LOB/workflows/CI/badge.svg)](https://github.com/nagarx/feature-extractor-MBO-LOB/actions)
 
 ## Overview
@@ -671,25 +671,53 @@ cargo bench
 
 ## Testing
 
+### Three-Tier Test System
+
+| Tier | Scope | Runtime | When |
+|------|-------|---------|------|
+| **Default CI** | Unit (~730) + Levels 1-4 + contract + parallel tests | ~3-5 min | Every push |
+| **Extended** | Full-day multi-day deep validation (feature-gated) | ~30-60 min | On-demand |
+| **Benchmarks** | `cargo bench` | Variable | Manual |
+
+Tests compile with `opt-level = 2` (`[profile.test]` in Cargo.toml) for 5-10x speedup
+over debug mode, with zero accuracy impact on IEEE 754 f64 operations.
+All 98 features are fully deterministic across runs (BTreeMap-based order tracking ensures
+reproducible MBO feature computation). Golden snapshot and determinism tests enforce
+bit-exact matching at `contract::FLOAT_CMP_EPS` (1e-10) tolerance.
+
+### Commands
+
 ```bash
-# Unit tests only (729 tests, no data required)
-cargo test --lib --features "parallel,databento"
+# Unit tests only (no data required, ~30s)
+cargo test --lib
 
-# All tests including integration (requires data/ directory with NVIDIA MBO files)
-cargo test --features "parallel,databento" -- --test-threads=4
+# Full CI suite (unit + integration Levels 1-4, ~3-5 min)
+cargo test --features "parallel,databento"
 
-# Real-data validation (determinism, layout, state isolation, export)
-cargo test --test phase3_real_data_validation --features "parallel,databento"
+# Level 1: Transformation tracing (50K events, formula-level correctness)
+cargo test --features "parallel,databento" --test transformation_tracing
 
-# Golden snapshot regression guard
-cargo test --test golden_snapshot --features "parallel,databento"
+# Level 2: Golden snapshot (500-vector regression guard)
+cargo test --features "parallel,databento" --test golden_snapshot
 
-# Contract validation (verifies Rust constants match pipeline_contract.toml)
-cargo test --test contract_validation_test --features "parallel,databento"
+# Level 3: Full-day statistical invariants (1 canonical day)
+cargo test --features "parallel,databento" --test phase3_real_data_validation
+
+# Level 4: Export round-trip (synthetic, no data required)
+cargo test --test export_roundtrip
+
+# Contract validation (Rust constants vs pipeline_contract.toml)
+cargo test --features "parallel,databento" --test contract_validation_test
+
+# Extended validation (requires data/, NOT for CI)
+cargo test --features "parallel,databento,extended_validation" --release -- --test-threads=2
 
 # Verbose output
 cargo test -- --nocapture
 ```
+
+See [CODEBASE.md Section 15](CODEBASE.md#15-testing-patterns) for the full 4-Level Validation
+Pyramid specification, test infrastructure, and extended validation catalog.
 
 ## Documentation
 

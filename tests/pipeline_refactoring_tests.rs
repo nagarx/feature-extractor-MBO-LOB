@@ -8,19 +8,16 @@
 //! These tests prefer **hot store** (pre-decompressed) files for faster execution:
 //! - Hot store files: ~3-4x faster (no zstd decompression overhead)
 //! - Falls back to compressed files if hot store is unavailable
-//!
-//! Run with: cargo test --release --test pipeline_refactoring_tests
 
-use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig};
+mod common;
+
+use feature_extractor::{contract, Pipeline, PipelineBuilder, PipelineConfig};
 use mbo_lob_reconstructor::DbnLoader;
 use std::path::Path;
 
 // ============================================================================
 // Test Fixtures
 // ============================================================================
-
-/// Hot store directory with pre-decompressed DBN files (preferred for speed)
-const HOT_STORE_DIR: &str = "../data/hot_store";
 
 /// Compressed data directory (fallback if hot store unavailable)
 const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
@@ -51,7 +48,7 @@ fn get_test_file() -> Option<String> {
 /// Get test file with source information
 fn get_test_file_with_source() -> Option<(String, DataSource)> {
     // First, try hot store (decompressed files - much faster)
-    let hot_store_path = Path::new(HOT_STORE_DIR);
+    let hot_store_path = Path::new(common::HOT_STORE_DIR);
     if hot_store_path.exists() {
         let mut hot_files: Vec<String> = std::fs::read_dir(hot_store_path)
             .ok()?
@@ -106,6 +103,8 @@ fn create_test_config() -> PipelineConfig {
 /// This is the critical test before refactoring.
 #[test]
 fn test_process_vs_process_messages_equivalence() {
+    skip_if_no_data!();
+
     println!("\n═══════════════════════════════════════════════════════════════════");
     println!("  TEST: process() vs process_messages() Equivalence");
     println!("═══════════════════════════════════════════════════════════════════\n");
@@ -225,7 +224,7 @@ fn test_process_vs_process_messages_equivalence() {
         .enumerate()
     {
         assert!(
-            (p1 - p2).abs() < 1e-10,
+            (p1 - p2).abs() < contract::FLOAT_CMP_EPS,
             "Mid price mismatch at index {}: {} vs {} (diff: {})",
             i,
             p1,
@@ -234,8 +233,9 @@ fn test_process_vs_process_messages_equivalence() {
         );
     }
     println!(
-        "   ✓ All {} mid_prices match with <1e-10 precision",
-        output1.mid_prices.len()
+        "   ✓ All {} mid_prices match with <{:e} precision",
+        output1.mid_prices.len(),
+        contract::FLOAT_CMP_EPS
     );
 
     // ========================================================================
@@ -275,7 +275,7 @@ fn test_process_vs_process_messages_equivalence() {
             // Check numerical precision
             for (col_idx, (v1, v2)) in row1.iter().zip(row2.iter()).enumerate() {
                 assert!(
-                    (v1 - v2).abs() < 1e-10,
+                    (v1 - v2).abs() < contract::FLOAT_CMP_EPS,
                     "Sequence {} feature [{},{}] mismatch: {} vs {} (diff: {})",
                     seq_idx,
                     row_idx,
@@ -312,6 +312,8 @@ fn test_process_vs_process_messages_equivalence() {
 /// Test that process_source() also produces identical results.
 #[test]
 fn test_process_source_equivalence() {
+    skip_if_no_data!();
+
     use mbo_lob_reconstructor::DbnSource;
 
     println!("\n═══════════════════════════════════════════════════════════════════");
@@ -351,14 +353,20 @@ fn test_process_source_equivalence() {
 
     // Verify numerical precision
     for (p1, p2) in output1.mid_prices.iter().zip(output2.mid_prices.iter()) {
-        assert!((p1 - p2).abs() < 1e-10, "Mid price mismatch");
+        assert!(
+            (p1 - p2).abs() < contract::FLOAT_CMP_EPS,
+            "Mid price mismatch"
+        );
     }
 
     // Verify sequences
     for (seq1, seq2) in output1.sequences.iter().zip(output2.sequences.iter()) {
         for (row1, row2) in seq1.features.iter().zip(seq2.features.iter()) {
             for (v1, v2) in row1.iter().zip(row2.iter()) {
-                assert!((v1 - v2).abs() < 1e-10, "Feature value mismatch");
+                assert!(
+                    (v1 - v2).abs() < contract::FLOAT_CMP_EPS,
+                    "Feature value mismatch"
+                );
             }
         }
     }
@@ -376,6 +384,8 @@ fn test_process_source_equivalence() {
 /// Test multiple processing methods all produce the same results.
 #[test]
 fn test_all_processing_methods_equivalence() {
+    skip_if_no_data!();
+
     use mbo_lob_reconstructor::DbnSource;
 
     println!("\n═══════════════════════════════════════════════════════════════════");

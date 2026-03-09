@@ -10,11 +10,13 @@
 
 #![cfg(feature = "parallel")]
 
+mod common;
+
 use feature_extractor::batch::{
     BatchConfig, BatchOutput, BatchProcessor, CancellationToken, ConsoleProgress, ErrorMode,
     ProgressCallback, ProgressInfo,
 };
-use feature_extractor::{Pipeline, PipelineBuilder, PipelineConfig, PipelineOutput};
+use feature_extractor::{contract, Pipeline, PipelineBuilder, PipelineConfig, PipelineOutput};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -159,11 +161,8 @@ fn test_progress_callback_basic() {
 
 #[test]
 fn test_parallel_vs_sequential_identical_results() {
+    skip_if_no_data!();
     let files = get_test_files();
-    if files.is_empty() {
-        println!("⚠️  Skipping test: No test data found");
-        return;
-    }
 
     // Use first 3 files for quick test
     let test_files: Vec<&str> = files.iter().take(3).map(|s| s.as_str()).collect();
@@ -251,11 +250,8 @@ fn test_parallel_vs_sequential_identical_results() {
 
 #[test]
 fn test_parallel_numerical_correctness() {
+    skip_if_no_data!();
     let files = get_test_files();
-    if files.is_empty() {
-        println!("⚠️  Skipping test: No test data found");
-        return;
-    }
 
     // Use first file for detailed comparison
     let test_file = &files[0];
@@ -330,6 +326,7 @@ fn test_parallel_numerical_correctness() {
 
 #[test]
 fn test_thread_isolation() {
+    skip_if_no_data!();
     let files = get_test_files();
     if files.len() < 4 {
         println!("⚠️  Skipping test: Need at least 4 files");
@@ -379,11 +376,8 @@ fn test_thread_isolation() {
 
 #[test]
 fn test_error_handling_collect_mode() {
+    skip_if_no_data!();
     let files = get_test_files();
-    if files.is_empty() {
-        println!("⚠️  Skipping test: No test data found");
-        return;
-    }
 
     // Create a list with one invalid file
     let mut test_files: Vec<String> = files.iter().take(2).cloned().collect();
@@ -418,6 +412,7 @@ fn test_error_handling_collect_mode() {
 
 #[test]
 fn test_batch_output_statistics() {
+    skip_if_no_data!();
     let files = get_test_files();
     if files.len() < 2 {
         println!("⚠️  Skipping test: Need at least 2 files");
@@ -549,6 +544,7 @@ fn test_cancellation_token_basic() {
 
 #[test]
 fn test_cancellation_immediate() {
+    skip_if_no_data!();
     let files = get_test_files();
     if files.len() < 3 {
         println!("⚠️  Skipping test: Need at least 3 files");
@@ -617,6 +613,7 @@ fn test_cancellation_processor_methods() {
 
 #[test]
 fn test_cancellation_with_custom_token() {
+    skip_if_no_data!();
     let files = get_test_files();
     if files.len() < 2 {
         println!("⚠️  Skipping test: Need at least 2 files");
@@ -676,11 +673,8 @@ fn test_cancellation_output_fields() {
 
 #[test]
 fn test_cancellation_with_error_mode() {
+    skip_if_no_data!();
     let files = get_test_files();
-    if files.is_empty() {
-        println!("⚠️  Skipping test: No test files available");
-        return;
-    }
 
     println!("\n📊 Cancellation with ErrorMode Test");
 
@@ -777,17 +771,13 @@ fn get_hot_store_files() -> Vec<String> {
 
 #[test]
 fn test_batch_processor_with_hot_store() {
+    skip_if_no_data!();
     use mbo_lob_reconstructor::HotStoreManager;
 
     println!("\n📊 Batch Processor with Hot Store Test");
 
     let compressed_files = get_test_files();
     let hot_files = get_hot_store_files();
-
-    if compressed_files.is_empty() {
-        println!("   ⏭️  Skipped: No compressed test files found");
-        return;
-    }
 
     if hot_files.is_empty() {
         println!("   ⏭️  Skipped: No hot store files found");
@@ -832,6 +822,7 @@ fn test_batch_processor_with_hot_store() {
 
 #[test]
 fn test_hot_store_produces_same_results_as_direct() {
+    skip_if_no_data!();
     println!("\n📊 Hot Store vs Direct Processing Comparison");
 
     let hot_files = get_hot_store_files();
@@ -903,7 +894,7 @@ fn test_hot_store_produces_same_results_as_direct() {
 
             for j in 0..f1.len().min(5) {
                 assert!(
-                    (f1[j] - f2[j]).abs() < 1e-10,
+                    (f1[j] - f2[j]).abs() < contract::FLOAT_CMP_EPS,
                     "Feature [{},{}] mismatch: {} vs {}",
                     i,
                     j,
@@ -978,17 +969,13 @@ fn test_batch_processor_auto_creates_hot_store_manager() {
 
 #[test]
 fn test_convenience_functions_with_batch_config_hot_store() {
+    skip_if_no_data!();
     use feature_extractor::batch::process_files_with_threads;
 
     println!("\n📊 Convenience Functions with BatchConfig Hot Store Test");
 
     let test_files = get_test_files();
     let hot_files = get_hot_store_files();
-
-    if test_files.is_empty() {
-        println!("   ⏭️  Skipped: No test files found");
-        return;
-    }
 
     if hot_files.is_empty() {
         println!("   ⏭️  Skipped: No hot store files found");
@@ -1021,13 +1008,14 @@ fn test_convenience_functions_with_batch_config_hot_store() {
 
 #[test]
 fn test_batch_processor_with_config_hot_store_produces_correct_results() {
+    skip_if_no_data!();
     println!("\n📊 BatchProcessor Config Hot Store vs Direct Hot Store Test");
 
     let test_files = get_test_files();
     let hot_files = get_hot_store_files();
 
-    if test_files.is_empty() || hot_files.is_empty() {
-        println!("   ⏭️  Skipped: Missing test or hot store files");
+    if hot_files.is_empty() {
+        println!("   ⏭️  Skipped: No hot store files found");
         return;
     }
 

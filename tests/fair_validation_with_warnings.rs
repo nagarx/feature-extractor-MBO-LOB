@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Fair Validation Test with Warning Statistics
 //!
 //! This test provides an unbiased comparison of MBO reconstruction vs MBP-10

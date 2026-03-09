@@ -3,6 +3,7 @@
 //! This test exposes the bug where tick_size configured in SymbolConfig is ignored
 //! and a hardcoded value of 0.01 is used instead.
 
+use feature_extractor::contract;
 use feature_extractor::export::DatasetConfig;
 
 #[test]
@@ -203,7 +204,7 @@ verbose = false
         let pipeline_config = config.to_pipeline_config();
 
         assert!(
-            (pipeline_config.features.tick_size - tick_size).abs() < 1e-10,
+            (pipeline_config.features.tick_size - tick_size).abs() < contract::FLOAT_CMP_EPS,
             "For {}: Expected tick_size = {}, got {}. \
              tick_size is not being propagated from SymbolConfig!",
             description,

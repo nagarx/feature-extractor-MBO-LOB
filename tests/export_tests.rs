@@ -14,7 +14,7 @@ use tempfile::TempDir;
 /// - Indices 10-19: Ask sizes
 /// - Indices 20-29: Bid prices (descending from mid - spread/2)
 /// - Indices 30-39: Bid sizes
-/// - Indices 40-47: Derived features (if 48 features)
+/// - Indices 40+: Derived, MBO, signal features (zero-filled in mock)
 fn create_mock_output(n_sequences: usize, window: usize, features: usize) -> PipelineOutput {
     let mut sequences = Vec::new();
     let mut mid_prices = Vec::new();
@@ -101,8 +101,7 @@ fn create_mock_output(n_sequences: usize, window: usize, features: usize) -> Pip
 
 #[test]
 fn test_aligned_export_basic() {
-    // Create mock data with 40 raw LOB features (default)
-    let output = create_mock_output(100, 100, 40);
+    let output = create_mock_output(100, 100, 98);
 
     // Create exporter
     let temp_dir = TempDir::new().unwrap();
@@ -124,7 +123,7 @@ fn test_aligned_export_basic() {
 
     // Verify
     assert!(result.n_sequences > 0, "Should have exported sequences");
-    assert_eq!(result.seq_shape, (100, 40), "Shape should be (100, 40)");
+    assert_eq!(result.seq_shape, (100, 98), "Shape should be (100, 98)");
 
     // Check files exist
     assert!(temp_dir.path().join("test_sequences.npy").exists());
@@ -134,7 +133,7 @@ fn test_aligned_export_basic() {
 
 #[test]
 fn test_aligned_export_lengths_match() {
-    let output = create_mock_output(50, 100, 40);
+    let output = create_mock_output(50, 100, 98);
 
     let temp_dir = TempDir::new().unwrap();
     let label_config = LabelConfig {
@@ -167,7 +166,7 @@ fn test_aligned_export_lengths_match() {
 
 #[test]
 fn test_aligned_export_shapes() {
-    let output = create_mock_output(30, 100, 40);
+    let output = create_mock_output(30, 100, 98);
 
     let temp_dir = TempDir::new().unwrap();
     let label_config = LabelConfig {
@@ -190,14 +189,18 @@ fn test_aligned_export_shapes() {
     // Check shapes
     assert_eq!(sequences.ndim(), 3, "Sequences should be 3D");
     assert_eq!(sequences.shape()[1], 100, "Window size should be 100");
-    assert_eq!(sequences.shape()[2], 40, "Features should be 40 (raw LOB)");
+    assert_eq!(
+        sequences.shape()[2],
+        98,
+        "Features should be 98 (stable contract)"
+    );
 
     assert_eq!(labels.ndim(), 1, "Labels should be 1D");
 }
 
 #[test]
 fn test_aligned_export_label_values() {
-    let output = create_mock_output(20, 100, 40);
+    let output = create_mock_output(20, 100, 98);
 
     let temp_dir = TempDir::new().unwrap();
     let label_config = LabelConfig {
@@ -225,7 +228,7 @@ fn test_aligned_export_label_values() {
 
 #[test]
 fn test_aligned_export_no_nan_inf() {
-    let output = create_mock_output(20, 100, 40);
+    let output = create_mock_output(20, 100, 98);
 
     let temp_dir = TempDir::new().unwrap();
     let label_config = LabelConfig {

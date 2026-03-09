@@ -6,9 +6,8 @@
 //! MBO feature pipeline.
 
 use super::event::MboEvent;
-use ahash::AHashMap;
 use mbo_lob_reconstructor::{Action, Side};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 /// Buffer size for tracking completed order lifetimes.
 ///
@@ -116,12 +115,14 @@ impl OrderInfo {
 
 /// Encapsulates all order lifecycle tracking state.
 ///
-/// Manages the active order HashMap and completed order rolling buffers
+/// Manages the active order BTreeMap and completed order rolling buffers
 /// (lifetimes, fill ratios, modification counts). Provides methods for
 /// processing events, recording completions, and evicting stale orders.
 pub(super) struct OrderTracker {
-    /// Active orders keyed by order_id
-    active: AHashMap<u64, OrderInfo>,
+    /// Active orders keyed by order_id.
+    /// BTreeMap ensures deterministic iteration order (ascending order_id),
+    /// which makes eviction and aggregation reproducible across runs.
+    active: BTreeMap<u64, OrderInfo>,
 
     /// Rolling buffer of completed order lifetimes (in seconds)
     completed_lifetimes: VecDeque<f64>,
@@ -136,7 +137,7 @@ pub(super) struct OrderTracker {
 impl OrderTracker {
     pub(super) fn new() -> Self {
         Self {
-            active: AHashMap::new(),
+            active: BTreeMap::new(),
             completed_lifetimes: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
             completed_fill_ratios: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
             completed_modifications: VecDeque::with_capacity(COMPLETED_ORDER_BUFFER_SIZE),
@@ -224,7 +225,7 @@ impl OrderTracker {
     // ---- Accessors ----
 
     #[inline]
-    pub(super) fn active_orders(&self) -> &AHashMap<u64, OrderInfo> {
+    pub(super) fn active_orders(&self) -> &BTreeMap<u64, OrderInfo> {
         &self.active
     }
 
@@ -255,7 +256,7 @@ impl OrderTracker {
 
     /// Direct mutable access to `active` for tests that need to insert directly.
     #[cfg(test)]
-    pub(super) fn active_mut(&mut self) -> &mut AHashMap<u64, OrderInfo> {
+    pub(super) fn active_mut(&mut self) -> &mut BTreeMap<u64, OrderInfo> {
         &mut self.active
     }
 }

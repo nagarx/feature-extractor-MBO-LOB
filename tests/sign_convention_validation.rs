@@ -41,6 +41,9 @@
 //! ```
 
 #![cfg(feature = "parallel")]
+#![cfg(feature = "extended_validation")]
+
+mod common;
 
 use feature_extractor::batch::{BatchConfig, BatchProcessor};
 use feature_extractor::builder::PipelineBuilder;
@@ -59,14 +62,8 @@ mod signal_indices {
     pub const CANCEL_ASYMMETRY: usize = 89; // (ask - bid) / total
 }
 
-const HOT_STORE_DIR: &str = "../data/hot_store";
-
-fn test_data_available() -> bool {
-    Path::new(HOT_STORE_DIR).exists()
-}
-
 fn get_test_files(limit: usize) -> Vec<String> {
-    let path = Path::new(HOT_STORE_DIR);
+    let path = Path::new(common::HOT_STORE_DIR);
     if !path.exists() {
         return vec![];
     }
@@ -87,35 +84,7 @@ fn get_test_files(limit: usize) -> Vec<String> {
     files
 }
 
-/// Compute Pearson correlation coefficient
-fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
-    assert_eq!(x.len(), y.len(), "Arrays must have same length");
-    let n = x.len() as f64;
-    if n < 3.0 {
-        return 0.0;
-    }
-
-    let mean_x = x.iter().sum::<f64>() / n;
-    let mean_y = y.iter().sum::<f64>() / n;
-
-    let mut cov = 0.0;
-    let mut var_x = 0.0;
-    let mut var_y = 0.0;
-
-    for (xi, yi) in x.iter().zip(y.iter()) {
-        let dx = xi - mean_x;
-        let dy = yi - mean_y;
-        cov += dx * dy;
-        var_x += dx * dx;
-        var_y += dy * dy;
-    }
-
-    if var_x < 1e-10 || var_y < 1e-10 {
-        return 0.0;
-    }
-
-    cov / (var_x.sqrt() * var_y.sqrt())
-}
+use common::assertions::pearson_correlation;
 
 /// Compute basic statistics
 fn compute_stats(values: &[f64]) -> (f64, f64, f64, f64) {
@@ -213,10 +182,7 @@ fn compute_forward_returns(
 #[test]
 #[ignore = "Requires hot store data"]
 fn test_net_trade_flow_sign_convention() {
-    if !test_data_available() {
-        eprintln!("Skipping: Hot store not available at {}", HOT_STORE_DIR);
-        return;
-    }
+    skip_if_no_data!();
 
     let files = get_test_files(3); // Use 3 days for statistical power
     if files.is_empty() {
@@ -245,7 +211,7 @@ fn test_net_trade_flow_sign_convention() {
         error_mode: feature_extractor::batch::ErrorMode::CollectErrors,
         report_progress: false,
         stack_size: None,
-        hot_store_dir: Some(HOT_STORE_DIR.into()),
+        hot_store_dir: Some(common::HOT_STORE_DIR.into()),
     };
 
     let processor = BatchProcessor::new(pipeline_config, batch_config);
@@ -505,10 +471,7 @@ fn sign_assessment(correlation: f64, expect_positive: bool) -> &'static str {
 #[test]
 #[ignore = "Requires hot store data"]
 fn test_verify_formula_semantics() {
-    if !test_data_available() {
-        eprintln!("Skipping: Hot store not available at {}", HOT_STORE_DIR);
-        return;
-    }
+    skip_if_no_data!();
 
     let files = get_test_files(1);
     if files.is_empty() {
@@ -536,7 +499,7 @@ fn test_verify_formula_semantics() {
         error_mode: feature_extractor::batch::ErrorMode::CollectErrors,
         report_progress: false,
         stack_size: None,
-        hot_store_dir: Some(HOT_STORE_DIR.into()),
+        hot_store_dir: Some(common::HOT_STORE_DIR.into()),
     };
 
     let processor = BatchProcessor::new(pipeline_config, batch_config);

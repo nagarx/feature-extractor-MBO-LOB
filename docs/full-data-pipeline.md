@@ -215,7 +215,7 @@ if self.config.skip_system_messages && (msg.order_id == 0 || msg.size == 0 || ms
 pub struct LobReconstructor {
     bids: BTreeMap<i64, PriceLevel>,     // price → orders at that price
     asks: BTreeMap<i64, PriceLevel>,     // price → orders at that price
-    orders: AHashMap<u64, Order>,        // order_id → (side, price, size)
+    orders: BTreeMap<u64, Order>,        // order_id → (side, price, size)
     best_bid: Option<i64>,               // Cached for O(1) access
     best_ask: Option<i64>,               // Cached for O(1) access
     // ...
@@ -625,7 +625,7 @@ pub struct MboAggregator {
     fast_window: MboWindow,    // 100 events (~2s) - immediate signals
     medium_window: MboWindow,  // 1000 events (~20s) - primary features
     slow_window: MboWindow,    // 5000 events (~100s) - long-term trends
-    order_tracker: AHashMap<u64, OrderInfo>,  // Order lifecycle tracking
+    order_tracker: BTreeMap<u64, OrderInfo>,  // Order lifecycle tracking
 }
 ```
 

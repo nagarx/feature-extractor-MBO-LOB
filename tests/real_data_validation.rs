@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Real NVIDIA Data Validation Tests
 //!
 //! Comprehensive tests using real NVIDIA MBO and MBP-10 data to validate:

@@ -16,7 +16,7 @@ flowchart TB
 
     subgraph External["🔗 External Dependency (mbo-lob-reconstructor)"]
         DbnLoader["DbnLoader::new(path)<br/>iter_messages() → Iterator"]
-        LobRecon["LobReconstructor<br/>process_message(&amp;msg)<br/>BTreeMap + AHashMap"]
+        LobRecon["LobReconstructor<br/>process_message(&amp;msg)<br/>BTreeMap"]
     end
 
     subgraph Pipeline["⚙️ Pipeline Core (pipeline.rs)"]
@@ -779,7 +779,7 @@ flowchart LR
     end
 
     subgraph stage2["Stage 2: Reconstruct<br/>━━━━━━━━━━<br/>LobReconstructor"]
-        B1["process_message()<br/>BTreeMap bids/asks<br/>AHashMap orders"]
+        B1["process_message()<br/>BTreeMap bids/asks<br/>BTreeMap orders"]
         B2["LobState<br/>[i64;20] prices<br/>[u32;20] sizes<br/>10 levels"]
     end
 

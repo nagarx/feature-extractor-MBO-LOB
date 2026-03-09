@@ -4,6 +4,7 @@
 //! feature extraction pipeline and verify correctness across different
 //! configurations.
 
+use feature_extractor::contract;
 use feature_extractor::{
     DeepLobLabelGenerator, DeepLobMethod, LabelConfig, LabelStats, TlobLabelGenerator, TrendLabel,
 };
@@ -192,7 +193,7 @@ fn test_tlob_percentage_change_correctness() {
     let (_, _, pct_change) = &labels[0];
     let expected = (102.5 - 100.5) / 100.5;
     assert!(
-        (pct_change - expected).abs() < 1e-10,
+        (pct_change - expected).abs() < contract::FLOAT_CMP_EPS,
         "Expected {}, got {}",
         expected,
         pct_change
@@ -320,7 +321,10 @@ fn test_label_stats_computation() {
     // Verify class balance sums to ~1.0
     let (up_pct, stable_pct, down_pct) = stats.class_balance();
     let sum = up_pct + stable_pct + down_pct;
-    assert!((sum - 1.0).abs() < 1e-10, "Class balance should sum to 1.0");
+    assert!(
+        (sum - 1.0).abs() < contract::FLOAT_CMP_EPS,
+        "Class balance should sum to 1.0"
+    );
 
     // Verify change statistics are finite
     assert!(stats.avg_change.is_finite());

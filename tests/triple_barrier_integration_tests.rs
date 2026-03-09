@@ -6,6 +6,7 @@
 //! 3. Cross-module consistency and integration
 //! 4. Edge cases and numerical stability
 
+use feature_extractor::contract;
 use feature_extractor::{
     BarrierLabel, MagnitudeConfig, MagnitudeGenerator, ReturnType, TimeoutStrategy,
     TripleBarrierConfig, TripleBarrierLabeler,
@@ -142,7 +143,7 @@ fn test_triple_barrier_asymmetric_risk_reward() {
     let config = TripleBarrierConfig::new(0.04, 0.02, 30); // 4% profit, 2% stop
 
     assert!(
-        (config.risk_reward_ratio() - 2.0).abs() < 1e-10,
+        (config.risk_reward_ratio() - 2.0).abs() < contract::FLOAT_CMP_EPS,
         "Risk/reward should be 2:1"
     );
 
@@ -230,7 +231,7 @@ fn test_triple_barrier_stats_accuracy() {
     // Class balance should sum to 1
     let (sl, to, pt) = stats.class_balance();
     assert!(
-        (sl + to + pt - 1.0).abs() < 1e-10,
+        (sl + to + pt - 1.0).abs() < contract::FLOAT_CMP_EPS,
         "Class balance should sum to 1.0"
     );
 
@@ -425,7 +426,7 @@ fn test_triple_barrier_vs_magnitude_consistency() {
         // If triple barrier timed out at max_horizon, the return should match
         if *tb_label == BarrierLabel::Timeout && *tb_exit_time == 20 {
             assert!(
-                (tb_return - mag_data.point_return).abs() < 1e-10,
+                (tb_return - mag_data.point_return).abs() < contract::FLOAT_CMP_EPS,
                 "Timeout return should match point return. TB: {}, Mag: {}",
                 tb_return,
                 mag_data.point_return

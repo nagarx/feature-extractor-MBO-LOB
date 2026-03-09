@@ -41,7 +41,7 @@ High-performance feature extraction library for Limit Order Book (LOB) and Marke
 mbo-lob-reconstructor = { git = "https://github.com/..." }  # LOB reconstruction
 ndarray = "0.15"           # NumPy-like arrays
 ndarray-npy = "0.8"        # NumPy file export
-ahash = "0.8"              # Fast hashing for order tracking
+# Order tracking uses std::collections::BTreeMap (deterministic iteration order)
 serde = "1.0"              # Serialization
 toml = "0.8"               # Config files
 chrono = "0.4"             # Timestamps
@@ -2263,24 +2263,83 @@ pub fn process<P: AsRef<Path>>(&mut self, path: P) -> Result<PipelineOutput> {
 
 ## 15. Testing Patterns
 
-### Test Infrastructure
+### Build Profile: `[profile.test]`
 
-#### Centralized Test Helpers (`tests/common/mod.rs`)
+All tests compile with `opt-level = 2` (configured in `Cargo.toml`). This provides 5-10x
+speedup over the default `opt-level = 0` with zero accuracy impact: IEEE 754 f64 operations
+are deterministic at all optimization levels for sequential, non-SIMD code. The compiler
+does not reorder floating-point operations at `opt-level = 2`.
 
-All integration tests import shared constants and helpers:
+### 4-Level Validation Pyramid
 
-```rust
-pub const HOT_STORE_DIR: &str = "...";    // Hot store decompressed MBO files
-pub const COMPRESSED_DIR: &str = "...";    // Compressed .dbn.zst files
-pub const MBP10_DIR: &str = "...";         // MBP-10 files
+All core validation targets **one canonical day** (Feb 3, 2025 NVIDIA MBO data)
+processed **deeply** rather than many days processed shallowly.
+Core CI tests complete in ~3-5 minutes. Extended multi-day tests are feature-gated.
 
-pub fn find_mbo_file(date: &str) -> Option<PathBuf>;  // Finds MBO file for YYYYMMDD
-pub fn has_test_data() -> bool;                         // Checks data directory exists
-
-macro_rules! skip_if_no_data { ... }  // Gracefully skips tests when data unavailable
+```
+                    ┌─────────────────┐
+                    │  Level 4: Export │  tests/export_roundtrip.rs
+                    │  Round-Trip      │  3 tests, synthetic data, ~1s
+                    ├─────────────────┤
+                 ┌──┤  Level 3: Full  │  tests/phase3_real_data_validation.rs
+                 │  │  Day Stats      │  6 tests, 1 canonical day, ~60-90s
+                 │  ├─────────────────┤
+              ┌──┤  │  Level 2: Golden│  tests/golden_snapshot.rs
+              │  │  │  Snapshot 500   │  500 vectors, per-group checksums, ~15-30s
+              │  │  ├─────────────────┤
+           ┌──┤  │  │  Level 1: Per-  │  tests/transformation_tracing.rs
+           │  │  │  │  Formula Tracing│  6 tests, first 50K events, ~10s
+           │  │  │  └─────────────────┘
+           └──┴──┴──
 ```
 
-#### Unit Tests (729 tests, `cargo test --lib`)
+### Runtime Budget
+
+| Tier | Tests | Runtime | When |
+|------|-------|---------|------|
+| Unit tests (~730) | `cargo test --lib` | ~30s | Always |
+| Synthetic integration (~180) | No features needed | ~60s | Always |
+| Level 1: Transformation Tracing (50K events) | `skip_if_no_data!()` | ~10s | CI + local |
+| Level 2: Golden Snapshot (full day) | `skip_if_no_data!()` | ~15-30s | CI + local |
+| Level 3: Full-Day Stats (1 day) | `skip_if_no_data!()` | ~60-90s | CI + local |
+| Level 4: Export Round-Trip (synthetic) | Always | ~1s | Always |
+| **Default `cargo test`** | | **~3-5 min** | **CI** |
+| Extended validation (~30 tests) | `--features extended_validation --release` | ~30-60 min | On-demand |
+
+### CI Configuration
+
+CI uses `cargo test --features "parallel,databento"` (not `--all-features`). This explicitly
+excludes `extended_validation` to keep CI under 10 minutes. The same applies to Clippy and
+doc checks. Extended validation is run on-demand locally with `--features extended_validation`.
+
+### Test Infrastructure
+
+#### Centralized Test Helpers (`tests/common/`)
+
+| File | Purpose |
+|------|---------|
+| `mod.rs` | `HOT_STORE_DIR`, `COMPRESSED_DIR`, `MBP10_DIR`, `find_mbo_file()`, `has_test_data()`, `skip_if_no_data!()` |
+| `assertions.rs` | `assert_f64_eq`, `assert_f64_approx` (uses `contract::FLOAT_CMP_EPS`), `assert_features_finite`, `assert_feature_layout`, `assert_signal_basics`, `compare_vectors`, `assert_feature_has_variance`, `pearson_correlation` |
+| `fixtures.rs` | `load_or_generate_fixture<T, F>(path, generator)`, `fixture_path(filename)` for JSON golden data |
+
+#### Data Availability: `skip_if_no_data!()`
+
+**All** real-data integration tests must use the `skip_if_no_data!()` macro (from `tests/common/mod.rs`)
+as the first statement in every test function. This ensures consistent behavior: tests skip
+gracefully in CI (no data) and run locally (with data). No ad-hoc `test_data_available()`,
+`data_available()`, or inline `Path::new().exists()` checks.
+
+```rust
+mod common;
+
+#[test]
+fn test_example() {
+    skip_if_no_data!();
+    // ... test logic using real data
+}
+```
+
+#### Unit Tests (~730 tests, `cargo test --lib`)
 
 Each module contains `#[cfg(test)] mod tests` with:
 - Formula validation against hand-calculated expected values
@@ -2290,46 +2349,106 @@ Each module contains `#[cfg(test)] mod tests` with:
 
 #### Contract Validation (`tests/contract_validation_test.rs`)
 
-11 assertions verifying `src/contract.rs` constants match `contracts/pipeline_contract.toml`:
-- `SCHEMA_VERSION`, `STABLE_FEATURE_COUNT`, `SIGNAL_COUNT`
-- `CATEGORICAL_INDICES`, `LOB_LEVELS`
-- Feature group boundaries (LOB, derived, MBO, signal ranges)
+Exhaustive, data-driven validation of `src/contract.rs` constants against `contracts/pipeline_contract.toml`:
+- All 116 feature indices (LOB, derived, MBO, signal, experimental) validated for uniqueness and correct range
+- `SCHEMA_VERSION`, `STABLE_FEATURE_COUNT`, `FULL_FEATURE_COUNT`, `SIGNAL_COUNT`, `LOB_LEVELS`
+- `CATEGORICAL_INDICES` validated against TOML normalization rules
+- Label encoding contracts (TLOB, TripleBarrier, Opportunity): strategies, values, class names
+- Normalization rules: categorical/non-normalizable feature identification
+- TOML structural fingerprint test to detect schema drift
 
-#### Real-Data Validation (`tests/phase3_real_data_validation.rs`)
+### Level 1: Transformation Tracing (`tests/transformation_tracing.rs`)
 
-6 tests running against real NVIDIA MBO data (requires `data/` directory):
+Processes the **first 50,000 events** from Feb 3 through each pipeline stage independently,
+verifying per-formula correctness at 7 checkpoints (100, 500, 1K, 5K, 10K, 25K, 50K).
+
+50K events covers ~0.5-1% of a typical NVDA day -- sufficient for all 98 feature formulas
+to be exercised multiple times, OFI to reach warm state, MBO windows to accumulate meaningful
+rolling statistics, and order flow features to show variance.
 
 | Test | What it validates |
 |------|-------------------|
-| `test_determinism_full_pipeline` | Two runs of the same day produce identical output (excluding known non-deterministic features) |
-| `test_feature_layout_validation` | Feature vector width matches `STABLE_FEATURE_COUNT`, all values finite |
-| `test_cross_day_state_isolation` | Processing day A then B gives same result for B as processing B alone |
-| `test_signal_spot_check` | Signal features have correct sign conventions and reasonable ranges |
-| `test_mbo_feature_statistics` | MBO features show non-trivial variance (excludes config-dependent zero features) |
-| `test_export_end_to_end` | Full export pipeline: .npy shapes, metadata JSON, no NaN/Inf, valid label ranges |
+| `test_lob_reconstruction_at_checkpoints` | LOB state (prices, sizes, bid/ask ordering) at event checkpoints |
+| `test_raw_lob_feature_extraction` | Raw LOB features match `LobState` values exactly |
+| `test_derived_feature_formulas` | Derived features (mid_price, spread, VWAP, imbalance) match explicit formulas |
+| `test_mbo_feature_spot_check` | MBO features: count, finiteness, rate bounds |
+| `test_signal_computation_verification` | Signal values: `book_valid`, `time_regime`, `schema_version` |
+| `test_full_98_feature_composition` | Correct composition of all feature groups into 98-element vector |
 
-#### Golden Snapshot Regression (`tests/golden_snapshot.rs`)
+### Level 2: Golden Snapshot (`tests/golden_snapshot.rs`)
 
-- Fixture: `tests/fixtures/golden_feb3_100.json` (100 post-warmup feature vectors from Feb 3, 2025)
-- First run: generates fixture from live pipeline output
-- Subsequent runs: compares new output against fixture with tolerances
-- Deterministic features: `ABS_TOL = 1e-10`
-- Non-deterministic features (indices 70, 78-81, 83): `REL_TOL = 0.01` with warnings
+- Fixture: `tests/fixtures/golden_feb3_500.json` (500 post-warmup feature vectors)
+- Per-feature-group checksums: `LOB_RANGE 0..40`, `DERIVED_RANGE 40..48`, `MBO_RANGE 48..84`, `SIGNAL_RANGE 84..98`
+- First run: generates fixture with checksums from live output
+- Subsequent runs: compares group checksums first (fast), then per-value assertions
+- All 98 features are deterministic (BTreeMap ensures reproducible MBO iteration order)
+- Tolerance: `contract::FLOAT_CMP_EPS` (1e-10) for all features — zero mismatches expected
+
+### Level 3: Full-Day Statistical Invariants (`tests/phase3_real_data_validation.rs`)
+
+6 tests on 1 canonical day (Feb 3 2025), NVIDIA-specific statistical properties:
+
+| Test | What it validates |
+|------|-------------------|
+| `test_determinism_full_pipeline` | Two runs produce bit-identical output across all 98 features (tolerance: `contract::FLOAT_CMP_EPS`) |
+| `test_nvidia_statistical_invariants` | Mean mid_price in [50, 250], mean spread in (0.001, 0.10), zero NaN/Inf, OFI two-sided, time_regime >= 2 distinct values, book_valid > 95%, all non-constant features have variance > 0 |
+| `test_cross_day_state_isolation` | Processing day A + reset + day B == fresh pipeline on day B |
+| `test_signal_spot_check` | OFI and executed_pressure have both positive and negative values |
+| `test_mbo_feature_statistics` | MBO features: no NaN/Inf, non-zero variance (excluding known-zero indices 68,69,76,77), cancel rates in [0,1], trade rates >= 0 |
+| `test_export_end_to_end` | Full .npy export: shapes, metadata JSON, no NaN/Inf, valid labels, schema_version matches contract |
+
+### Level 4: Export Round-Trip (`tests/export_roundtrip.rs`)
+
+3 tests using synthetic data (always runs in CI, no data dependency):
+
+| Test | What it validates |
+|------|-------------------|
+| `test_export_numerical_fidelity` | f64 → f32 → .npy → f32 round-trip: max relative error < 1e-5 across 1.96M values |
+| `test_multi_horizon_label_shapes` | DeepLOB multi-horizon: labels shape (N, 4), values in {-1, 0, 1}, metadata documents horizons |
+| `test_raw_export_no_normalization` | Raw export: prices remain in dollar scale (~130), not z-scored to ~0 |
+
+### Extended Validation (Feature-Gated)
+
+Long-running multi-day tests are behind `#[cfg(feature = "extended_validation")]`.
+These process full days (sometimes 3-21 days) and are **not** part of CI.
+
+| Test file | Feature gate | Purpose |
+|-----------|--------------|---------|
+| `signal_layer_comprehensive_validation.rs` | `parallel` + `extended_validation` | OFI bounds, signal correlations, time regime correctness |
+| `signal_layer_integration.rs` | `parallel` + `extended_validation` | 98-feature signal layer with batch processing |
+| `sign_convention_validation.rs` | `parallel` + `extended_validation` | Sign convention checks across full day |
+| `comprehensive_validation.rs` | `extended_validation` | Feature quality across many snapshots |
+| `pipeline_refactoring_tests.rs` | *(none — uses `skip_if_no_data!()`)* | Pipeline correctness after refactoring (runs in default CI if data present) |
+| `real_data_validation.rs` | `extended_validation` | MBO reconstruction accuracy across many days |
+| `fair_validation_with_warnings.rs` | `extended_validation` | MBO vs MBP-10 comparison with warning statistics |
+| `granular_mbo_mbp_validation.rs` | `extended_validation` | Level-by-level price/size comparison |
+| `real_nvidia_validation.rs` | `extended_validation` | Numerical stability, state isolation, memory stability |
+| `mbo_features_real_data_validation.rs` | `extended_validation` | MBO feature validation across multiple days |
+| `outlier_investigation.rs` | `extended_validation` | Deep investigation of large price errors |
 
 ### Running Tests
 
 ```bash
-# Unit tests only (no data required)
-cargo test --lib --features "parallel,databento"
+# Unit tests only (no data required, ~30s)
+cargo test --lib
 
-# All tests including integration (requires data/)
-cargo test --features "parallel,databento" -- --test-threads=4
+# Full CI suite (Levels 1-4 + unit + contract + parallel, ~3-5 min)
+cargo test --features "parallel,databento"
 
-# Specific integration test
-cargo test --test phase3_real_data_validation --features "parallel,databento"
+# Level 1: Transformation tracing (50K events, ~10s)
+cargo test --features "parallel,databento" --test transformation_tracing
 
-# Golden snapshot regression
-cargo test --test golden_snapshot --features "parallel,databento"
+# Level 2: Golden snapshot
+cargo test --features "parallel,databento" --test golden_snapshot
+
+# Level 4: Export round-trip (no data required, ~1s)
+cargo test --test export_roundtrip
+
+# Extended validation (requires data/, on-demand only)
+cargo test --features "parallel,databento,extended_validation" --release -- --test-threads=2
+
+# Specific extended test
+cargo test --test real_data_validation --features "extended_validation" --release
 ```
 
 ---
@@ -2665,26 +2784,13 @@ into `export_dataset`. Use the Rust API directly.
 
 **Tracking**: See roadmap in [docs/LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md#roadmap).
 
-### 8. OrderTracker HashMap Non-Determinism
+### 8. OrderTracker Determinism (Resolved)
 
-**Root cause**: `OrderTracker` in `src/features/mbo_features/order_tracker.rs` uses `HashMap<u64, OrderInfo>` with Rust's default `RandomState` hasher. The hasher seed is randomized per process, causing iteration order to vary across runs. Features that aggregate over `HashMap` values (sums, means, counts) produce different results due to floating-point non-associativity.
+**Previous issue**: `OrderTracker` in `src/features/mbo_features/order_tracker.rs` previously used `HashMap<u64, OrderInfo>` with Rust's default `RandomState` hasher. The randomized seed caused iteration order to vary across runs, producing different aggregation results due to floating-point non-associativity.
 
-**Affected feature indices** (MBO block, offsets from MBO base index 48):
+**Resolution**: Replaced `HashMap` with `BTreeMap<u64, OrderInfo>`, which guarantees deterministic iteration order (ascending by `order_id`). All 98 stable features are now fully deterministic across runs. The `ahash` dependency was also removed.
 
-| Index | Feature | Why non-deterministic |
-|-------|---------|----------------------|
-| 70 | `orders_per_level` | Aggregation over HashMap values |
-| 78 | `avg_order_age` | Mean computed over HashMap iteration |
-| 79 | `median_order_lifetime` | Order of collection from HashMap |
-| 80 | `avg_fill_ratio` | Mean over HashMap values |
-| 81 | `avg_time_to_first_fill` | Mean over HashMap values |
-| 83 | `active_order_count` | Count derived from HashMap state |
-
-**Impact**: Different f64 values across runs for the same input data. Differences are small (typically < 1e-6 relative) but fail strict bitwise equality.
-
-**Current workaround**: Tests in `phase3_real_data_validation.rs` and `golden_snapshot.rs` use a `KNOWN_NONDETERMINISTIC` array to exclude these indices from strict equality, applying relaxed tolerance (`REL_TOL = 0.01`) with logged warnings instead.
-
-**Fix plan**: Replace `HashMap<u64, OrderInfo>` with `BTreeMap<u64, OrderInfo>` (deterministic iteration order) or switch to `FxHashMap` with a fixed seed. This requires verifying no performance regression in the hot path, as `OrderTracker` processes every MBO event.
+**Verification**: Golden snapshot and determinism tests enforce bit-exact matching at `contract::FLOAT_CMP_EPS` (1e-10) tolerance across all features. The `KNOWN_NONDETERMINISTIC` workaround and `NONDETERMINISTIC_REL_TOL` have been removed.
 
 ---
 

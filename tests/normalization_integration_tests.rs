@@ -7,6 +7,7 @@
 //! 4. Different presets (TLOB, DeepLOB, LOBench) produce expected outputs
 //! 5. Metadata includes normalization configuration
 
+use feature_extractor::contract;
 use feature_extractor::export::config::{FeatureNormStrategy, NormalizationConfig};
 use feature_extractor::prelude::*;
 use std::sync::Arc;
@@ -461,7 +462,7 @@ bilinear_scale_factor = 100.0
     assert_eq!(config.mbo, FeatureNormStrategy::PercentageChange);
     assert_eq!(config.signals, FeatureNormStrategy::None);
     assert_eq!(config.reference_price, "first_ask");
-    assert!((config.bilinear_scale_factor - 100.0).abs() < 1e-10);
+    assert!((config.bilinear_scale_factor - 100.0).abs() < contract::FLOAT_CMP_EPS);
 }
 
 #[test]
@@ -566,7 +567,7 @@ fn test_export_with_raw_normalization_preserves_values() {
         let current_ts = &output.sequences[0].features[t];
         for (f, &original_val) in original_ts.iter().enumerate() {
             assert!(
-                (current_ts[f] - original_val).abs() < 1e-10,
+                (current_ts[f] - original_val).abs() < contract::FLOAT_CMP_EPS,
                 "Feature value should not change: seq[0][{}][{}] was {} now {}",
                 t,
                 f,
@@ -634,12 +635,12 @@ fn test_zscore_normalization_statistical_properties() {
     let norm_std = norm_variance.sqrt();
 
     assert!(
-        norm_mean.abs() < 1e-10,
+        norm_mean.abs() < contract::FLOAT_CMP_EPS,
         "Normalized mean should be ≈ 0, got {}",
         norm_mean
     );
     assert!(
-        (norm_std - 1.0).abs() < 1e-10,
+        (norm_std - 1.0).abs() < contract::FLOAT_CMP_EPS,
         "Normalized std should be ≈ 1, got {}",
         norm_std
     );
@@ -697,7 +698,7 @@ fn test_percentage_change_normalization() {
     let expected = vec![0.01, -0.01, 0.005, -0.015, 0.02];
     for (i, (&norm, &exp)) in normalized.iter().zip(expected.iter()).enumerate() {
         assert!(
-            (norm - exp).abs() < 1e-10,
+            (norm - exp).abs() < contract::FLOAT_CMP_EPS,
             "Percentage change at {} should be {}, got {}",
             i,
             exp,

@@ -448,10 +448,14 @@ impl AlignedBatchExporter {
         // Step 4: Normalize sequences
         let (aligned_sequences, norm_params) = self.normalize_sequences(&aligned_sequences)?;
 
-        // Step 5: Compute shape
+        // Step 5: Validate data integrity AFTER normalization, BEFORE write
+        let nan_inf_report = self.scan_for_nan_inf(&aligned_sequences)?;
+
+        // Step 6: Compute shape and validate feature count against contract
         let seq_shape = if !aligned_sequences.is_empty() {
             let window = aligned_sequences[0].len();
             let features = aligned_sequences[0][0].len();
+            self.validate_feature_count(features)?;
             (window, features)
         } else {
             return Err(std::io::Error::new(
@@ -461,11 +465,11 @@ impl AlignedBatchExporter {
             .into());
         };
 
-        // Step 6: Export sequences NPY
+        // Step 7: Export sequences NPY
         let sequences_path = self.output_dir.join(format!("{day_name}_sequences.npy"));
         self.export_sequences_with_format(&aligned_sequences, seq_shape, &sequences_path)?;
 
-        // Step 7: Export labels NPY
+        // Step 8: Export labels NPY
         let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
         if labeling.is_multi_horizon {
             self.export_multi_horizon_labels(&aligned_label_matrix, &labels_path)?;
@@ -474,13 +478,13 @@ impl AlignedBatchExporter {
             self.export_labels(&single_labels, &labels_path)?;
         }
 
-        // Step 8: Export normalization params
+        // Step 9: Export normalization params
         norm_params.save_json(
             self.output_dir
                 .join(format!("{day_name}_normalization.json")),
         )?;
 
-        // Step 9: Build and export metadata
+        // Step 10: Build and export metadata
         let tensor_format_str = self.tensor_format.as_ref().map(|f| format!("{:?}", f));
         let config_hash_str = self.config_hash.as_deref().unwrap_or("unknown");
 
@@ -501,7 +505,8 @@ impl AlignedBatchExporter {
             "validation": {
                 "sequences_labels_match": aligned_sequences.len() == aligned_label_matrix.len(),
                 "label_range_valid": true,
-                "no_nan_inf": true,
+                "no_nan_inf": nan_inf_report.is_clean,
+                "values_scanned": nan_inf_report.total_values_scanned,
             },
             "processing": build_processing_metadata(
                 output.messages_processed,
@@ -517,7 +522,7 @@ impl AlignedBatchExporter {
         serde_json::to_writer_pretty(&mut file, &metadata)
             .map_err(|e| std::io::Error::other(format!("Failed to write metadata: {e}")))?;
 
-        // Step 10: Export horizons config if present
+        // Step 11: Export horizons config if present
         if let Some(horizons_config) = &labeling.horizons_config {
             let horizons_path = self.output_dir.join(format!("{day_name}_horizons.json"));
             let horizons_file = File::create(&horizons_path)?;
