@@ -185,7 +185,7 @@ fn run_pipeline_test(dbn_path: &Path) -> Result<PipelineStats, Box<dyn std::erro
         tick_size: 0.01,
         include_derived: true,
         include_mbo: false,
-        mbo_window_size: 1000,
+        ..Default::default() // Use defaults for remaining fields
     };
     let feature_extractor = FeatureExtractor::with_config(feature_config);
     println!("  ✓ Feature Extractor initialized (48 LOB features)");

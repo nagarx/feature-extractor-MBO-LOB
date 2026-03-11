@@ -93,7 +93,31 @@ use std::sync::Arc;
 /// Output from pipeline processing
 #[derive(Debug, Clone)]
 pub struct PipelineOutput {
-    /// Generated sequences [N_sequences, window_size, features]
+    /// Generated sequences [N_sequences, window_size, features].
+    ///
+    /// # Multiscale Mode Behavior
+    ///
+    /// When multiscale windowing is enabled via `PipelineBuilder::with_multiscale()`,
+    /// this field is **empty** (`Vec::new()`). All sequences are stored in
+    /// [`multiscale_sequences`](Self::multiscale_sequences) instead.
+    ///
+    /// To access sequences in multiscale mode:
+    ///
+    /// ```ignore
+    /// if let Some(ref ms) = output.multiscale_sequences {
+    ///     let fast = ms.fast();    // Fast-scale sequences (full resolution)
+    ///     let medium = ms.medium(); // Medium-scale sequences (2x decimation)
+    ///     let slow = ms.slow();    // Slow-scale sequences (4x decimation)
+    /// } else {
+    ///     // Standard mode: use output.sequences directly
+    ///     for seq in &output.sequences { /* ... */ }
+    /// }
+    /// ```
+    ///
+    /// # Standard Mode
+    ///
+    /// When multiscale is disabled (default), this field contains all generated
+    /// sequences with the configured window size and stride.
     pub sequences: Vec<Sequence>,
 
     /// Mid-prices extracted (for labeling)
@@ -117,7 +141,18 @@ pub struct PipelineOutput {
     /// Window size used for sequence generation (from SequenceConfig)
     pub window_size: usize,
 
-    /// Phase 1: Multi-scale sequences (if enabled)
+    /// Multi-scale sequences at three temporal resolutions.
+    ///
+    /// When multiscale windowing is enabled via `PipelineBuilder::with_multiscale()`,
+    /// this field contains `Some(MultiScaleSequence)` with:
+    /// - **Fast**: Full resolution (every sample)
+    /// - **Medium**: 2x decimation (every 2nd sample)
+    /// - **Slow**: 4x decimation (every 4th sample)
+    ///
+    /// When multiscale is disabled (default), this field is `None` and all
+    /// sequences are in [`sequences`](Self::sequences) instead.
+    ///
+    /// See [`sequences`](Self::sequences) documentation for usage examples.
     pub multiscale_sequences: Option<MultiScaleSequence>,
 
     /// Phase 1: Adaptive sampling statistics (if enabled)
@@ -147,8 +182,32 @@ impl PipelineOutput {
     /// Get features as flat 2D array for export
     /// Returns [N_samples, N_features] where N_samples = sum of all sequence lengths
     ///
-    /// Note: This creates deep copies of the feature vectors. For performance-critical
-    /// code, consider working with the `Arc<Vec<f64>>` references in seq.features directly.
+    /// # ⚠️ DEPRECATED - DO NOT USE FOR LABELED EXPORTS
+    ///
+    /// This method exports EVERY sample from EVERY overlapping sequence, causing:
+    /// - **10x data inflation**: Each raw sample appears ~10 times (stride=10, window=100)
+    /// - **Label misalignment**: Labels are for raw samples, not flattened sequence samples
+    /// - **Broken training**: Models trained on this data will not generalize
+    ///
+    /// ## Use Instead
+    ///
+    /// For labeled exports with correct 1:1 alignment, use `AlignedBatchExporter`:
+    /// ```ignore
+    /// use feature_extractor::AlignedBatchExporter;
+    /// let exporter = AlignedBatchExporter::new(output_dir, label_config, window_size, stride);
+    /// exporter.export_day("2025-02-03", &pipeline_output)?;
+    /// ```
+    ///
+    /// ## Valid Use Cases
+    ///
+    /// This method is only valid for:
+    /// - Raw feature visualization (no labels)
+    /// - Debugging/inspection
+    /// - Legacy compatibility (not recommended)
+    #[deprecated(
+        since = "0.9.0",
+        note = "Use AlignedBatchExporter for labeled exports. See method docs for details."
+    )]
     pub fn to_flat_features(&self) -> Vec<Vec<f64>> {
         let mut flat = Vec::new();
         for seq in &self.sequences {
@@ -340,6 +399,10 @@ pub struct Pipeline {
 
     // Phase 1: Multi-scale windowing (opt-in)
     multiscale_window: Option<MultiScaleWindow>,
+
+    // Trading signals (opt-in via with_trading_signals)
+    // Computes OFI and derived signals per Cont et al. (2014)
+    ofi_computer: Option<crate::features::signals::OfiComputer>,
 }
 
 impl Pipeline {
@@ -384,9 +447,9 @@ impl Pipeline {
         let multiscale_window = if let Some(ref sampling) = config.sampling {
             if let Some(ref ms_config) = sampling.multiscale {
                 if ms_config.enabled {
-                    use crate::sequence_builder::{MultiScaleConfig as MSConfig, ScaleConfig};
+                    use crate::sequence_builder::{MultiScaleConfig, ScaleConfig};
 
-                    let ms_config_internal = MSConfig::new(
+                    let ms_config_internal = MultiScaleConfig::new(
                         ScaleConfig::new(ms_config.fast_window, 1, 1),
                         ScaleConfig::new(ms_config.medium_window, ms_config.medium_decimation, 1),
                         ScaleConfig::new(ms_config.slow_window, ms_config.slow_decimation, 1),
@@ -406,12 +469,20 @@ impl Pipeline {
             None
         };
 
+        // Initialize OFI computer if trading signals are enabled
+        let ofi_computer = if config.features.include_signals {
+            Some(crate::features::signals::OfiComputer::new())
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             feature_extractor,
             sequence_builder,
             adaptive_threshold,
             multiscale_window,
+            ofi_computer,
         })
     }
 
@@ -527,6 +598,10 @@ impl Pipeline {
         let mut mid_prices = Vec::new();
         let mut accumulated_sequences: Vec<Sequence> = Vec::new();
 
+        // Trading signals: invalidity tracking
+        let mut last_crossed_count: u64 = 0;
+        let mut last_locked_count: u64 = 0;
+
         // Process messages
         for msg in messages {
             messages_processed += 1;
@@ -538,6 +613,14 @@ impl Pipeline {
 
             // ✅ PERF: Update LOB and fill pre-allocated state (zero-allocation)
             lob.process_message_into(&msg, &mut lob_state)?;
+
+            // ========================================================================
+            // Trading Signals: Update OFI on EVERY LOB state transition
+            // Per Cont et al. (2014): "OFI is accumulated on every event"
+            // ========================================================================
+            if let Some(ref mut ofi) = self.ofi_computer {
+                ofi.update(&lob_state);
+            }
 
             // Process MBO event for MBO feature aggregation
             if self.feature_extractor.has_mbo() {
@@ -581,6 +664,58 @@ impl Pipeline {
 
                 self.feature_extractor
                     .extract_into(&lob_state, &mut feature_buffer)?;
+
+                // ========================================================================
+                // Trading Signals: Sample OFI and compute 14 derived signals
+                // ========================================================================
+                if let Some(ref mut ofi) = self.ofi_computer {
+                    use crate::features::signals::{
+                        compute_signals_with_book_valid, is_book_valid_from_lob,
+                    };
+
+                    let timestamp_ns = msg.timestamp.unwrap_or(0);
+
+                    // Sample OFI and reset accumulators
+                    let ofi_sample = ofi.sample_and_reset(timestamp_ns);
+
+                    // Compute invalidity delta (crossed/locked events since last sample)
+                    let stats = lob.stats();
+                    let current_crossed = stats.crossed_quotes;
+                    let current_locked = stats.locked_quotes;
+                    let invalidity_delta = (current_crossed.saturating_sub(last_crossed_count)
+                        as u32)
+                        + (current_locked.saturating_sub(last_locked_count) as u32);
+                    last_crossed_count = current_crossed;
+                    last_locked_count = current_locked;
+
+                    // Check book validity from LOB state
+                    let book_valid = is_book_valid_from_lob(&lob_state);
+
+                    // Compute all 14 signals
+                    let signals = compute_signals_with_book_valid(
+                        &feature_buffer,
+                        &ofi_sample,
+                        timestamp_ns,
+                        invalidity_delta,
+                        book_valid,
+                    );
+
+                    // Append signals to feature buffer
+                    feature_buffer.extend(signals.to_vec());
+                }
+
+                // Extract experimental features if enabled (indices 98-115)
+                // Must be called AFTER signals (index 84-97) to maintain correct order
+                if self.feature_extractor.has_experimental() {
+                    // Update price for volatility features
+                    if let Some(mid) = lob_state.mid_price() {
+                        self.feature_extractor.update_experimental_price(mid, ts);
+                    }
+                    // Extract and append experimental features
+                    self.feature_extractor
+                        .extract_experimental_into(ts, &mut feature_buffer);
+                }
+
                 features_extracted += 1;
 
                 let features: FeatureVec = Arc::new(std::mem::take(&mut feature_buffer));
@@ -643,6 +778,14 @@ impl Pipeline {
     }
 
     /// Process and return flat features (for direct export)
+    ///
+    /// **Deprecated**: This method uses `to_flat_features()` which causes data inflation.
+    /// Use `process()` followed by `AlignedBatchExporter` for correct alignment.
+    #[deprecated(
+        since = "0.9.0",
+        note = "Use process() with AlignedBatchExporter for correct feature-label alignment."
+    )]
+    #[allow(deprecated)] // Intentionally uses deprecated to_flat_features
     pub fn process_flat<P: AsRef<Path>>(
         &mut self,
         input_path: P,
@@ -689,6 +832,11 @@ impl Pipeline {
         // Phase 1: Reset multi-scale window
         if let Some(ref mut ms_window) = self.multiscale_window {
             ms_window.reset();
+        }
+
+        // Reset OFI computer (trading signals)
+        if let Some(ref mut ofi) = self.ofi_computer {
+            ofi.reset_on_clear();
         }
     }
 
@@ -737,4 +885,183 @@ impl Pipeline {
 enum SamplerType {
     Volume(VolumeBasedSampler),
     Event(EventBasedSampler),
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builder::PipelineBuilder;
+
+    #[test]
+    fn test_pipeline_without_signals() {
+        // Default pipeline should not have signals
+        let pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .build()
+            .expect("Failed to build pipeline");
+
+        assert!(
+            pipeline.ofi_computer.is_none(),
+            "OfiComputer should be None when signals disabled"
+        );
+        assert_eq!(pipeline.feature_extractor.feature_count(), 40); // Raw LOB only
+    }
+
+    #[test]
+    fn test_pipeline_with_derived_only() {
+        let pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_derived_features()
+            .build()
+            .expect("Failed to build pipeline");
+
+        assert!(
+            pipeline.ofi_computer.is_none(),
+            "OfiComputer should be None when signals disabled"
+        );
+        assert_eq!(pipeline.feature_extractor.feature_count(), 48); // 40 + 8 derived
+    }
+
+    #[test]
+    fn test_pipeline_with_mbo_only() {
+        let pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_mbo_features()
+            .build()
+            .expect("Failed to build pipeline");
+
+        assert!(
+            pipeline.ofi_computer.is_none(),
+            "OfiComputer should be None when signals disabled"
+        );
+        assert_eq!(pipeline.feature_extractor.feature_count(), 76); // 40 + 36 MBO
+    }
+
+    #[test]
+    fn test_pipeline_with_trading_signals() {
+        // This should enable derived + MBO + signals
+        let pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_trading_signals()
+            .build()
+            .expect("Failed to build pipeline");
+
+        assert!(
+            pipeline.ofi_computer.is_some(),
+            "OfiComputer should be initialized when signals enabled"
+        );
+        // 40 raw + 8 derived + 36 MBO + 14 signals = 98
+        assert_eq!(pipeline.feature_extractor.feature_count(), 98);
+    }
+
+    #[test]
+    fn test_feature_count_with_signals() {
+        use crate::features::FeatureConfig;
+
+        let config = FeatureConfig {
+            lob_levels: 10,
+            include_derived: true,
+            include_mbo: true,
+            include_signals: true,
+            ..Default::default()
+        };
+
+        // 40 + 8 + 36 + 14 = 98
+        assert_eq!(config.feature_count(), 98);
+    }
+
+    #[test]
+    fn test_signal_config_validation_requires_derived() {
+        use crate::features::FeatureConfig;
+
+        let config = FeatureConfig {
+            lob_levels: 10,
+            include_derived: false, // Missing!
+            include_mbo: true,
+            include_signals: true,
+            ..Default::default()
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("include_signals requires include_derived"));
+    }
+
+    #[test]
+    fn test_signal_config_validation_requires_mbo() {
+        use crate::features::FeatureConfig;
+
+        let config = FeatureConfig {
+            lob_levels: 10,
+            include_derived: true,
+            include_mbo: false, // Missing!
+            include_signals: true,
+            ..Default::default()
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("include_signals requires include_mbo"));
+    }
+
+    #[test]
+    fn test_pipeline_reset_clears_ofi() {
+        let mut pipeline = PipelineBuilder::new()
+            .lob_levels(10)
+            .with_trading_signals()
+            .build()
+            .expect("Failed to build pipeline");
+
+        // Verify OfiComputer exists
+        assert!(pipeline.ofi_computer.is_some());
+
+        // Get initial state change count
+        let initial_changes = pipeline
+            .ofi_computer
+            .as_ref()
+            .unwrap()
+            .state_changes_since_reset();
+        assert_eq!(initial_changes, 0);
+
+        // Manually update OFI to simulate processing
+        if let Some(ref mut ofi) = pipeline.ofi_computer {
+            let mut lob = LobState::new(10);
+            lob.best_bid = Some(100_000_000);
+            lob.best_ask = Some(100_010_000);
+            lob.bid_sizes[0] = 100;
+            lob.ask_sizes[0] = 100;
+            ofi.update(&lob);
+
+            // Change state
+            lob.bid_sizes[0] = 150;
+            ofi.update(&lob);
+        }
+
+        // Verify state changed
+        let after_update = pipeline
+            .ofi_computer
+            .as_ref()
+            .unwrap()
+            .state_changes_since_reset();
+        assert!(after_update > 0, "State changes should be tracked");
+
+        // Reset pipeline
+        pipeline.reset();
+
+        // Verify OFI was reset
+        let after_reset = pipeline
+            .ofi_computer
+            .as_ref()
+            .unwrap()
+            .state_changes_since_reset();
+        assert_eq!(after_reset, 0, "Reset should clear state changes");
+    }
 }

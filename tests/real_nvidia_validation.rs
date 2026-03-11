@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Comprehensive Real-World NVIDIA Data Validation
 //!
 //! This test suite validates the optimized pipeline against real NVIDIA MBO data.
@@ -15,15 +16,14 @@
 //! - Falls back to compressed files if hot store is unavailable
 //! - Use `decompress_to_hot_store` CLI to populate the hot store
 
+mod common;
+
 use feature_extractor::{Pipeline, PipelineConfig, SamplingConfig, SamplingStrategy};
 use mbo_lob_reconstructor::{DbnLoader, LobReconstructor, LobState};
 use std::path::Path;
 
-/// Hot store directory with pre-decompressed DBN files (preferred for speed)
-const HOT_STORE_DIR: &str = "../data/hot_store";
-
 /// Compressed data directory (fallback if hot store unavailable)
-const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-01_to_2025-09-30";
+const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
 
 /// Information about which data source is being used
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,7 +38,7 @@ enum DataSource {
 /// This allows tests to verify they're using optimized paths when available.
 fn get_test_files_with_source() -> (Vec<String>, DataSource) {
     // First, try hot store (decompressed files - much faster)
-    let hot_store_path = Path::new(HOT_STORE_DIR);
+    let hot_store_path = Path::new(common::HOT_STORE_DIR);
     if hot_store_path.exists() {
         let hot_files: Vec<String> = std::fs::read_dir(hot_store_path)
             .unwrap()
@@ -784,7 +784,7 @@ fn test_hot_store_vs_compressed_identical() {
     println!("   Verifying data integrity across data sources...\n");
 
     // Find a date that exists in BOTH hot store and compressed directory
-    let hot_store_path = Path::new(HOT_STORE_DIR);
+    let hot_store_path = Path::new(common::HOT_STORE_DIR);
     let compressed_path = Path::new(COMPRESSED_DIR);
 
     if !hot_store_path.exists() || !compressed_path.exists() {
@@ -830,7 +830,7 @@ fn test_hot_store_vs_compressed_identical() {
 
     // Use the first common date
     let test_date = common_dates[0];
-    let hot_file = format!("{}/xnas-itch-{}.mbo.dbn", HOT_STORE_DIR, test_date);
+    let hot_file = format!("{}/xnas-itch-{}.mbo.dbn", common::HOT_STORE_DIR, test_date);
     let compressed_file = format!("{}/xnas-itch-{}.mbo.dbn.zst", COMPRESSED_DIR, test_date);
 
     println!("   📅 Testing date: {}", test_date);

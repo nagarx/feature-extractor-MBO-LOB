@@ -408,8 +408,9 @@ fn find_closest_snapshot(
 #[test]
 fn test_mbo_vs_mbp10_single_day() {
     // Paths to data files - using July 1, 2025 as test day
-    let mbo_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250701.mbo.dbn.zst");
-    let mbp_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+    let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
         println!("Skipping test: data files not found");
@@ -537,7 +538,7 @@ fn test_mbo_vs_mbp10_single_day() {
 #[test]
 fn test_mbp10_data_quality() {
     // Quick sanity check on MBP-10 data
-    let mbp_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
+    let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbp_path.exists() {
         println!("Skipping test: MBP-10 data file not found");
@@ -626,7 +627,8 @@ fn test_mbp10_data_quality() {
 #[test]
 fn test_mbo_reconstruction_consistency() {
     // Test that our MBO reconstruction produces consistent results
-    let mbo_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250701.mbo.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
 
     if !mbo_path.exists() {
         println!("Skipping test: MBO data file not found");
@@ -726,7 +728,8 @@ fn test_mbo_reconstruction_consistency() {
 fn test_ofi_price_correlation() {
     use feature_extractor::features::order_flow::OrderFlowTracker;
 
-    let mbo_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250701.mbo.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
 
     if !mbo_path.exists() {
         println!("Skipping test: MBO data file not found");

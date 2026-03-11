@@ -1,0 +1,228 @@
+# NVDA Triple Barrier Configuration (Schema 2.4)
+#
+# This configuration exports data with Triple Barrier labels for training
+# models that directly model entry → hold → exit trading logic.
+#
+# RESEARCH REFERENCE:
+# ===================
+# López de Prado, M. (2018). "Advances in Financial Machine Learning", Chapter 3.
+# "The Triple Barrier Method"
+#
+# WHY TRIPLE BARRIER?
+# ===================
+# Unlike opportunity or TLOB labeling which ask "what is the price at horizon?",
+# Triple Barrier asks: "If I enter a trade now, what happens first?"
+#
+#   +1 = Hit profit target (winning trade)
+#   -1 = Hit stop-loss (losing trade)
+#    0 = Timeout (no clear outcome - DON'T TRADE)
+#
+# This directly models the trading decision: the Timeout (0) class explicitly
+# captures "unpredictable regimes" where the model should NOT recommend trading.
+#
+# KEY ADVANTAGES:
+# ===============
+# 1. Path-dependent: Considers entire price path, not just endpoint
+# 2. Risk/reward encoded: Asymmetric barriers capture actual risk management
+# 3. Natural "no trade" signal: Timeout class = don't enter this trade
+# 4. Directly actionable: Model output maps to trade/no-trade decision
+#
+# PREREQUISITE: Decompress all files to hot store first:
+#   cd MBO-LOB-reconstructor
+#   cargo run --release --bin decompress_to_hot_store -- \
+#       --input ../data/NVDA_2025-02-01_to_2025-09-30 \
+#       --output ../data/hot_store
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_triple_barrier.toml
+
+[experiment]
+name = "NVDA Triple Barrier v2.4"
+description = "Triple Barrier labeling for risk-managed trade signal detection"
+version = "2.4.0"
+tags = ["nvda", "98-features", "triple-barrier", "risk-managed", "selective-trading"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+# Paths relative to feature-extractor-MBO-LOB directory
+input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "../data/exports/nvda_triple_barrier"
+
+# Hot store for ~30% faster processing (REQUIRED for efficient processing)
+hot_store_dir = "../data/hot_store"
+
+[dates]
+# Full date range: Feb 3, 2025 to Sept 29, 2025
+# Weekends are automatically excluded (~165 trading days)
+start_date = "2025-02-03"
+end_date = "2025-09-29"
+
+# US market holidays to exclude (2025)
+exclude_dates = [
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+]
+
+[features]
+lob_levels = 10          # 10 levels × 4 = 40 base features
+include_derived = true   # +8 features
+include_mbo = true       # +36 MBO features
+include_signals = true   # +14 trading signals
+mbo_window_size = 1000   # Rolling statistics window
+
+[sampling]
+strategy = "event_based"
+event_count = 1000       # Sample every 1000 events
+
+[sequence]
+window_size = 100        # 100 snapshots per sequence
+stride = 10              # 90% overlap between sequences
+max_buffer_size = 50000  # Memory limit
+
+# =============================================================================
+# TRIPLE BARRIER LABELING
+# =============================================================================
+#
+# The Triple Barrier method places three barriers around each entry point:
+#
+#     Price
+#       ▲  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  Upper Barrier (Profit Target)
+#       │                            ↑ profit_target_pct (0.5%)
+#       │  ●─────────●───────────────●
+#       │  Entry    │                │  ← Price path
+#       │           │                │
+#       ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│  Lower Barrier (Stop-Loss)
+#                                    │     ↓ stop_loss_pct (0.3%)
+#                   │◄───────────────►│
+#                     max_horizon (100 events)
+#
+# Label is determined by WHICH BARRIER IS HIT FIRST:
+#   - Upper barrier hit first → ProfitTarget (+1) = WINNING TRADE
+#   - Lower barrier hit first → StopLoss (-1) = LOSING TRADE
+#   - Neither hit within max_horizon → Timeout (0) = NO CLEAR SIGNAL
+#
+
+[labels]
+# Labeling strategy: "triple_barrier" for path-dependent trade outcomes
+strategy = "triple_barrier"
+
+# =============================================================================
+# BARRIER CONFIGURATION
+# =============================================================================
+#
+# Risk/Reward Ratio Guidance:
+# | Profit | Stop  | R:R  | Breakeven Win Rate |
+# |--------|-------|------|--------------------|
+# | 0.5%   | 0.5%  | 1:1  | 50%               |
+# | 0.5%   | 0.3%  | 1.67 | 37.5%             |
+# | 0.6%   | 0.3%  | 2:1  | 33.3%             |
+# | 0.8%   | 0.4%  | 2:1  | 33.3%             |
+#
+# Starting configuration: 1.67:1 R:R (need ~38% win rate to break even)
+# This balances signal frequency with profitability requirements.
+
+# Profit target: percentage of entry price to classify as ProfitTarget
+# 0.005 = 0.5% = 50 basis points
+profit_target_pct = 0.005
+
+# Stop-loss: percentage of entry price to classify as StopLoss
+# 0.003 = 0.3% = 30 basis points
+stop_loss_pct = 0.003
+
+# Maximum holding period (vertical barrier)
+# If neither barrier is hit within this many events, label as Timeout
+#
+# With event_count=1000 sampling:
+#   - 100 events ≈ 10-50 seconds of active trading
+#   - 200 events ≈ 20-100 seconds of active trading
+#
+# Multiple horizons for experimentation:
+max_horizons = [50, 100, 200]
+
+# Timeout strategy: how to handle cases where no barrier is hit
+#
+# Options:
+#   - "label_as_timeout": Always label as 0 (recommended, standard Triple Barrier)
+#   - "use_return_sign": Label based on final return sign (no Timeout class)
+#   - "use_fractional_threshold": Use 50% of barrier as partial threshold
+#
+# "label_as_timeout" is recommended because:
+#   - Creates explicit "don't trade" signal
+#   - Model learns to recognize unpredictable regimes
+#   - Aligns with "trade only when confident" objective
+timeout_strategy = "label_as_timeout"
+
+# Optional: minimum holding period before barriers apply
+# Useful for filtering immediate noise spikes
+# Uncomment to enable:
+# min_holding_period = 5
+
+[split]
+# Temporal split: first 70% train, next 15% val, last 15% test
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+# Parallel processing - let Rayon auto-detect optimal thread count
+error_mode = "collect_errors"  # Continue on errors, report at end
+verbose = true  # Show progress for each day processed
+
+# =============================================================================
+# EXPECTED OUTPUTS
+# =============================================================================
+#
+# This configuration will generate:
+#
+# 1. sequences.npy     - Shape: [N_sequences, 100, 98] - LOB features
+# 2. labels.npy        - Shape: [N_sequences, 3] - Multi-horizon labels
+# 3. timestamps.npy    - Shape: [N_sequences] - Nanosecond timestamps
+# 4. mid_prices.npy    - Shape: [N_sequences] - Mid prices for backtesting
+# 5. metadata.json     - Configuration and statistics
+#
+# Labels are encoded as class indices (matching PyTorch CrossEntropyLoss):
+#   0 = StopLoss (price hit lower barrier first)
+#   1 = Timeout (neither barrier hit within max_horizon)
+#   2 = ProfitTarget (price hit upper barrier first)
+#
+# =============================================================================
+# TRAINING RECOMMENDATIONS
+# =============================================================================
+#
+# 1. LOSS FUNCTION:
+#    Use standard CrossEntropyLoss (no weighting initially).
+#    Triple Barrier naturally creates meaningful class distribution.
+#    If imbalanced, try FocalLoss with gamma=2.0.
+#
+# 2. KEY METRICS:
+#    - Win Rate: ProfitTarget / (ProfitTarget + StopLoss) - exclude Timeout
+#    - Decisive Rate: (ProfitTarget + StopLoss) / Total - higher is better
+#    - Per-class precision/recall for each barrier type
+#
+# 3. TRADING DECISION:
+#    At inference, only trade when:
+#      - Model predicts ProfitTarget (class 2)
+#      - AND probability > confidence_threshold (e.g., 0.7)
+#    
+#    Timeout (class 1) = "I don't know" = don't trade
+#    StopLoss (class 0) = "Bad entry" = definitely don't trade
+#
+# 4. EXPECTED CLASS DISTRIBUTION:
+#    With 0.5%/0.3% barriers and 100-event horizon:
+#      - ProfitTarget: ~20-30% (price moved up enough)
+#      - StopLoss: ~15-25% (price moved down enough)
+#      - Timeout: ~45-60% (neither barrier hit)
+#
+#    This is MORE balanced than opportunity labeling (~10%/80%/10%)
+#    because both directional barriers can be hit.
+#

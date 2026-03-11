@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Granular Cross-Validation: MBO Reconstruction vs MBP-10 Ground Truth
 //!
 //! This test performs detailed, granular validation to find any potential issues
@@ -340,8 +341,9 @@ fn is_regular_hours(timestamp: u64) -> bool {
 
 #[test]
 fn test_granular_level_by_level_validation() {
-    let mbo_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250701.mbo.dbn.zst");
-    let mbp_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+    let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
         println!("Skipping test: data files not found");
@@ -561,8 +563,9 @@ fn test_granular_level_by_level_validation() {
 
 #[test]
 fn test_granular_time_of_day_analysis() {
-    let mbo_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250701.mbo.dbn.zst");
-    let mbp_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+    let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
         println!("Skipping test: data files not found");
@@ -724,8 +727,9 @@ fn test_granular_time_of_day_analysis() {
 
 #[test]
 fn test_granular_error_pattern_detection() {
-    let mbo_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250701.mbo.dbn.zst");
-    let mbp_path = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
+    let mbo_path =
+        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+    let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
         println!("Skipping test: data files not found");
@@ -1035,9 +1039,8 @@ fn test_granular_multi_day_consistency() {
     println!("Period: July 1-10, 2025");
     println!("{:=<80}", "");
 
-    let mbo_base =
-        Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30");
-    let mbp_base = Path::new("/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07");
+    let mbo_base = Path::new("../data/NVDA_2025-02-03_to_2026-01-07");
+    let mbp_base = Path::new("../data/NVDA_MBP10_2025-07");
 
     let dates = [
         "20250701", "20250702", "20250703", "20250707", "20250708", "20250709", "20250710",

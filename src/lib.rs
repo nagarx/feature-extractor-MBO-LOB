@@ -31,8 +31,8 @@
 //! let mut pipeline = Pipeline::from_config(config)?;
 //! let output = pipeline.process("data/NVDA.mbo.dbn.zst")?;
 //!
-//! // Export to NumPy format
-//! let exporter = NumpyExporter::new("output/");
+//! // Export to NumPy format using AlignedBatchExporter
+//! let exporter = AlignedBatchExporter::new("output/", Default::default());
 //! exporter.export_day("2025-02-03", &output)?;
 //! ```
 //!
@@ -74,6 +74,7 @@
 
 pub mod builder;
 pub mod config;
+pub mod contract;
 pub mod export;
 pub mod export_aligned;
 pub mod features;
@@ -93,7 +94,9 @@ pub mod batch;
 pub use schema::{FeatureCategory, FeatureDef, FeatureSchema, Preset, PresetConfig};
 
 // Re-exports - Config
-pub use config::{ExperimentMetadata, PipelineConfig, SamplingConfig, SamplingStrategy};
+pub use config::{
+    ExperimentMetadata, MultiScaleSamplingConfig, PipelineConfig, SamplingConfig, SamplingStrategy,
+};
 
 // Re-exports - Features
 pub use features::fi2010::{FI2010Config, FI2010Extractor};
@@ -102,7 +105,7 @@ pub use features::market_impact::{
 };
 pub use features::mbo_features::{MboAggregator, MboEvent};
 pub use features::order_flow::{MultiLevelOfiTracker, OrderFlowFeatures, OrderFlowTracker};
-pub use features::{FeatureConfig, FeatureExtractor};
+pub use features::{FeatureConfig, FeatureExtractor, SignalContext};
 
 // Re-exports - Preprocessing
 pub use preprocessing::{
@@ -112,16 +115,17 @@ pub use preprocessing::{
 };
 
 // Re-exports - Sequence Building
-pub use sequence_builder::{FeatureVec, Sequence, SequenceBuilder, SequenceConfig};
+pub use sequence_builder::{
+    FeatureVec, HorizonAwareConfig, MultiScaleConfig, MultiScaleSequence, MultiScaleWindow,
+    ScaleConfig, Sequence, SequenceBuilder, SequenceConfig, SequenceError,
+};
 
 // Re-exports - Export
 pub use export::tensor_format::{FeatureMapping, TensorFormat, TensorFormatter, TensorOutput};
-pub use export::{
-    export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
-    NumpyExporter, SplitConfig,
-};
+pub use export::{ExportThresholdStrategy, SplitConfig};
 pub use export_aligned::{
-    AlignedBatchExporter, AlignedDayExport, NormalizationParams, NormalizationStrategy,
+    AlignedBatchExporter, AlignedDayExport, LabelEncoding, NormalizationParams,
+    NormalizationStrategy,
 };
 
 // Re-exports - Validation
@@ -131,9 +135,13 @@ pub use validation::{
 
 // Re-exports - Labeling
 pub use labeling::{
-    DeepLobLabelGenerator, DeepLobMethod, LabelConfig, LabelGenerator, LabelStats,
-    MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels, MultiHorizonSummary,
-    ThresholdStrategy, TlobLabelGenerator, TrendLabel,
+    BarrierLabel, ConflictPriority, DeepLobLabelGenerator, DeepLobMethod, LabelConfig,
+    LabelGenerator, LabelStats, MagnitudeConfig, MagnitudeGenerator, MagnitudeOutput,
+    MagnitudeStats, MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels,
+    MultiHorizonMagnitudeOutput, MultiHorizonSummary, OpportunityConfig, OpportunityLabel,
+    OpportunityLabelGenerator, OpportunityStats, ReturnData, ReturnType, ThresholdStrategy,
+    TimeoutStrategy, TlobLabelGenerator, TrendLabel, TripleBarrierConfig, TripleBarrierLabeler,
+    TripleBarrierOutput, TripleBarrierStats,
 };
 
 // Re-exports - Pipeline

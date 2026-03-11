@@ -74,8 +74,8 @@
 //! ```
 
 use crate::config::{
-    AdaptiveSamplingConfig, ExperimentMetadata, MultiScaleConfig, PipelineConfig, SamplingConfig,
-    SamplingStrategy,
+    AdaptiveSamplingConfig, ExperimentMetadata, MultiScaleSamplingConfig, PipelineConfig,
+    SamplingConfig, SamplingStrategy,
 };
 use crate::features::FeatureConfig;
 use crate::pipeline::Pipeline;
@@ -144,9 +144,20 @@ impl PipelineBuilder {
     /// Create a builder from a research paper preset.
     ///
     /// Available presets:
-    /// - `Preset::DeepLOB`: 40 features, 100 window, stride 1
-    /// - `Preset::TLOB`: 40 features, 100 window, stride 1
-    /// - `Preset::FI2010`: 144 features (40 raw + 104 handcrafted)
+    /// - `Preset::DeepLOB`: 40 features, 100 window, stride 1 (Zhang et al., 2019)
+    /// - `Preset::TLOB`: 40 features, 100 window, stride 1 (Berti & Kasneci, 2025)
+    /// - `Preset::FI2010`: 48 features (40 raw + 8 derived), 100 window, stride 1
+    /// - `Preset::TransLOB`: 40 features, 100 window, stride 1
+    /// - `Preset::LiT`: 80 features (20 levels × 4), 100 window, stride 1
+    /// - `Preset::Minimal`: 20 features (5 levels × 4), 50 window, stride 1
+    /// - `Preset::Full`: 84 features (40 raw + 8 derived + 36 MBO), 100 window, stride 1
+    ///
+    /// # Note on FI-2010
+    ///
+    /// The original FI-2010 benchmark dataset has 144 handcrafted features.
+    /// This preset provides a simplified version with 48 features (40 LOB + 8 derived).
+    /// The full FI-2010 feature set is partially implemented in `fi2010.rs` but not yet
+    /// integrated into the pipeline. See TODO.md for details.
     ///
     /// # Example
     ///
@@ -246,6 +257,22 @@ impl PipelineBuilder {
     /// - Queue position metrics
     pub fn with_mbo_features(mut self) -> Self {
         self.features.include_mbo = true;
+        self
+    }
+
+    /// Enable trading signals (14 additional features, indices 84-97).
+    ///
+    /// Trading signals include OFI-based signals, microprice delta, asymmetries,
+    /// and safety gates. See `features::signals` module for details.
+    ///
+    /// **Note**: This automatically enables derived and MBO features as they are required.
+    ///
+    /// After enabling, total features = 40 raw + 8 derived + 36 MBO + 14 signals = **98**.
+    pub fn with_trading_signals(mut self) -> Self {
+        // Signals require both derived and MBO
+        self.features.include_derived = true;
+        self.features.include_mbo = true;
+        self.features.include_signals = true;
         self
     }
 
@@ -458,12 +485,12 @@ impl PipelineBuilder {
     /// - Medium: 2x decimation (short-term trends)
     /// - Slow: 4x decimation (long-term context)
     pub fn with_multiscale(mut self) -> Self {
-        self.sampling.multiscale = Some(MultiScaleConfig::default());
+        self.sampling.multiscale = Some(MultiScaleSamplingConfig::default());
         self
     }
 
     /// Configure multi-scale windowing with custom parameters.
-    pub fn with_multiscale_config(mut self, config: MultiScaleConfig) -> Self {
+    pub fn with_multiscale_config(mut self, config: MultiScaleSamplingConfig) -> Self {
         self.sampling.multiscale = Some(config);
         self
     }

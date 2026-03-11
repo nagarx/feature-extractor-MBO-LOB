@@ -10,10 +10,11 @@
 
 use feature_extractor::{
     config::{
-        AdaptiveSamplingConfig, MultiScaleConfig, PipelineConfig, SamplingConfig, SamplingStrategy,
+        AdaptiveSamplingConfig, MultiScaleSamplingConfig, PipelineConfig, SamplingConfig,
+        SamplingStrategy,
     },
     preprocessing::AdaptiveVolumeThreshold,
-    sequence_builder::{MultiScaleConfig as MSConfig, MultiScaleWindow, ScaleConfig},
+    sequence_builder::{MultiScaleConfig, MultiScaleWindow, ScaleConfig},
     Pipeline,
 };
 
@@ -157,7 +158,7 @@ fn test_multiscale_windowing_decimation_accuracy() {
     println!("=== Phase 1 Test: Multi-Scale Windowing ===");
 
     // Create multi-scale window with known configuration
-    let config = MSConfig::new(
+    let config = MultiScaleConfig::new(
         ScaleConfig::new(10, 1, 1), // Fast: 10 events, decimation=1
         ScaleConfig::new(10, 2, 1), // Medium: 10 events, decimation=2
         ScaleConfig::new(10, 4, 1), // Slow: 10 events, decimation=4
@@ -467,7 +468,7 @@ fn test_phase1_numerical_precision() {
     println!("✓ Adaptive threshold handles high-precision prices");
 
     // Test feature value preservation through multi-scale
-    let config = MSConfig::new(
+    let config = MultiScaleConfig::new(
         ScaleConfig::new(3, 1, 1),
         ScaleConfig::new(3, 2, 1),
         ScaleConfig::new(3, 4, 1),
@@ -562,7 +563,7 @@ fn test_phase1_config_validation() {
         min_time_interval_ns: Some(1_000_000),
         event_count: None,
         adaptive: None,
-        multiscale: Some(MultiScaleConfig {
+        multiscale: Some(MultiScaleSamplingConfig {
             enabled: true,
             fast_window: 500,   // WRONG: should be < medium
             medium_window: 500, // Equal to fast (should be larger)

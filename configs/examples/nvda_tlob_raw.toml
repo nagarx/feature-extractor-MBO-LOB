@@ -1,0 +1,95 @@
+# =============================================================================
+# NVDA Dataset Configuration - TLOB Paper (Raw Export)
+# =============================================================================
+#
+# This configuration exports RAW LOB data for use with models that have
+# internal normalization layers (like TLOB with BiN).
+#
+# Research Reference:
+# - TLOB: "A Novel Transformer Model with Dual Attention for Price Trend 
+#         Prediction with Limit Order Book Data" (Tran et al., 2023)
+# - BiN: "Data Normalization for Bilinear Structures in High-Frequency 
+#        Financial Time-series" (Tran et al., 2021)
+#
+# Key Insight: The BiN layer in TLOB expects raw LOB data and learns the
+# optimal normalization through its learnable γ_f and γ_t parameters.
+# Pre-normalizing would cause double normalization and hurt performance.
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA TLOB Raw Export"
+version = "1.0.0"
+description = "Raw LOB data for TLOB model with BiN normalization layer"
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+input_dir = "data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "data/exports/nvda_tlob_raw"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2025-09-29"
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+# Total: 98 features (40 LOB + 8 derived + 36 MBO + 14 signals)
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+
+[labels]
+strategy = "tlob"
+horizon = 50
+smoothing_window = 10
+threshold = 0.0008  # 8 bps
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+# =============================================================================
+# Normalization Configuration
+# =============================================================================
+#
+# For TLOB paper: NO pre-normalization. The BiN layer handles all normalization.
+# This is the recommended approach for models with internal normalization.
+#
+# Feature Groups:
+#   - LOB prices (0-9, 20-29): Raw prices in dollars
+#   - LOB sizes (10-19, 30-39): Raw sizes in shares
+#   - Derived (40-47): Spread, imbalance, microprice, etc.
+#   - MBO (48-83): Microstructure features
+#   - Signals (84-97): Trading signals (includes categoricals)
+#
+# The model's BiN layer will learn to normalize these appropriately.
+# =============================================================================
+
+[normalization]
+# All groups default to "none" (raw) when not specified.
+# This is equivalent to NormalizationConfig::raw() or NormalizationConfig::tlob_paper()
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"  # CRITICAL: Never normalize signals (includes categoricals)
+
+# Reference price for percentage change strategy (not used when strategy = "none")
+reference_price = "mid_price"
+
+# Scale factor for bilinear normalization (not used when strategy = "none")
+bilinear_scale_factor = 50.0

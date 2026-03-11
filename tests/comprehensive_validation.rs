@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Comprehensive Validation Test for MBO-LOB-reconstructor and feature-extractor
 //!
 //! This test validates both libraries with real NVIDIA MBO data (Feb 10, 2025)
@@ -5,6 +6,8 @@
 //!
 //! **Note**: These tests require real MBO data files and are skipped in CI.
 //! Run locally with: cargo test --test comprehensive_validation --release -- --nocapture
+
+mod common;
 
 use feature_extractor::{
     // Labeling
@@ -29,7 +32,7 @@ use std::path::Path;
 use std::time::Instant;
 
 /// Test data path - using Feb 10, 2025 (different from commonly used Feb 3)
-const TEST_DATA_PATH: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250210.mbo.dbn.zst";
+const TEST_DATA_PATH: &str = "../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250210.mbo.dbn.zst";
 
 /// Maximum messages to process (for reasonable test duration)
 const MAX_MESSAGES: usize = 500_000;
@@ -37,25 +40,13 @@ const MAX_MESSAGES: usize = 500_000;
 /// Sample interval for feature extraction
 const SAMPLE_INTERVAL: usize = 100;
 
-/// Check if test data is available, skip test if not
-fn require_test_data() -> bool {
-    if !Path::new(TEST_DATA_PATH).exists() {
-        println!("⚠️  Test data not found at: {}", TEST_DATA_PATH);
-        println!("   Skipping test (this is expected in CI environments)");
-        return false;
-    }
-    true
-}
-
 // ============================================================================
 // Test 1: MBO-LOB-reconstructor Validation
 // ============================================================================
 
 #[test]
 fn test_lob_reconstructor_correctness() {
-    if !require_test_data() {
-        return;
-    }
+    skip_if_no_data!();
 
     println!("\n{}", "=".repeat(70));
     println!("TEST 1: MBO-LOB-reconstructor Validation");
@@ -265,9 +256,7 @@ fn test_lob_reconstructor_correctness() {
 
 #[test]
 fn test_feature_extractor_correctness() {
-    if !require_test_data() {
-        return;
-    }
+    skip_if_no_data!();
 
     println!("\n{}", "=".repeat(70));
     println!("TEST 2: Feature Extractor Validation");
@@ -484,9 +473,7 @@ fn test_feature_extractor_correctness() {
 
 #[test]
 fn test_order_flow_features() {
-    if !require_test_data() {
-        return;
-    }
+    skip_if_no_data!();
 
     println!("\n{}", "=".repeat(70));
     println!("TEST 3: Order Flow Features Validation");
@@ -623,9 +610,7 @@ fn test_order_flow_features() {
 
 #[test]
 fn test_labeling_correctness() {
-    if !require_test_data() {
-        return;
-    }
+    skip_if_no_data!();
 
     println!("\n{}", "=".repeat(70));
     println!("TEST 4: Labeling Validation");
@@ -810,9 +795,7 @@ fn test_labeling_correctness() {
 
 #[test]
 fn test_normalization_correctness() {
-    if !require_test_data() {
-        return;
-    }
+    skip_if_no_data!();
 
     println!("\n{}", "=".repeat(70));
     println!("TEST 5: Normalization Validation");
@@ -996,9 +979,7 @@ fn test_normalization_correctness() {
 
 #[test]
 fn test_end_to_end_pipeline() {
-    if !require_test_data() {
-        return;
-    }
+    skip_if_no_data!();
 
     println!("\n{}", "=".repeat(70));
     println!("TEST 6: End-to-End Pipeline Validation");

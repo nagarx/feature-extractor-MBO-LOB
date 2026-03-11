@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Outlier Investigation Tests
 //!
 //! Deep investigation of the large price errors found in comprehensive validation.
@@ -18,8 +19,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-const MBO_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30";
-const MBP10_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07";
+const MBO_DATA_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const MBP10_DATA_DIR: &str = "../data/NVDA_MBP10_2025-07";
 
 /// Convert fixed-point price to cents
 fn price_to_cents(price: i64) -> f64 {

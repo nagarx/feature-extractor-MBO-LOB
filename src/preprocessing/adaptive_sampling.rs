@@ -128,11 +128,13 @@ impl AdaptiveVolumeThreshold {
     /// # Arguments
     ///
     /// * `base_threshold` - Nominal volume threshold in shares (e.g., 500 for NVDA)
-    /// * `volatility_window` - Rolling window size for volatility calculation (e.g., 1000)
+    /// * `volatility_window` - Rolling window size for volatility calculation (e.g., 1000).
+    ///   Must be >= 2 because variance calculation requires at least 2 data points.
     ///
     /// # Panics
     ///
-    /// Panics if `base_threshold` is 0.
+    /// - Panics if `base_threshold` is 0.
+    /// - Panics if `volatility_window < 2` (variance requires at least 2 data points).
     ///
     /// # Example
     ///
@@ -142,8 +144,21 @@ impl AdaptiveVolumeThreshold {
     /// // 500 share base, 1000-event volatility window
     /// let adaptive = AdaptiveVolumeThreshold::new(500, 1000);
     /// ```
+    ///
+    /// ```should_panic
+    /// use feature_extractor::preprocessing::AdaptiveVolumeThreshold;
+    ///
+    /// // This panics: volatility_window must be >= 2
+    /// let adaptive = AdaptiveVolumeThreshold::new(500, 1);
+    /// ```
     pub fn new(base_threshold: u64, volatility_window: usize) -> Self {
         assert!(base_threshold > 0, "base_threshold must be > 0");
+        assert!(
+            volatility_window >= VolatilityEstimator::MIN_WINDOW_SIZE,
+            "volatility_window must be >= {} for variance calculation. Got {}",
+            VolatilityEstimator::MIN_WINDOW_SIZE,
+            volatility_window
+        );
 
         Self {
             base_threshold,
@@ -316,16 +331,58 @@ impl AdaptiveVolumeThreshold {
     /// Finalize calibration by calculating baseline volatility.
     ///
     /// Uses median (more robust than mean) to establish baseline.
+    ///
+    /// # Robustness
+    ///
+    /// - Filters out NaN/Inf values (with logging) before computing median
+    /// - Uses `total_cmp` for deterministic sorting even with edge-case floats
+    /// - Handles empty/all-invalid cases gracefully
     fn finalize_calibration(&mut self) {
         if self.calibration_volatilities.is_empty() {
             return;
         }
 
-        // Calculate median volatility as baseline (robust to outliers)
-        let mut sorted_vols = self.calibration_volatilities.clone();
-        sorted_vols.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // Filter out non-finite values (NaN, Inf, -Inf) with diagnostic logging
+        // Per RULE.md: "Never silently drop data without recording diagnostics"
+        let original_count = self.calibration_volatilities.len();
+        let valid_vols: Vec<f64> = self
+            .calibration_volatilities
+            .iter()
+            .filter(|v| v.is_finite())
+            .copied()
+            .collect();
 
-        let baseline = if sorted_vols.len() % 2 == 0 {
+        let filtered_count = original_count - valid_vols.len();
+        if filtered_count > 0 {
+            log::warn!(
+                "AdaptiveVolumeThreshold calibration: filtered {} non-finite volatility values \
+                 out of {} total ({:.1}%). This may indicate upstream data issues.",
+                filtered_count,
+                original_count,
+                (filtered_count as f64 / original_count as f64) * 100.0
+            );
+        }
+
+        // Handle case where all values were invalid
+        if valid_vols.is_empty() {
+            log::error!(
+                "AdaptiveVolumeThreshold calibration: all {} volatility values were non-finite. \
+                 Cannot establish baseline. Using default behavior (no adaptation).",
+                original_count
+            );
+            // Don't set baseline - adaptive sampling will use base threshold
+            self.calibration_volatilities.clear();
+            self.calibration_volatilities.shrink_to_fit();
+            return;
+        }
+
+        // Sort using total_cmp for deterministic ordering (Rust 1.62+)
+        // This handles edge cases better than partial_cmp().unwrap()
+        let mut sorted_vols = valid_vols;
+        sorted_vols.sort_by(|a, b| a.total_cmp(b));
+
+        // Calculate median volatility as baseline (robust to outliers)
+        let baseline = if sorted_vols.len().is_multiple_of(2) {
             let mid = sorted_vols.len() / 2;
             (sorted_vols[mid - 1] + sorted_vols[mid]) / 2.0
         } else {

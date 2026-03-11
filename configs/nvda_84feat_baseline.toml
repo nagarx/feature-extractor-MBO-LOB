@@ -1,0 +1,58 @@
+# NVDA 84-Feature Baseline Dataset Configuration
+# 
+# This configuration exports the 84-feature baseline set (without trading signals).
+# Use this for comparison experiments or models that don't need the signal layer.
+#
+# Features: LOB (40) + Derived (8) + MBO (36) = 84
+
+[experiment]
+name = "NVDA 84-Feature Baseline"
+description = "Baseline feature set without trading signals"
+version = "1.0.0"
+tags = ["nvda", "84-features", "baseline", "no-signals"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+input_dir = "data/NVDA_2025-02-01_to_2025-09-30"
+output_dir = "data/exports/nvda_84feat"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2025-09-29"
+
+[features]
+lob_levels = 10
+include_derived = true   # +8 features
+include_mbo = true       # +36 features
+include_signals = false  # No signals = 84 total
+
+mbo_window_size = 1000
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+[labels]
+horizon = 50
+smoothing_window = 10
+threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = false
+

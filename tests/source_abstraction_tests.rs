@@ -323,9 +323,9 @@ mod dbn_source_tests {
 
     fn find_test_file() -> Option<String> {
         let candidates = [
-            "../data/NVDA_2025-02-01_to_2025-09-30/NVDA_2025-02-03.mbo.dbn.zst",
-            "../../data/NVDA_2025-02-01_to_2025-09-30/NVDA_2025-02-03.mbo.dbn.zst",
-            "data/NVDA_2025-02-01_to_2025-09-30/NVDA_2025-02-03.mbo.dbn.zst",
+            "../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250203.mbo.dbn.zst",
+            "../../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250203.mbo.dbn.zst",
+            "data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250203.mbo.dbn.zst",
         ];
 
         for path in candidates {

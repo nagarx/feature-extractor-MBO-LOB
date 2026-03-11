@@ -1,0 +1,79 @@
+# Multi-Symbol Dataset Template
+# 
+# This is a template for creating dataset configurations for any symbol.
+# Copy this file, modify the [symbol] section, and update paths.
+#
+# Supported exchanges:
+#   - XNAS (NASDAQ)
+#   - XNYS (NYSE)
+#   - ARCX (NYSE Arca)
+#   - BATS (Cboe BZX)
+#
+# The feature extractor is symbol-agnostic - use the same configuration
+# structure for any instrument.
+
+[experiment]
+name = "SYMBOL_NAME Full Dataset"  # MODIFY: Replace SYMBOL_NAME
+description = "98-feature dataset for SYMBOL_NAME"
+version = "1.0.0"
+tags = ["SYMBOL_NAME", "98-features"]  # MODIFY: Replace SYMBOL_NAME
+
+[symbol]
+# MODIFY: Replace with your symbol
+name = "SYMBOL_NAME"
+exchange = "XNAS"
+
+# Filename pattern - common patterns:
+# - NASDAQ: "xnas-itch-{date}.mbo.dbn.zst"
+# - NYSE: "xnys-trades-{date}.mbo.dbn.zst"
+# - Custom: "{symbol}_{date}.dbn.zst" (uses symbol name)
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+
+tick_size = 0.01  # US stocks: 0.01, some ETFs: 0.0001
+
+[data]
+# MODIFY: Update paths for your environment
+input_dir = "data/SYMBOL_NAME_raw"
+output_dir = "data/exports/SYMBOL_NAME"
+
+# Optional: Hot store for faster processing
+# hot_store_dir = "data/hot_store/SYMBOL_NAME"
+
+[dates]
+# MODIFY: Set your date range
+start_date = "2025-01-02"
+end_date = "2025-12-31"
+
+# Exclude specific dates (holidays, corporate events, etc.)
+# exclude_dates = ["2025-01-20", "2025-02-17", "2025-04-18"]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+[labels]
+horizon = 50
+smoothing_window = 10
+threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = false
+

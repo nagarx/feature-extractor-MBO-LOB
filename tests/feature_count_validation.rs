@@ -36,7 +36,7 @@ fn test_raw_lob_only_10_levels() {
         tick_size: 0.01,
         include_derived: false,
         include_mbo: false,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let extractor = FeatureExtractor::with_config(config);
@@ -60,7 +60,7 @@ fn test_raw_lob_only_5_levels() {
         tick_size: 0.01,
         include_derived: false,
         include_mbo: false,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let extractor = FeatureExtractor::with_config(config);
@@ -84,7 +84,7 @@ fn test_lob_with_derived_10_levels() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: false,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let extractor = FeatureExtractor::with_config(config);
@@ -108,7 +108,7 @@ fn test_lob_with_mbo_10_levels() {
         tick_size: 0.01,
         include_derived: false,
         include_mbo: true,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -145,7 +145,7 @@ fn test_full_features_10_levels() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: true,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -195,7 +195,7 @@ fn test_feature_count_matches_extraction() {
             tick_size: 0.01,
             include_derived,
             include_mbo,
-            mbo_window_size: 1000,
+            ..Default::default()
         };
 
         let mut extractor = FeatureExtractor::with_config(config);
@@ -246,7 +246,7 @@ fn test_feature_count_scales_with_levels() {
             tick_size: 0.01,
             include_derived: false,
             include_mbo: false,
-            mbo_window_size: 1000,
+            ..Default::default()
         };
 
         let extractor = FeatureExtractor::with_config(config);
@@ -275,6 +275,7 @@ fn test_reset_clears_state() {
         include_derived: false,
         include_mbo: true,
         mbo_window_size: 100,
+        ..Default::default()
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -316,7 +317,7 @@ fn test_multiple_resets() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: true,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -362,7 +363,7 @@ fn test_single_level_lob() {
         tick_size: 0.01,
         include_derived: false,
         include_mbo: false,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let extractor = FeatureExtractor::with_config(config);
@@ -385,7 +386,7 @@ fn test_derived_features_count() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: false,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let extractor = FeatureExtractor::with_config(config);
@@ -418,7 +419,7 @@ fn test_mbo_features_count() {
         tick_size: 0.01,
         include_derived: false,
         include_mbo: true,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
 
     let mut extractor = FeatureExtractor::with_config(config);
@@ -440,6 +441,7 @@ fn test_mbo_event_processing() {
         include_derived: false,
         include_mbo: true,
         mbo_window_size: 100,
+        ..Default::default()
     };
 
     let mut extractor = FeatureExtractor::with_config(config);

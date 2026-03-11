@@ -635,20 +635,31 @@ impl ConsoleProgress {
 
 impl ProgressCallback for ConsoleProgress {
     fn on_progress(&self, info: &ProgressInfo) {
+        // Extract just the filename for cleaner display
+        let filename = std::path::Path::new(&info.current_file)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&info.current_file);
+
         if self.verbose {
+            // Show file index (1-based) and completion status
+            // Note: files are processed in parallel, so display order != completion order
             println!(
-                "[{:3}/{:3}] Processing: {} ({:.1}% complete)",
-                info.completed + 1,
+                "[{:3}/{:3}] ▶ Starting: {} (done: {}, failed: {})",
+                info.current_index + 1,
                 info.total_files,
-                info.current_file,
-                info.percent_complete()
+                filename,
+                info.completed,
+                info.failed
             );
         } else {
+            // Compact display with percentage
             print!(
-                "\r[{:3}/{:3}] {:.1}%",
+                "\r[{:3}/{:3}] {:.1}% - {}",
                 info.completed + info.failed,
                 info.total_files,
-                info.percent_complete()
+                info.percent_complete(),
+                filename.chars().take(40).collect::<String>()
             );
             use std::io::Write;
             std::io::stdout().flush().ok();

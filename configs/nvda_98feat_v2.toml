@@ -1,0 +1,149 @@
+# =============================================================================
+# NVDA 98-Feature Dataset Configuration with Dynamic Threshold
+# =============================================================================
+#
+# This configuration exports the FULL 98-feature set for training ML models:
+# - Raw LOB (40 features): prices and sizes at 10 levels
+# - Derived (8 features): mid-price, spread, imbalances, microprice
+# - MBO (36 features): order flow rates, queue stats, institutional patterns
+# - Signals (14 features): OFI, pressure indicators, regime, safety gates
+#
+# NORMALIZATION STRATEGY (Hybrid - per RULE.md §9):
+# =============================================================================
+# Features are exported RAW. Python training applies normalization using
+# TRAINING DATA ONLY to prevent leakage:
+#
+# | Range   | Features       | Python Normalization        |
+# |---------|----------------|-----------------------------|
+# | 0-39    | Raw LOB        | Global Z-score (all prices pooled, all sizes pooled) |
+# | 40-47   | Derived        | Per-feature Z-score         |
+# | 48-83   | MBO            | Per-feature Z-score         |
+# | 84-91   | Signals        | Per-feature Z-score         |
+# | 92      | BOOK_VALID     | EXCLUDE (binary 0/1)        |
+# | 93      | TIME_REGIME    | EXCLUDE (categorical 0-4)   |
+# | 94      | MBO_READY      | EXCLUDE (binary 0/1)        |
+# | 95      | DT_SECONDS     | Per-feature Z-score         |
+# | 96      | INVALIDITY     | EXCLUDE (counter)           |
+# | 97      | SCHEMA_VERSION | EXCLUDE (constant 2.2)      |
+#
+# LABELING: TLOB Dynamic Threshold
+#   alpha = mean(|percentage_change|) / 2  (per TLOB paper/repo)
+#
+# Research References:
+# - TLOB: Berti & Kasneci (2025)
+# - OFI: Cont et al. (2014) "The Price Impact of Order Book Events"
+# - Microprice: Stoikov (2018)
+# =============================================================================
+
+[experiment]
+name = "NVDA 98-Feature V2 (Dynamic Threshold)"
+description = "Full 98-feature dataset with TLOB dynamic threshold for ML training"
+version = "7.0.0"
+tags = [
+    "nvda",
+    "98-features",
+    "full-feature-set",
+    "tlob-dynamic-threshold",
+    "signals",
+    "mbo",
+    "production",
+]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_98feat_v2"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+# US Market Holidays 2025-2026
+exclude_dates = [
+    "2025-01-20",   # MLK Day
+    "2025-02-17",   # Presidents Day
+    "2025-04-18",   # Good Friday
+    "2025-05-26",   # Memorial Day
+    "2025-06-19",   # Juneteenth
+    "2025-07-04",   # Independence Day
+    "2025-09-01",   # Labor Day
+    "2025-11-27",   # Thanksgiving
+    "2025-12-25",   # Christmas
+    "2026-01-01",   # New Year's Day
+]
+
+# =============================================================================
+# FEATURE CONFIGURATION - FULL 98 FEATURES
+# =============================================================================
+# Enable ALL feature types for comprehensive ML training:
+#   40 Raw LOB + 8 Derived + 36 MBO + 14 Signals = 98 features
+# =============================================================================
+
+[features]
+lob_levels = 10
+include_derived = true    # +8 features: mid_price, spread, imbalances
+include_mbo = true        # +36 features: order flow, queue stats
+include_signals = true    # +14 features: OFI, pressure, regime
+mbo_window_size = 1000    # Rolling window for MBO statistics
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+volume_threshold = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+# =============================================================================
+# LABELS - Multi-horizon with TLOB Dynamic Threshold
+# =============================================================================
+# TLOB dynamic threshold: alpha = mean(|percentage_change|) / 2
+# Computed globally from training data for each horizon.
+# =============================================================================
+
+[labels]
+strategy = "tlob"
+horizon = 100             # Primary horizon for single-horizon experiments
+horizons = [10, 20, 50, 100]  # Multi-horizon for ablation studies
+smoothing_window = 10
+threshold = 0.0008        # Fallback only
+
+[labels.threshold_strategy]
+type = "tlob_dynamic"
+fallback = 0.0008         # Used when insufficient data
+divisor = 2.0             # Per TLOB paper: alpha = mean(|pct_change|) / 2
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = true
+
+# =============================================================================
+# NORMALIZATION - RAW EXPORT FOR HYBRID PYTHON NORMALIZATION
+# =============================================================================
+# All features exported RAW. Python applies:
+# - Global Z-score to raw LOB (indices 0-39)
+# - Per-feature Z-score to derived/MBO/signals (indices 40-91, 95)
+# - No normalization to binary/categorical (indices 92-94, 96-97)
+# =============================================================================
+
+[normalization]
+lob_prices = "none"       # Export RAW - Python applies global z-score
+lob_sizes = "none"        # Export RAW - Python applies global z-score
+derived = "none"          # Export RAW - Python applies per-feature z-score
+mbo = "none"              # Export RAW - Python applies per-feature z-score
+signals = "none"          # Export RAW - Python applies per-feature z-score
+
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

@@ -56,6 +56,7 @@ fn main() {
             include_derived: true,
             include_mbo: true, // Enable MBO features
             mbo_window_size: 1000,
+            ..Default::default() // Use defaults for remaining fields
         })
         .with_sequence(
             SequenceConfig::new(100, 1)

@@ -50,8 +50,8 @@
 //! - [`EventBasedSampler`] - Event-based sampling
 //!
 //! ## Export
-//! - [`NumpyExporter`] - Export to NumPy format
-//! - [`BatchExporter`] - Batch export with labeling
+//! - [`AlignedBatchExporter`] - Production export with 1:1 sequence-label alignment
+//! - [`SplitConfig`] - Train/validation/test split configuration
 //!
 //! ## Validation
 //! - [`FeatureValidator`] - Feature validation
@@ -68,8 +68,8 @@
 
 pub use crate::builder::PipelineBuilder;
 pub use crate::config::{
-    AdaptiveSamplingConfig, ExperimentMetadata, MultiScaleConfig, PipelineConfig, SamplingConfig,
-    SamplingStrategy,
+    AdaptiveSamplingConfig, ExperimentMetadata, MultiScaleSamplingConfig, PipelineConfig,
+    SamplingConfig, SamplingStrategy,
 };
 pub use crate::pipeline::{Pipeline, PipelineOutput};
 
@@ -87,8 +87,8 @@ pub use crate::features::{FeatureConfig, FeatureExtractor};
 // ============================================================================
 
 pub use crate::sequence_builder::{
-    FeatureVec, HorizonAwareConfig, MultiScaleConfig as MultiScaleSequenceConfig,
-    MultiScaleSequence, MultiScaleWindow, Sequence, SequenceBuilder, SequenceConfig, SequenceError,
+    FeatureVec, HorizonAwareConfig, MultiScaleConfig, MultiScaleSequence, MultiScaleWindow,
+    Sequence, SequenceBuilder, SequenceConfig, SequenceError,
 };
 
 // ============================================================================
@@ -96,9 +96,39 @@ pub use crate::sequence_builder::{
 // ============================================================================
 
 pub use crate::labeling::{
-    DeepLobLabelGenerator, DeepLobMethod, LabelConfig, LabelGenerator, LabelStats,
-    MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels, ThresholdStrategy,
-    TlobLabelGenerator, TrendLabel,
+    // Phase 1.5: Triple barrier labeling (profit target / stop-loss)
+    BarrierLabel,
+    // Phase 1.5: Opportunity labeling (big move detection)
+    ConflictPriority,
+    // Core labeling types
+    DeepLobLabelGenerator,
+    DeepLobMethod,
+    LabelConfig,
+    LabelGenerator,
+    LabelStats,
+    // Phase 1.5: Magnitude export (regression targets)
+    MagnitudeConfig,
+    MagnitudeGenerator,
+    MagnitudeOutput,
+    MagnitudeStats,
+    MultiHorizonConfig,
+    MultiHorizonLabelGenerator,
+    MultiHorizonLabels,
+    MultiHorizonMagnitudeOutput,
+    OpportunityConfig,
+    OpportunityLabel,
+    OpportunityLabelGenerator,
+    OpportunityStats,
+    ReturnData,
+    ReturnType,
+    ThresholdStrategy,
+    TimeoutStrategy,
+    TlobLabelGenerator,
+    TrendLabel,
+    TripleBarrierConfig,
+    TripleBarrierLabeler,
+    TripleBarrierOutput,
+    TripleBarrierStats,
 };
 
 // ============================================================================
@@ -136,13 +166,11 @@ pub use crate::schema::{FeatureCategory, FeatureDef, FeatureSchema, Preset, Pres
 pub use crate::export::tensor_format::{
     FeatureMapping, TensorFormat, TensorFormatter, TensorOutput,
 };
-pub use crate::export::{
-    export_to_numpy, BatchExportResult, BatchExporter, DayExportResult, ExportMetadata,
-    NumpyExporter, SplitConfig,
-};
+pub use crate::export::SplitConfig;
 
 pub use crate::export_aligned::{
-    AlignedBatchExporter, AlignedDayExport, NormalizationParams, NormalizationStrategy,
+    AlignedBatchExporter, AlignedDayExport, LabelEncoding, NormalizationParams,
+    NormalizationStrategy,
 };
 
 // ============================================================================

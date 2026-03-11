@@ -172,7 +172,7 @@ fn bench_feature_extractor(c: &mut Criterion) {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: false,
-        mbo_window_size: 1000,
+        ..Default::default() // Forward-compatible with new fields
     };
     let extractor_derived = FeatureExtractor::with_config(config_with_derived);
 
@@ -187,6 +187,7 @@ fn bench_feature_extractor(c: &mut Criterion) {
         include_derived: true,
         include_mbo: true,
         mbo_window_size: 1000,
+        ..Default::default() // Forward-compatible with new fields
     };
     let mut extractor_full = FeatureExtractor::with_config(config_full);
 

@@ -1,15 +1,20 @@
 //! FI-2010 Benchmark Feature Extraction
 //!
-//! Implements the 104 handcrafted features from the FI-2010 benchmark paper:
+//! Implements 80 of the handcrafted features from the FI-2010 benchmark paper:
 //! "Benchmark Dataset for Mid-Price Forecasting of Limit Order Book Data"
 //! (Ntakaris et al., 2018)
 //!
-//! # Feature Categories
+//! # Feature Categories (80 Total)
 //!
 //! 1. **Time-Insensitive (20 features)**: Spread, mid-price, price/volume differences
 //! 2. **Time-Sensitive (20 features)**: Derivatives, intensity measures
 //! 3. **Depth Features (40 features)**: Accumulated volumes and price differences
-//! 4. **Regression Features (24 features)**: Linear regression coefficients (optional)
+//!
+//! # Not Implemented
+//!
+//! - **Regression Features (24 features)**: Linear regression coefficients from the
+//!   original FI-2010 paper are NOT yet implemented. These require fitting regressions
+//!   on rolling windows of mid-price/spread data. See TODO.md for tracking.
 //!
 //! # Usage
 //!

@@ -1,0 +1,141 @@
+# =============================================================================
+# NVDA ARCX.PILLAR 98-Feature Dataset Configuration with Dynamic Threshold
+# =============================================================================
+#
+# NYSE Arca MBO data for NVDA -- identical feature/sampling/label settings to
+# nvda_98feat_v2.toml (XNAS) to enable fair cross-exchange comparison.
+#
+# Feature set: 40 Raw LOB + 8 Derived + 36 MBO + 14 Signals = 98 features
+#
+# NORMALIZATION STRATEGY (Hybrid):
+#   Features are exported RAW. Python training applies normalization using
+#   TRAINING DATA ONLY to prevent leakage. See nvda_98feat_v2.toml header
+#   for the full normalization mapping by feature index.
+#
+# LABELING: TLOB Dynamic Threshold
+#   alpha = mean(|percentage_change|) / 2  (per TLOB paper/repo)
+#
+# Research References:
+# - TLOB: Berti & Kasneci (2025)
+# - OFI: Cont et al. (2014) "The Price Impact of Order Book Events"
+# - Microprice: Stoikov (2018)
+#
+# Prerequisites:
+#   cd MBO-LOB-reconstructor
+#   cargo run --release --bin decompress_to_hot_store -- \
+#       --input ../data/ARCX_PILLAR/NVDA/mbo_2025-02-03_to_2026-01-07 \
+#       --output ../data/hot_store
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- \
+#       --config configs/nvda_arcx_98feat.toml
+# =============================================================================
+
+[experiment]
+name = "NVDA ARCX 98-Feature (Dynamic Threshold)"
+description = "Full 98-feature dataset from NYSE Arca MBO data with TLOB dynamic threshold"
+version = "1.0.0"
+tags = [
+    "nvda",
+    "arcx",
+    "98-features",
+    "full-feature-set",
+    "tlob-dynamic-threshold",
+    "signals",
+    "mbo",
+]
+
+[symbol]
+name = "NVDA"
+exchange = "ARCX"
+filename_pattern = "arcx-pillar-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/ARCX_PILLAR/NVDA/mbo_2025-02-03_to_2026-01-07"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/arcx_pillar/nvda_98feat"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+# US Market Holidays 2025-2026 (NYSE Arca observes same holidays as Nasdaq)
+exclude_dates = [
+    "2025-01-20",   # MLK Day
+    "2025-02-17",   # Presidents Day
+    "2025-04-18",   # Good Friday
+    "2025-05-26",   # Memorial Day
+    "2025-06-19",   # Juneteenth
+    "2025-07-04",   # Independence Day
+    "2025-09-01",   # Labor Day
+    "2025-11-27",   # Thanksgiving
+    "2025-12-25",   # Christmas
+    "2026-01-01",   # New Year's Day
+]
+
+# =============================================================================
+# FEATURE CONFIGURATION - FULL 98 FEATURES
+# =============================================================================
+# Identical to nvda_98feat_v2.toml to enable fair cross-exchange comparison.
+# =============================================================================
+
+[features]
+lob_levels = 10
+include_derived = true    # +8 features: mid_price, spread, imbalances
+include_mbo = true        # +36 features: order flow, queue stats
+include_signals = true    # +14 features: OFI, pressure, regime
+mbo_window_size = 1000    # Rolling window for MBO statistics
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+volume_threshold = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+# =============================================================================
+# LABELS - Multi-horizon with TLOB Dynamic Threshold
+# =============================================================================
+# Identical to nvda_98feat_v2.toml for fair cross-exchange comparison.
+# =============================================================================
+
+[labels]
+strategy = "tlob"
+horizon = 100
+horizons = [10, 20, 50, 100]
+smoothing_window = 10
+threshold = 0.0008
+
+[labels.threshold_strategy]
+type = "tlob_dynamic"
+fallback = 0.0008
+divisor = 2.0
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = true
+
+# =============================================================================
+# NORMALIZATION - RAW EXPORT FOR HYBRID PYTHON NORMALIZATION
+# =============================================================================
+# Identical to nvda_98feat_v2.toml. Python applies normalization post-export.
+# =============================================================================
+
+[normalization]
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"
+
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

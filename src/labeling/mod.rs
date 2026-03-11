@@ -73,16 +73,31 @@
 //! ```
 
 pub mod deeplob;
+pub mod magnitude;
 pub mod multi_horizon;
+pub mod opportunity;
 pub mod tlob;
+pub mod triple_barrier;
 
 // Re-exports for convenience
 pub use deeplob::{DeepLobLabelGenerator, DeepLobMethod};
+pub use magnitude::{
+    MagnitudeConfig, MagnitudeGenerator, MagnitudeOutput, MagnitudeStats,
+    MultiHorizonMagnitudeOutput, ReturnData, ReturnType,
+};
 pub use multi_horizon::{
     MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels, MultiHorizonSummary,
     ThresholdStrategy,
 };
+pub use opportunity::{
+    ConflictPriority, OpportunityConfig, OpportunityLabel, OpportunityLabelGenerator,
+    OpportunityStats,
+};
 pub use tlob::TlobLabelGenerator;
+pub use triple_barrier::{
+    BarrierLabel, TimeoutStrategy, TripleBarrierConfig, TripleBarrierLabeler, TripleBarrierOutput,
+    TripleBarrierStats,
+};
 
 // Backward compatibility alias
 pub use TlobLabelGenerator as LabelGenerator;

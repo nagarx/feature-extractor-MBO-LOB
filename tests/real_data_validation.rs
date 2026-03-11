@@ -1,3 +1,4 @@
+#![cfg(feature = "extended_validation")]
 //! Real NVIDIA Data Validation Tests
 //!
 //! Comprehensive tests using real NVIDIA MBO and MBP-10 data to validate:
@@ -19,8 +20,8 @@ use std::io::BufReader;
 use std::path::Path;
 
 // Data directories
-const MBO_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30";
-const MBP10_DATA_DIR: &str = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_MBP10_2025-07";
+const MBO_DATA_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const MBP10_DATA_DIR: &str = "../data/NVDA_MBP10_2025-07";
 
 /// Test configuration for fair validation
 #[allow(dead_code)]
@@ -822,8 +823,11 @@ fn test_feature_extraction_on_real_data() {
         lob_levels: 10,
         tick_size: 0.01,
         include_derived: true,
-        include_mbo: false, // MBO features need event processing
+        include_mbo: false,
         mbo_window_size: 1000,
+        include_signals: false,
+        include_queue_tracking: false,
+        experimental: Default::default(),
     };
     let mut extractor = FeatureExtractor::with_config(config);
 

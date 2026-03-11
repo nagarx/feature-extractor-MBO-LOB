@@ -27,7 +27,7 @@
 //! ```ignore
 //! use feature_extractor::sampling::VolumeBasedSampler;
 //!
-//! let mut sampler = VolumeBasedSampler::new(500, 1); // 500 shares, 1ms min interval
+//! let mut sampler = VolumeBasedSampler::new(500, 1_000_000); // 500 shares, 1ms min interval
 //!
 //! for message in messages {
 //!     if sampler.should_sample(message.size, message.timestamp) {
@@ -89,22 +89,34 @@ impl VolumeBasedSampler {
     /// # Arguments
     ///
     /// * `target_volume` - Target volume per sample (shares). Recommended: 500 for liquid stocks
-    /// * `min_time_interval_ms` - Minimum milliseconds between samples. Recommended: 1-10ms
+    /// * `min_time_interval_ns` - Minimum **nanoseconds** between samples. Recommended: 1_000_000 (1ms)
+    ///
+    /// # Units
+    ///
+    /// The `min_time_interval_ns` parameter is in **nanoseconds** to match:
+    /// - `SamplingConfig.min_time_interval_ns` (pipeline config)
+    /// - MBO message timestamps (nanoseconds since epoch)
+    /// - RULE.md §2: "Timestamps must declare unit"
+    ///
+    /// Common values:
+    /// - 1ms = 1_000_000 ns
+    /// - 10ms = 10_000_000 ns
+    /// - 100ms = 100_000_000 ns
     ///
     /// # Example
     ///
     /// ```
     /// use feature_extractor::preprocessing::VolumeBasedSampler;
     ///
-    /// // Sample every 500 shares, with minimum 1ms between samples
-    /// let sampler = VolumeBasedSampler::new(500, 1);
+    /// // Sample every 500 shares, with minimum 1ms (1_000_000 ns) between samples
+    /// let sampler = VolumeBasedSampler::new(500, 1_000_000);
     /// ```
     #[inline]
-    pub fn new(target_volume: u64, min_time_interval_ms: u64) -> Self {
+    pub fn new(target_volume: u64, min_time_interval_ns: u64) -> Self {
         Self {
             target_volume,
             accumulated_volume: 0,
-            min_time_interval_ns: min_time_interval_ms * 1_000_000,
+            min_time_interval_ns, // No multiplication - already in nanoseconds
             last_sample_time: 0,
             sample_count: 0,
             total_volume: 0,
@@ -328,7 +340,8 @@ mod tests {
 
     #[test]
     fn test_volume_based_sampler_basic() {
-        let mut sampler = VolumeBasedSampler::new(500, 1); // 500 shares, 1ms
+        // 500 shares, 1ms minimum interval (1_000_000 ns)
+        let mut sampler = VolumeBasedSampler::new(500, 1_000_000);
 
         // No sample on first small event
         assert!(!sampler.should_sample(100, 1_000_000));
@@ -348,7 +361,8 @@ mod tests {
 
     #[test]
     fn test_volume_based_sampler_time_gating() {
-        let mut sampler = VolumeBasedSampler::new(100, 10); // 100 shares, 10ms min interval
+        // 100 shares, 10ms minimum interval (10_000_000 ns)
+        let mut sampler = VolumeBasedSampler::new(100, 10_000_000);
 
         let base_time = 1_000_000_000; // 1 second
 
@@ -368,7 +382,8 @@ mod tests {
 
     #[test]
     fn test_volume_based_sampler_large_single_trade() {
-        let mut sampler = VolumeBasedSampler::new(500, 1);
+        // 500 shares, 1ms minimum interval (1_000_000 ns)
+        let mut sampler = VolumeBasedSampler::new(500, 1_000_000);
 
         // Single large trade should trigger sample
         assert!(sampler.should_sample(1000, 1_000_000));
@@ -378,9 +393,10 @@ mod tests {
 
     #[test]
     fn test_volume_based_sampler_statistics() {
-        let mut sampler = VolumeBasedSampler::new(500, 1);
+        // 500 shares, 1ms minimum interval (1_000_000 ns)
+        let mut sampler = VolumeBasedSampler::new(500, 1_000_000);
 
-        // Generate several samples
+        // Generate several samples (10ms apart, which is > 1ms minimum)
         for i in 0..5 {
             let timestamp = (i + 1) * 10_000_000; // 10ms apart
             sampler.should_sample(100, timestamp);
@@ -395,7 +411,8 @@ mod tests {
 
     #[test]
     fn test_volume_based_sampler_reset() {
-        let mut sampler = VolumeBasedSampler::new(500, 1);
+        // 500 shares, 1ms minimum interval (1_000_000 ns)
+        let mut sampler = VolumeBasedSampler::new(500, 1_000_000);
 
         sampler.should_sample(600, 1_000_000);
         assert_eq!(sampler.sample_count(), 1);
@@ -443,7 +460,8 @@ mod tests {
 
     #[test]
     fn test_volume_sampler_zero_volume_events() {
-        let mut sampler = VolumeBasedSampler::new(500, 1);
+        // 500 shares, 1ms minimum interval (1_000_000 ns)
+        let mut sampler = VolumeBasedSampler::new(500, 1_000_000);
 
         // Zero volume events (e.g., cancels) shouldn't trigger samples alone
         for i in 0..100 {
@@ -458,7 +476,8 @@ mod tests {
 
     #[test]
     fn test_volume_sampler_timestamp_overflow_safety() {
-        let mut sampler = VolumeBasedSampler::new(100, 1);
+        // 100 shares, 1ms minimum interval (1_000_000 ns)
+        let mut sampler = VolumeBasedSampler::new(100, 1_000_000);
 
         // First sample at max timestamp
         assert!(sampler.should_sample(100, u64::MAX));

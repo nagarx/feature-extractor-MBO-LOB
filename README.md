@@ -2,7 +2,7 @@
 
 High-performance feature extraction library for Limit Order Book (LOB) and Market-by-Order (MBO) data, designed for deep learning model training in high-frequency trading.
 
-[![Rust](https://img.shields.io/badge/rust-1.83%2B-blue.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.94%2B-blue.svg)](https://www.rust-lang.org/)
 [![Build Status](https://github.com/nagarx/feature-extractor-MBO-LOB/workflows/CI/badge.svg)](https://github.com/nagarx/feature-extractor-MBO-LOB/actions)
 
 ## Overview
@@ -12,11 +12,17 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 ### Key Features
 
 - **Fluent Builder API**: Simple, readable pipeline configuration
+- **Configuration-Driven Exports**: TOML/JSON configs for reproducible experiments
+- **Symbol-Agnostic**: Works for any instrument (NVDA, AAPL, etc.)
 - **Paper-Aligned Presets**: DeepLOB, TLOB, FI-2010, TransLOB, LiT configurations
 - **Auto-Computed Feature Count**: No manual calculation required
-- **Comprehensive Feature Set**: 200+ features across multiple categories
-- **Label Generation**: TLOB and DeepLOB labeling methods for supervised learning
+- **Comprehensive Feature Set**: Up to 98 features across multiple categories
+- **Trading Signals**: 14 research-backed signals (OFI, microprice, time regime)
+- **Label Generation**: TLOB, DeepLOB, Opportunity, and Triple Barrier labeling methods
 - **Multi-Horizon Labels**: Generate labels for multiple prediction horizons (FI-2010, DeepLOB presets)
+- **Labeling Strategies**: TLOB, Multi-Horizon, Opportunity, Triple Barrier (all ✅ Export integrated)
+- **Volatility-Adaptive Barriers**: Per-day barrier scaling based on realized volatility
+- **Experimental Features**: Opt-in 18 additional features (institutional, volatility, seasonality)
 - **TensorFormatter**: Model-specific tensor shapes (DeepLOB, HLOB, Flat, Image formats)
 - **Multiple Normalization Strategies**: Z-score, Rolling Z-score, Global Z-score, Bilinear
 - **Multi-Scale Sequences**: Fast/Medium/Slow temporal resolution
@@ -24,6 +30,7 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 - **Parallel Processing**: Multi-threaded batch processing with Rayon (optional)
 - **Graceful Cancellation**: Cancel long-running jobs from any thread
 - **Hot Store Support**: Pre-decompress data for ~30% faster processing
+- **CLI Export Tool**: `export_dataset` binary for command-line exports
 
 ## Quick Start
 
@@ -48,9 +55,11 @@ fn main() -> Result<()> {
     println!("Generated {} sequences", output.sequences_generated);
     println!("Features per snapshot: {}", output.sequences[0].features[0].len());
 
-    // Export to NumPy for Python/PyTorch
-    let exporter = NumpyExporter::new("output/");
+    // Export to NumPy for Python/PyTorch (with aligned labels)
+    let label_config = LabelConfig::short_term();
+    let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
     exporter.export_day("2025-02-03", &output)?;
+    // Creates: {day}_sequences.npy [N_seq, 100, 98], {day}_labels.npy [N_seq]
 
     Ok(())
 }
@@ -128,21 +137,102 @@ let pipeline = PipelineBuilder::new()
     .with_derived_features()
     .with_mbo_features()
     .build()?;
+
+// 98 features (40 raw + 8 derived + 36 MBO + 14 signals)
+let pipeline = PipelineBuilder::new()
+    .with_derived_features()
+    .with_mbo_features()
+    .with_trading_signals()
+    .build()?;
 ```
 
 ## Feature Categories
 
+| Category | Count | Indices | Description |
+|----------|-------|---------|-------------|
+| Raw LOB | 40 | 0-39 | Prices and volumes at 10 levels |
+| Derived | 8 | 40-47 | Mid-price, spread, imbalance, etc. |
+| MBO Features | 36 | 48-83 | Order flow dynamics |
+| Trading Signals | 14 | 84-97 | OFI, microprice, time regime, safety gates |
+| **Standard Total** | **98** | 0-97 | Full feature set with all standard options |
+| Experimental: institutional_v2 | 8 | 98-105 | Enhanced whale detection (opt-in) |
+| Experimental: volatility | 6 | 106-111 | Realized vol & regime (opt-in) |
+| Experimental: seasonality | 4 | 112-115 | Time-of-day features (opt-in) |
+| **Max Total** | **116** | 0-115 | All features including experimental |
+
+### Additional Feature Sets (standalone usage)
+
 | Category | Count | Description |
 |----------|-------|-------------|
-| Raw LOB | 40 | Prices and volumes at 10 levels |
-| Derived | 8 | Mid-price, spread, imbalance, etc. |
-| MBO Features | 36 | Order flow dynamics |
 | Order Flow | 8 | OFI, queue imbalance, trade flow |
 | Multi-Level OFI | 10 | OFI at each LOB level |
 | FI-2010 Time-Insensitive | 20 | Spread, mid-price, price diffs |
 | FI-2010 Time-Sensitive | 20 | Derivatives, intensity measures |
 | FI-2010 Depth | 40 | Accumulated volumes and diffs |
 | Market Impact | 8 | Slippage, execution quality |
+
+## Trading Signals (14 Features)
+
+Enable research-backed trading signals as **input features for ML models**:
+
+> **Design Philosophy**: These signals are **model-agnostic features**, not a trading system.
+> They provide high-frequency market microstructure information that models can learn to use.
+> Entry/exit thresholds are NOT hard-coded—let your model learn what works.
+
+```rust
+let pipeline = PipelineBuilder::new()
+    .lob_levels(10)
+    .with_derived_features()  // Required
+    .with_mbo_features()      // Required
+    .with_trading_signals()   // +14 signals (indices 84-97)
+    .build()?;
+
+assert_eq!(pipeline.config().features.feature_count(), 98);
+```
+
+### Use Cases
+
+| Use Case | Recommended Approach |
+|----------|----------------------|
+| **ML Training** | Use all 98 features; let model learn signal importance |
+| **Experimentation** | Compare different feature subsets |
+| **Data Quality** | Use `book_valid`, `mbo_ready` as input features for the model |
+| **Rule-Based** | Optional—see plan docs for threshold examples (may overfit) |
+
+### Signal Categories
+
+| Category | Signals | Purpose |
+|----------|---------|---------|
+| Safety/Quality | `book_valid`, `mbo_ready`, `invalidity_delta` | Data quality indicators |
+| Direction | `true_ofi`, `depth_norm_ofi`, `executed_pressure` | Order flow imbalance |
+| Conviction | `trade_asymmetry`, `cancel_asymmetry` | Flow confirmation |
+| Impact | `fragility_score`, `depth_asymmetry` | Market stability |
+| Timing | `signed_mp_delta_bps`, `time_regime` | Microstructure context |
+| Meta | `dt_seconds`, `schema_version` | Sample metadata |
+
+### Research Foundation
+
+| Signal | Research Paper |
+|--------|----------------|
+| `true_ofi` | Cont et al. (2014) "The Price Impact of Order Book Events" |
+| `depth_norm_ofi` | Cont et al. (2014) - OFI normalized by average depth |
+| `signed_mp_delta_bps` | Stoikov (2018) "The Micro-Price" |
+| `time_regime` | Cont et al. §3.3 - Intraday price impact patterns |
+
+### Time Regime
+
+Automatic UTC → Eastern Time conversion with DST handling:
+
+```rust
+use feature_extractor::features::signals::TimeRegime;
+
+// TimeRegime values:
+// 0 = Open (9:30-9:45 ET) - Highest volatility
+// 1 = Early (9:45-10:30 ET) - Settling period
+// 2 = Midday (10:30-15:30 ET) - Most stable
+// 3 = Close (15:30-16:00 ET) - Position squaring
+// 4 = Closed - Outside market hours
+```
 
 ## Sampling Strategies
 
@@ -178,6 +268,19 @@ let pipeline = PipelineBuilder::new()
 ```
 
 ## Label Generation
+
+The library provides multiple labeling strategies for different trading objectives:
+
+| Strategy | Export CLI | Use Case |
+|----------|------------|----------|
+| **TLOB** | ✅ Integrated | Trend following, DeepLOB reproduction |
+| **Multi-Horizon** | ✅ Integrated | FI-2010 benchmarks, multi-task learning |
+| **Opportunity** | ✅ Integrated | Big move detection, whale watching |
+| **Triple Barrier** | ✅ Integrated | Risk-managed trading, vol-adaptive barriers |
+| **Magnitude** | ⚠️ API only | Regression targets (export integration pending) |
+
+> **Note**: "API only" means the labeler works in Rust code but isn't yet available via `export_dataset` CLI.
+> See [LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md) for detailed documentation.
 
 ### TLOB Method (Recommended)
 
@@ -231,6 +334,27 @@ let config = MultiHorizonConfig::fi2010();
 
 // Generate labels from pipeline output
 let labels = output.generate_multi_horizon_labels(config)?;
+```
+
+#### TOML-Based Multi-Horizon Export
+
+For configuration-driven exports, use the `horizons` field in `[labels]`:
+
+```toml
+[labels]
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10
+threshold = 0.0008
+```
+
+**Output files for multi-horizon exports:**
+- `{day}_sequences.npy` - Shape: `(N, 100, 98)` float32
+- `{day}_labels.npy` - Shape: `(N, 5)` int8 (one column per horizon)
+- `{day}_horizons.json` - Horizon values: `[10, 20, 50, 100, 200]`
+- `{day}_metadata.json` - Includes `num_horizons`, `horizons` fields
+
+```rust
+// Using labels from multi-horizon export
 
 // Access per-horizon labels
 for horizon in labels.horizons() {
@@ -259,7 +383,19 @@ let config = MultiHorizonConfig::new(
     5,
     ThresholdStrategy::rolling_spread(100, 1.0, 0.002)
 );
+
+// Quantile-based (balanced classes, computed per-horizon)
+let config = MultiHorizonConfig::new(
+    vec![10, 20, 50, 100],
+    5,
+    ThresholdStrategy::quantile(0.33, 5000, 0.002)
+);
+// → ~33% Up, ~33% Down, ~34% Stable at each horizon
 ```
+
+**Note**: Quantile thresholds are computed **per-horizon** from the actual smoothed price change
+distribution `l(t,h,k)`. This ensures balanced class distribution even at longer horizons (h=100, h=200)
+where 1-step price changes are too small to represent multi-step movements.
 
 ## Tensor Formatting
 
@@ -291,24 +427,111 @@ let tensor = output.format_as(TensorFormat::Flat, FeatureMapping::standard_lob(1
 
 ## Export to NumPy
 
-### Single Day Export
+### Configuration-Driven Export (Recommended)
 
-```rust
-let exporter = NumpyExporter::new("output/");
-exporter.export_day("2025-02-03", &output)?;
+Use the `export_dataset` CLI tool with TOML configuration:
+
+```bash
+# Generate a template configuration
+cargo run --release --bin export_dataset -- --generate-config configs/my_dataset.toml
+
+# Edit the configuration file, then export
+cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_98feat.toml
 ```
 
-### Batch Export with Labels
+Sample configuration (`configs/nvda_98feat.toml`):
+
+```toml
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01  # Default for US stocks
+
+[data]
+input_dir = "../data/databento/NVDA"
+output_dir = "../data/exports/nvda_98feat"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2025-02-28"
+exclude_weekends = true
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true  # Full 98-feature set
+
+[sampling]
+strategy = "VolumeBased"
+target_volume = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+
+[labels]
+# Single-horizon (backward compatible)
+horizon = 50
+smoothing_window = 10
+threshold = 0.0008
+
+# OR Multi-horizon (comment out horizon above, uncomment below)
+# horizons = [10, 20, 50, 100, 200]
+# smoothing_window = 10
+# threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+num_threads = 8
+error_mode = "CollectErrors"
+```
+
+### Programmatic Export
+
+```rust
+use feature_extractor::export::DatasetConfig;
+
+// Load and validate configuration
+let config = DatasetConfig::load_toml("configs/nvda_98feat.toml")?;
+config.validate()?;
+
+// Convert to PipelineConfig
+let pipeline_config = config.to_pipeline_config()?;
+
+// Process files...
+```
+
+### Aligned Export with Labels (✅ RECOMMENDED)
+
+Use `AlignedBatchExporter` for correct 1:1 sequence-label alignment:
 
 ```rust
 let label_config = LabelConfig::short_term();
-let exporter = BatchExporter::new("output/", Some(label_config));
+let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
 
 for day in trading_days {
     pipeline.reset();  // Clear state between days
     let output = pipeline.process(&format!("data/{}.dbn.zst", day))?;
     exporter.export_day(&day, &output)?;
+    // Creates: {day}_sequences.npy [N, 100, 98], {day}_labels.npy [N]
 }
+```
+
+### Single Day Export (⚠️ DEPRECATED)
+
+> **⚠️ DEPRECATED**: `NumpyExporter` and `BatchExporter` use `to_flat_features()` which causes
+> 10x data inflation and label misalignment. Use `AlignedBatchExporter` instead.
+
+```rust
+#[deprecated]
+let exporter = NumpyExporter::new("output/");
+exporter.export_day("2025-02-03", &output)?;
 ```
 
 ## Normalization Strategies
@@ -448,24 +671,81 @@ cargo bench
 
 ## Testing
 
-```bash
-# Run all tests
-cargo test
+### Three-Tier Test System
 
-# Run library tests only
+| Tier | Scope | Runtime | When |
+|------|-------|---------|------|
+| **Default CI** | Unit (~730) + Levels 1-4 + contract + parallel tests | ~3-5 min | Every push |
+| **Extended** | Full-day multi-day deep validation (feature-gated) | ~30-60 min | On-demand |
+| **Benchmarks** | `cargo bench` | Variable | Manual |
+
+Tests compile with `opt-level = 2` (`[profile.test]` in Cargo.toml) for 5-10x speedup
+over debug mode, with zero accuracy impact on IEEE 754 f64 operations.
+All 98 features are fully deterministic across runs (BTreeMap-based order tracking ensures
+reproducible MBO feature computation). Golden snapshot and determinism tests enforce
+bit-exact matching at `contract::FLOAT_CMP_EPS` (1e-10) tolerance.
+
+### Commands
+
+```bash
+# Unit tests only (no data required, ~30s)
 cargo test --lib
 
-# Run with verbose output
-cargo test -- --nocapture
+# Full CI suite (unit + integration Levels 1-4, ~3-5 min)
+cargo test --features "parallel,databento"
 
-# Run parallel processing tests (requires --features parallel)
-cargo test --features parallel --test parallel_processing_tests
+# Level 1: Transformation tracing (50K events, formula-level correctness)
+cargo test --features "parallel,databento" --test transformation_tracing
+
+# Level 2: Golden snapshot (500-vector regression guard)
+cargo test --features "parallel,databento" --test golden_snapshot
+
+# Level 3: Full-day statistical invariants (1 canonical day)
+cargo test --features "parallel,databento" --test phase3_real_data_validation
+
+# Level 4: Export round-trip (synthetic, no data required)
+cargo test --test export_roundtrip
+
+# Contract validation (Rust constants vs pipeline_contract.toml)
+cargo test --features "parallel,databento" --test contract_validation_test
+
+# Extended validation (requires data/, NOT for CI)
+cargo test --features "parallel,databento,extended_validation" --release -- --test-threads=2
+
+# Verbose output
+cargo test -- --nocapture
 ```
+
+See [CODEBASE.md Section 15](CODEBASE.md#15-testing-patterns) for the full 4-Level Validation
+Pyramid specification, test infrastructure, and extended validation catalog.
 
 ## Documentation
 
 - [Usage Guide](docs/USAGE_GUIDE.md) - Comprehensive usage documentation
 - [Architecture](ARCHITECTURE.md) - Design documentation
+- [Full Data Pipeline](docs/full-data-pipeline.md) - End-to-end pipeline specification
+
+## Related Projects
+
+### lob-dataset-analyzer (Python)
+
+Python library for statistical analysis of exported datasets. Provides:
+
+- **Unified Analyzer Protocol**: Consistent interface across all analyzers with `BaseAnalyzer`, `BaseReportMixin`
+- **Full 98-Feature Analysis**: Analyze predictive power of ALL features (LOB + Derived + MBO + Signals)
+- **Centralized Configuration**: `FullAnalysisConfig` with JSON/YAML serialization for experiment tracking
+- **6 Predictive Metrics**: Pearson, Spearman, Mutual Info, F-score, Kruskal-Wallis H, Consensus Rank
+
+```python
+from lobanalyzer.analysis import PredictivePowerAnalyzer, AnalysisConfig
+
+# Analyze all 93 continuous features
+config = AnalysisConfig(data_dir=Path("data"), feature_groups=['all'])
+report = PredictivePowerAnalyzer(config=config).run()
+print(report.summary())  # Human-readable output
+```
+
+See `../lob-dataset-analyzer/README.md` for full documentation.
 
 ## Research Papers
 
@@ -476,7 +756,8 @@ This library implements features from:
 - FI-2010: Benchmark Dataset for Mid-Price Forecasting
 - LOBench: Representation Learning of Limit Order Book
 - ViT-LOB: Vision Transformer for Stock Price Trend Prediction
-- Price Impact: The Price Impact of Order Book Events (Cont et al.)
+- **Price Impact: The Price Impact of Order Book Events (Cont et al. 2014)** - OFI signals
+- **Micro-Price: A High Frequency Estimator of Future Prices (Stoikov 2018)** - Microprice delta
 - Queue Imbalance: Queue Imbalance as a One-Tick-Ahead Price Predictor
 
 ## License

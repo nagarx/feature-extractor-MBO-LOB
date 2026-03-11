@@ -21,7 +21,8 @@ feature_extractor/
 │   ├── prelude.rs                # Convenience re-exports for common use
 │   │
 │   ├── builder.rs                # PipelineBuilder fluent API
-│   ├── config.rs                 # Pipeline configuration
+│   ├── config.rs                 # Pipeline configuration (MultiScaleSamplingConfig)
+│   ├── contract.rs               # Pipeline contract constants (SCHEMA_VERSION, eps)
 │   ├── pipeline.rs               # High-level pipeline orchestrator
 │   ├── batch.rs                  # Parallel batch processing (feature: parallel)
 │   │
@@ -31,19 +32,45 @@ feature_extractor/
 │   │   └── presets.rs           # Paper-aligned presets (DeepLOB, TLOB, FI-2010, etc.)
 │   │
 │   ├── features/                 # Feature extraction (raw computation only)
-│   │   ├── mod.rs               # FeatureExtractor, extract_into(), extract_arc()
-│   │   ├── lob_features.rs      # Raw LOB features (prices, volumes)
-│   │   ├── derived_features.rs  # Derived analytics (spread, microprice, etc.)
+│   │   ├── mod.rs               # Thin re-export layer: FeatureConfig, FeatureExtractor, SignalContext
+│   │   ├── config.rs            # FeatureConfig struct, builder, validation, feature_count()
+│   │   ├── extractor.rs         # FeatureExtractor: orchestrates LOB/MBO/signal extraction
+│   │   ├── lob_features.rs      # Raw LOB features (prices, volumes) - 40 features
+│   │   ├── derived_features.rs  # Derived analytics (spread, microprice, etc.) - 8 features
+│   │   ├── mbo_features/          # MBO-specific features - 36 features (directory module)
+│   │   │   ├── mod.rs             # MboAggregator orchestrator, public API, integration tests
+│   │   │   ├── event.rs           # MboEvent struct + conversions
+│   │   │   ├── window.rs          # MboWindow rolling buffer (O(1) incremental stats)
+│   │   │   ├── order_tracker.rs   # OrderInfo + OrderTracker (lifecycle state, eviction)
+│   │   │   ├── flow_features.rs   # 12 order flow features (indices 48-59)
+│   │   │   ├── size_features.rs   # 8 size distribution features (indices 60-67)
+│   │   │   ├── queue_features.rs  # 6 queue & depth features (indices 68-73)
+│   │   │   ├── institutional_features.rs  # 4 institutional detection (indices 74-77)
+│   │   │   └── lifecycle_features.rs      # 6 core MBO metrics (indices 78-83)
+│   │   ├── signals/             # Trading signals (OFI, TimeRegime, etc.) - 14 features (directory module)
+│   │   │   ├── mod.rs           # SignalContext, re-exports
+│   │   │   ├── time_regime.rs   # TimeRegime enum, compute_time_regime(), ET offset
+│   │   │   ├── book_valid.rs    # is_book_valid(), is_book_valid_from_lob()
+│   │   │   ├── ofi.rs           # OfiComputer, OfiSample, streaming OFI accumulation
+│   │   │   ├── compute.rs       # SignalVector, compute_signals()
+│   │   │   └── indices.rs       # Signal index constants (TRUE_OFI..SCHEMA_VERSION)
 │   │   ├── order_flow.rs        # OFI, queue imbalance, trade flow
 │   │   ├── fi2010.rs            # FI-2010 handcrafted features (80)
 │   │   ├── market_impact.rs     # Market impact estimation (slippage, VWAP)
-│   │   └── mbo_features.rs      # MBO-specific features
+│   │   └── experimental/        # Opt-in experimental features (+18, indices 98-115)
+│   │       ├── mod.rs           # ExperimentalConfig, group registry
+│   │       ├── institutional_v2.rs  # Enhanced whale detection (8 features)
+│   │       ├── volatility.rs    # Realized vol & regime (6 features)
+│   │       └── seasonality.rs   # Time-of-day features (4 features)
 │   │
 │   ├── labeling/                 # Label generation for supervised learning
-│   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats
-│   │   ├── tlob.rs              # TLOB labeling (decoupled h/k)
-│   │   ├── deeplob.rs           # DeepLOB labeling (k=h)
-│   │   └── multi_horizon.rs     # Multi-horizon labels (FI-2010, DeepLOB presets)
+│   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats, re-exports
+│   │   ├── tlob.rs              # TLOB labeling (decoupled h/k) - ✅ Export integrated
+│   │   ├── deeplob.rs           # DeepLOB labeling (k=h) - ✅ Export integrated
+│   │   ├── multi_horizon.rs     # Multi-horizon labels + ThresholdStrategy (Fixed/RollingSpread/Quantile/TlobDynamic) - ✅ Export integrated
+│   │   ├── opportunity.rs       # Opportunity/big-move detection - ✅ Export integrated
+│   │   ├── triple_barrier.rs    # Triple Barrier (de Prado) - ✅ Export integrated (Schema 2.4+)
+│   │   └── magnitude.rs         # Magnitude/regression targets - ⚠️ API only, export pending
 │   │
 │   ├── preprocessing/            # Normalization and sampling
 │   │   ├── mod.rs               # Module exports
@@ -59,10 +86,32 @@ feature_extractor/
 │   │   └── multiscale.rs        # MultiScaleWindow, push_arc()
 │   │
 │   ├── validation.rs             # Feature validation (crossed quotes, NaN checks)
-│   ├── export/                   # Export module
-│   │   ├── mod.rs               # NumpyExporter, BatchExporter
-│   │   └── tensor_format.rs     # TensorFormatter, TensorFormat, TensorOutput
-│   └── export_aligned.rs         # Aligned batch export
+│   ├── export/                   # Export configuration
+│   │   ├── mod.rs               # Module declarations, config re-exports
+│   │   ├── config/              # NormalizationConfig, DatasetConfig, FeatureNormStrategy
+│   │   ├── tensor_format.rs     # TensorFormatter, TensorFormat, TensorOutput
+│   │   └── dataset_config.rs    # DatasetConfig, LabelingStrategy, ExportLabelConfig
+│   └── export_aligned/           # Production exporter (modular directory)
+│       ├── mod.rs               # AlignedBatchExporter struct, builder, dispatch, export_day_common()
+│       ├── types.rs             # LabelEncoding, NormalizationStrategy, NormalizationParams, LabelingResult
+│       ├── metadata.rs          # Provenance, normalization, processing metadata builders
+│       ├── alignment.rs         # Sequence-label alignment (single + multi-horizon)
+│       ├── validation.rs        # Label validation, spread verification, class balance
+│       ├── normalization.rs     # Feature normalization engine (per-group strategies)
+│       ├── npy_export.rs        # NPY file writing (sequences, labels, tensor formats)
+│       └── strategies/          # Per-strategy label generation → LabelingResult
+│           ├── tlob.rs          # Single + multi-horizon TLOB
+│           ├── opportunity.rs   # Opportunity/big-move detection
+│           └── triple_barrier.rs # Triple Barrier + volatility scaling
+│
+├── tools/                        # CLI tools
+│   ├── export_dataset.rs        # Configuration-driven export CLI
+│   └── calibrate_triple_barrier.py  # Per-day volatility analysis & barrier calibration
+│
+├── configs/                      # Sample configuration files
+│   ├── nvda_98feat.toml         # 98-feature NVIDIA export config
+│   ├── nvda_84feat_baseline.toml # 84-feature baseline config
+│   └── template_multi_symbol.toml # Multi-symbol template
 │
 ├── benches/
 │   └── feature_extraction.rs     # Criterion benchmarks
@@ -79,7 +128,12 @@ feature_extractor/
 │   └── ...
 │
 └── docs/
-    └── USAGE_GUIDE.md            # Comprehensive usage documentation
+    ├── USAGE_GUIDE.md            # Comprehensive usage documentation
+    ├── FEATURE_REFERENCE.md      # Authoritative 116-feature index (formulas, units, ranges)
+    ├── TEST_INVENTORY.md         # Complete test map (389 tests, 39 files, coverage)
+    ├── CONFIG_REFERENCE.md       # DatasetConfig schema + TOML config inventory
+    ├── LABELING_STRATEGIES.md    # All 6 labeling strategies with formulas
+    └── full-data-pipeline.md     # End-to-end pipeline data flow documentation
 ```
 
 ## Key Components
@@ -108,7 +162,9 @@ Feature count is automatically computed:
 | Raw LOB only | 40 | 10 levels × 4 |
 | + Derived | 48 | 40 + 8 |
 | + MBO | 76 | 40 + 36 |
-| + Both | 84 | 40 + 8 + 36 |
+| + Derived + MBO | 84 | 40 + 8 + 36 |
+| + Derived + MBO + Signals | 98 | 40 + 8 + 36 + 14 |
+| + Experimental (all groups) | 116 | 98 + 8 + 6 + 4 |
 
 ### 3. Streaming Sequence Generation
 
@@ -138,19 +194,27 @@ use feature_extractor::prelude::*;
 // - TensorFormatter, TensorFormat, TensorOutput, FeatureMapping
 // - All normalizers
 // - All mbo-lob-reconstructor types (LobReconstructor, DbnLoader, etc.)
+// - Trading signals: OfiComputer, OfiSample, TimeRegime, compute_signals
 ```
 
 ## Feature Categories
 
+| Category | Count | Indices | Source | Description |
+|----------|-------|---------|--------|-------------|
+| Raw LOB | 40 | 0-39 | All papers | (P_ask, V_ask, P_bid, V_bid) × 10 levels |
+| Derived | 8 | 40-47 | TLOB, DeepLOB | Microprice, spread, imbalance |
+| MBO Features | 36 | 48-83 | MBO Paper | Order lifecycle patterns (directory module: `mbo_features/`) |
+| Trading Signals | 14 | 84-97 | Cont et al., Stoikov | OFI, microprice, time regime, safety gates |
+| **Total (full)** | **98** | 0-97 | - | All features enabled |
+
+### Additional Feature Sets (standalone modules)
+
 | Category | Count | Source | Description |
 |----------|-------|--------|-------------|
-| Raw LOB | 40 | All papers | (P_ask, V_ask, P_bid, V_bid) × 10 levels |
-| Derived | 8 | TLOB, DeepLOB | Microprice, spread, imbalance |
 | Order Flow | 8 | Cont et al. | OFI, queue imbalance, trade flow |
 | Multi-Level OFI | 10 | LOB-feature-analysis | OFI at each LOB level |
 | FI-2010 | 80 | FI-2010 benchmark | Handcrafted features |
 | Market Impact | 8 | OrderBook-rs | Slippage, VWAP |
-| MBO Features | 36 | MBO Paper | Order lifecycle patterns |
 
 ## Normalization Strategies
 
@@ -168,13 +232,17 @@ use feature_extractor::prelude::*;
 pub enum Preset {
     DeepLOB,   // 40 raw + Z-score, seq_len=100
     TLOB,      // 40 raw + bilinear normalization
-    FI2010,    // 120 features (40 raw + 80 handcrafted)
+    FI2010,    // 48 features (40 raw + 8 derived) - NOTE: fi2010.rs module has 80 additional features but not yet integrated
     TransLOB,  // 40 raw + multi-horizon
     LiT,       // 80 features (20 levels × 4)
     Minimal,   // 40 raw LOB only
-    Full,      // All available features (84)
+    Full,      // All available features: 84 via Preset (40 raw + 8 derived + 36 MBO); add .with_trading_signals() for 98
 }
 ```
+
+> **Note on FI-2010 Preset**: The current `Preset::FI2010` provides only 48 features (40 raw + 8 derived).
+> The standalone `fi2010.rs` module implements 80 additional handcrafted features but is NOT yet integrated
+> into `FeatureConfig`. See `TODO.md` for tracking integration status.
 
 ## Performance Characteristics
 
@@ -198,11 +266,13 @@ pub enum Preset {
 
 ## Test Coverage
 
-- **300+ unit tests** covering all modules
-- **100+ integration tests** with real NVIDIA MBO data
-- **50+ doc tests** with working examples
+- **~730 unit tests** (`cargo test --lib`) covering all modules
+- **389 integration tests** across 39 test files with real NVIDIA MBO data
+- **4-level validation pyramid**: transformation tracing, golden snapshot, full-day stats, export round-trip
 - **Comprehensive validation**: 151M+ messages, 21 days data
 - **99.42% price accuracy** against MBP-10 ground truth
+- All 98 stable features fully deterministic (BTreeMap-backed OrderTracker)
+- Golden snapshot and determinism tests enforce bit-exact matching at `contract::FLOAT_CMP_EPS` (1e-10)
 
 ## Dependencies
 
@@ -237,11 +307,52 @@ pub enum Preset {
 - [x] **Graceful cancellation** (CancellationToken)
 - [x] **PriceLevel O(1) caching** (in mbo-lob-reconstructor)
 - [x] **Multi-Horizon Label Generator** (FI-2010, DeepLOB, TLOB presets)
+- [x] **ExportLabelConfig Multi-Horizon** (TOML `horizons` field for config-driven exports)
 - [x] **TensorFormatter** (DeepLOB, HLOB, Flat, Image formats)
 - [x] **Pipeline Integration** (format_sequences, generate_multi_horizon_labels)
 - [x] **Hot Store Integration** (decompressed file caching, ~30% faster)
+- [x] **Trading Signals Module** (14 signals: OFI, microprice, time regime)
+- [x] **OfiComputer** (streaming OFI with warmup tracking per Cont et al.)
+- [x] **TimeRegime** (UTC→ET conversion with DST handling)
+- [x] **Safety Gates** (book_valid, mbo_ready)
+- [x] **Comprehensive Signal Validation** (1.7M+ samples, NVIDIA real data)
+- [x] **DatasetConfig Export System** (symbol-agnostic, configuration-driven exports)
+- [x] **Export CLI Tool** (`export_dataset` binary for TOML-driven exports)
+- [x] **Sample Configurations** (NVDA 98-feat, 84-feat baseline, multi-symbol templates)
+
+### Recently Completed
+- [x] **Triple Barrier Export Integration** - Full integration into `AlignedBatchExporter` (Schema 2.4+)
+- [x] **Per-Horizon Barriers** - Different profit/stop-loss per horizon (Schema 3.2+)
+- [x] **Volatility-Adaptive Scaling** - Per-day barrier scaling based on realized volatility (Schema 3.3+)
+- [x] **LabelEncoding** - Unified label validation contract across all strategies
+- [x] **LabelingStrategy Enum** - TOML `strategy` field for strategy selection
+- [x] **Experimental Features Module** - 18 opt-in features (institutional_v2, volatility, seasonality)
+- [x] **Calibration Tool** - `tools/calibrate_triple_barrier.py` for per-day volatility analysis
 
 ### Pending
+- [ ] **Magnitude Export Integration** - Integrate `MagnitudeGenerator` for regression targets
 - [ ] crates.io publication
-- [ ] Statistical validation tests (OFI vs ΔP correlation)
 - [ ] Additional paper presets (ViT-LOB)
+- [ ] Weighted MLOFI (depth-aware OFI scalar per Xu et al.)
+
+## Related Projects
+
+### LOB-Dataset-Analyzer (Python)
+
+Python library for statistical analysis of exported data. See `../lob-dataset-analyzer/` for:
+
+- **Unified Analyzer Protocol**: Consistent interface (`BaseAnalyzer`, `BaseReportMixin`) for all analysis
+- **Full 98-Feature Analysis**: Analyze predictive power of ALL features (not just signals)
+- **Centralized Configuration**: `FullAnalysisConfig` with JSON/YAML serialization for experiment tracking
+- **Memory-Efficient Streaming**: Process multi-day datasets one day at a time
+
+**Key Analyzers**:
+| Analyzer | Purpose |
+|----------|---------|
+| `PredictivePowerAnalyzer` | 6-metric analysis per feature (Pearson, Spearman, MI, F-score, Kruskal-H, consensus) |
+| `SignalCorrelationAnalyzer` | Cross-category, multi-horizon correlation analysis |
+| `TemporalDynamicsAnalyzer` | Autocorrelation, lead-lag, predictive decay |
+| `GeneralizationAnalyzer` | Walk-forward validation, stability scoring |
+| `MultiHorizonAnalyzer` | Horizon-aware feature ranking |
+
+Documentation: `../lob-dataset-analyzer/CODEBASE.md`, `../lob-dataset-analyzer/README.md`

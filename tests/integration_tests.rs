@@ -15,6 +15,9 @@
 //! 8. **Performance**: Throughput and latency
 //! 9. **Numerical Accuracy**: Financial precision verification
 
+mod common;
+
+use feature_extractor::contract;
 use feature_extractor::{
     features::fi2010::{FI2010Config, FI2010Extractor},
     features::market_impact::{estimate_buy_impact, estimate_sell_impact},
@@ -31,17 +34,11 @@ use std::path::Path;
 use std::time::Instant;
 
 /// Path to NVIDIA MBO data
-const NVDA_DATA_DIR: &str =
-    "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30";
+const NVDA_DATA_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
 
 /// Get path to a specific day's data file
 fn get_data_file(date: &str) -> String {
     format!("{NVDA_DATA_DIR}/xnas-itch-{date}.mbo.dbn.zst")
-}
-
-/// Check if test data is available
-fn data_available() -> bool {
-    Path::new(NVDA_DATA_DIR).exists()
 }
 
 // =============================================================================
@@ -128,10 +125,7 @@ fn price_to_dollars(price: i64) -> f64 {
 
 #[test]
 fn test_mbo_lob_reconstructor_integration() {
-    if !data_available() {
-        eprintln!("Skipping test: NVDA data not available at {NVDA_DATA_DIR}");
-        return;
-    }
+    skip_if_no_data!();
 
     println!("\n=== MBO-LOB Reconstructor Integration Test ===\n");
 
@@ -208,9 +202,7 @@ fn test_mbo_lob_reconstructor_integration() {
 
 #[test]
 fn test_lob_state_consistency() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 500);
     if states.is_empty() {
@@ -256,9 +248,7 @@ fn test_lob_state_consistency() {
 
 #[test]
 fn test_raw_lob_feature_extraction() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 500);
     if states.is_empty() {
@@ -345,9 +335,7 @@ fn test_raw_lob_feature_extraction() {
 
 #[test]
 fn test_derived_features_accuracy() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 200);
     if states.is_empty() {
@@ -361,7 +349,7 @@ fn test_derived_features_accuracy() {
         tick_size: 0.01,
         include_derived: true,
         include_mbo: false,
-        mbo_window_size: 1000,
+        ..Default::default()
     };
     let extractor = FeatureExtractor::with_config(config);
 
@@ -443,9 +431,7 @@ fn test_derived_features_accuracy() {
 
 #[test]
 fn test_fi2010_features_comprehensive() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 500);
     if states.is_empty() {
@@ -541,9 +527,7 @@ fn test_fi2010_features_comprehensive() {
 
 #[test]
 fn test_order_flow_features() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 1000);
     if states.is_empty() {
@@ -606,9 +590,7 @@ fn test_order_flow_features() {
 
 #[test]
 fn test_multi_level_ofi() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 1000);
     if states.is_empty() {
@@ -653,9 +635,7 @@ fn test_multi_level_ofi() {
 
 #[test]
 fn test_zscore_normalization() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 1000);
     if states.is_empty() {
@@ -720,9 +700,7 @@ fn test_zscore_normalization() {
 
 #[test]
 fn test_global_zscore_normalization() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 200);
     if states.is_empty() {
@@ -745,7 +723,7 @@ fn test_global_zscore_normalization() {
         // Verify mean is ~0
         let mean: f64 = normalized.iter().sum::<f64>() / normalized.len() as f64;
         assert!(
-            mean.abs() < 1e-10,
+            mean.abs() < contract::FLOAT_CMP_EPS,
             "Global Z-score mean should be ~0: {mean}"
         );
 
@@ -766,9 +744,7 @@ fn test_global_zscore_normalization() {
 
 #[test]
 fn test_bilinear_normalization() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 200);
     if states.is_empty() {
@@ -811,9 +787,7 @@ fn test_bilinear_normalization() {
 
 #[test]
 fn test_rolling_zscore_normalization() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 2000);
     if states.len() < 500 {
@@ -864,9 +838,7 @@ fn test_rolling_zscore_normalization() {
 
 #[test]
 fn test_per_feature_normalization() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 500);
     if states.is_empty() {
@@ -919,9 +891,7 @@ fn test_per_feature_normalization() {
 
 #[test]
 fn test_lob_validation() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 1000);
     if states.is_empty() {
@@ -971,9 +941,7 @@ fn test_lob_validation() {
 
 #[test]
 fn test_feature_validation() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 200);
     if states.is_empty() {
@@ -1008,9 +976,7 @@ fn test_feature_validation() {
 
 #[test]
 fn test_timestamp_monotonicity() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 1000);
     if states.is_empty() {
@@ -1054,9 +1020,7 @@ fn test_timestamp_monotonicity() {
 
 #[test]
 fn test_market_impact_estimation() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 200);
     if states.is_empty() {
@@ -1117,9 +1081,7 @@ fn test_market_impact_estimation() {
 
 #[test]
 fn test_extraction_performance() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 10000);
     if states.len() < 1000 {
@@ -1180,9 +1142,7 @@ fn test_extraction_performance() {
 
 #[test]
 fn test_volatility_estimation() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 2000);
     if states.len() < 500 {
@@ -1226,9 +1186,7 @@ fn test_volatility_estimation() {
 
 #[test]
 fn test_numerical_precision() {
-    if !data_available() {
-        return;
-    }
+    skip_if_no_data!();
 
     let states = load_lob_states("20250203", 100);
     if states.is_empty() {
@@ -1283,13 +1241,7 @@ fn test_numerical_precision() {
 
 #[test]
 fn test_full_pipeline_summary() {
-    if !data_available() {
-        eprintln!("\n========================================");
-        eprintln!("SKIPPED: NVDA data not available");
-        eprintln!("Expected path: {NVDA_DATA_DIR}");
-        eprintln!("========================================\n");
-        return;
-    }
+    skip_if_no_data!();
 
     println!("\n========================================");
     println!("Feature Extractor Integration Test Suite");

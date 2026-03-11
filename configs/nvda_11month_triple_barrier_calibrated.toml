@@ -1,0 +1,198 @@
+# =============================================================================
+# NVDA 11-Month Triple Barrier Dataset Configuration (CALIBRATED)
+# =============================================================================
+#
+# Complete NVIDIA dataset: Feb 3, 2025 → Jan 6, 2026 (233 trading days)
+# with Triple Barrier labeling using DATA-DRIVEN barrier thresholds.
+#
+# Schema version: 3.2 (98 features, per-horizon Triple Barrier labels)
+#
+# CALIBRATION METHODOLOGY
+# =======================
+# Barriers were calibrated using tools/calibrate_triple_barrier.py to achieve
+# approximately balanced class distribution across all market regimes:
+#
+#   Target distribution: ~25% ProfitTarget, ~25% StopLoss, ~50% Timeout
+#
+# Key insight: Price movements scale with time (volatility ∝ sqrt(time)),
+# so each horizon requires different barrier thresholds.
+#
+# CALIBRATION DATA:
+#   - Source: Validation set (Oct-Nov 2025, lower volatility period)
+#   - This ensures barriers work in BOTH high and low volatility regimes
+#   - Validation set H50 median |return|: 22.98 bps
+#   - Training set H50 median |return|: 27.47 bps (25% higher)
+#
+# WHY PER-HORIZON BARRIERS?
+# =========================
+# Using the SAME barriers for all horizons causes severe class imbalance:
+#   - H50 with 50bps PT: 98% Timeout (too tight)
+#   - H200 with 50bps PT: 70% Timeout (better but still imbalanced)
+#
+# Per-horizon barriers solve this by scaling with the horizon's volatility.
+#
+# RESEARCH REFERENCE:
+# López de Prado, M. (2018). "Advances in Financial Machine Learning", Chapter 3.
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- \
+#       --config configs/nvda_11month_triple_barrier_calibrated.toml
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA 11-Month Triple Barrier Dataset (Calibrated)"
+description = "Full 233-day dataset with per-horizon calibrated Triple Barrier labeling"
+version = "3.2.0"
+tags = [
+    "nvda",
+    "98-features",
+    "triple-barrier",
+    "calibrated",
+    "per-horizon-barriers",
+    "balanced-classes",
+    "production",
+]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+output_dir = "../data/exports/nvda_11month_triple_barrier_calibrated"
+hot_store_dir = "../data/hot_store"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+
+exclude_dates = [
+    "2025-01-20",  # MLK Day
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+    "2025-11-27",  # Thanksgiving
+    "2025-12-25",  # Christmas
+    "2026-01-01",  # New Year
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+# =============================================================================
+# CALIBRATED TRIPLE BARRIER CONFIGURATION
+# =============================================================================
+#
+# Per-horizon barrier thresholds calibrated for ~25% PT, ~25% SL, ~50% TO
+#
+# Calibration based on validation set price movement percentiles:
+#   - H50:  median |return| = 22.98 bps → P50 threshold
+#   - H100: median |return| = 32.07 bps → P50 threshold  
+#   - H200: median |return| = 48.61 bps → P50 threshold
+#
+# Barriers scaled by √(risk_reward_ratio) = √1.5 ≈ 1.22 for asymmetric R:R
+#
+#     Price
+#       ▲  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  Upper Barrier (Profit Target)
+#       │                            ↑ Varies by horizon
+#       │  ●─────────●───────────────●
+#       │  Entry    │                │  ← Price path
+#       │           │                │
+#       ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│  Lower Barrier (Stop-Loss)
+#                                    │     ↓ Varies by horizon
+#                   │◄───────────────►│
+#                     max_horizon
+#
+# Risk/Reward = 1.5:1 → Need ~40% win rate to break even
+
+[labels]
+strategy = "triple_barrier"
+
+# Horizons (vertical barriers) in ticks
+max_horizons = [50, 100, 200]
+
+# Global defaults (used as fallback, overridden by per-horizon values)
+profit_target_pct = 0.0028
+stop_loss_pct = 0.0019
+
+# =============================================================================
+# PER-HORIZON CALIBRATED BARRIERS (Schema 3.2+)
+# =============================================================================
+#
+# These arrays MUST have the same length as max_horizons.
+# Values are calibrated to achieve balanced class distribution.
+#
+# Calibration command used:
+#   python tools/calibrate_triple_barrier.py \
+#       --data-dir ../data/exports/nvda_11month_triple_barrier \
+#       --horizons 50 100 200 \
+#       --target-pt-rate 0.25 --target-sl-rate 0.25 \
+#       --risk-reward 1.5
+
+# Per-horizon profit targets (basis points → decimal)
+# H50=28bps, H100=39bps, H200=59bps
+profit_targets = [0.0028, 0.0039, 0.0059]
+
+# Per-horizon stop losses (basis points → decimal)
+# H50=19bps, H100=26bps, H200=40bps  
+stop_losses = [0.0019, 0.0026, 0.0040]
+
+# Timeout = "don't trade" signal (safest for risk management)
+timeout_strategy = "label_as_timeout"
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = true
+
+# =============================================================================
+# EXPECTED OUTCOMES WITH CALIBRATED BARRIERS
+# =============================================================================
+#
+# Expected class distribution per horizon:
+#
+# | Horizon | Profit Target | Stop Loss | Timeout |
+# |---------|---------------|-----------|---------|
+# | H50     | ~20-25%       | ~25-30%   | ~50%    |
+# | H100    | ~20-25%       | ~25-30%   | ~50%    |
+# | H200    | ~20-25%       | ~25-30%   | ~50%    |
+#
+# Risk/Reward ratio: 1.5:1 across all horizons
+# Break-even win rate: ~40%
+#
+# TRAINING RECOMMENDATION:
+#   - Model should learn to AVOID predicting class 1 (Timeout)
+#   - Only trade when model predicts ProfitTarget with high confidence
+#   - Expected model accuracy should be ~45-55% (NOT 98%!)
+#   - val_profittarget_precision > 55% indicates learning
+#
+# RED FLAGS (model not learning):
+#   - val_accuracy ≈ Timeout rate (just predicting majority class)
+#   - All predictions are Timeout
+#   - PT precision = 0 or undefined
+#
+# =============================================================================

@@ -88,6 +88,7 @@ fn test_pipeline_reset() {
 }
 
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_pipeline_output_to_flat_features() {
     // Create mock sequences (using Arc for zero-copy)
     let sequences = vec![
@@ -193,7 +194,7 @@ fn test_pipeline_config_serialization_round_trip() {
             tick_size: 0.001,
             include_derived: true,
             include_mbo: false,
-            mbo_window_size: 1000,
+            ..Default::default()
         },
         sequence: SequenceConfig {
             window_size: 200,
@@ -238,6 +239,7 @@ fn test_pipeline_config_serialization_round_trip() {
 }
 
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_pipeline_handles_empty_output() {
     let output = PipelineOutput {
         sequences: vec![],
@@ -345,6 +347,7 @@ fn test_pipeline_numerical_accuracy() {
 }
 
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_large_sequence_handling() {
     // Test with many sequences (using Arc for zero-copy)
     let mut sequences = Vec::new();
@@ -386,6 +389,7 @@ fn test_pipeline_feature_count_consistency() {
             include_derived: true,
             include_mbo: false,
             mbo_window_size: 0,
+            ..Default::default()
         },
         sequence: SequenceConfig {
             window_size: 100,
@@ -497,7 +501,7 @@ fn test_zero_allocation_pipeline_correctness() {
 /// Test that multi-scale configuration works with Arc-based sharing.
 #[test]
 fn test_multiscale_arc_sharing_configuration() {
-    use feature_extractor::config::MultiScaleConfig;
+    use feature_extractor::config::MultiScaleSamplingConfig;
 
     let mut config = PipelineConfig::default();
     config.features.lob_levels = 10;
@@ -512,7 +516,7 @@ fn test_multiscale_arc_sharing_configuration() {
         volume_threshold: None,
         min_time_interval_ns: None,
         adaptive: None,
-        multiscale: Some(MultiScaleConfig {
+        multiscale: Some(MultiScaleSamplingConfig {
             enabled: true,
             fast_window: 10,
             medium_window: 20,
@@ -623,6 +627,7 @@ fn test_sequence_arc_feature_storage() {
 
 /// Test that PipelineOutput.to_flat_features() works correctly with Arc storage.
 #[test]
+#[allow(deprecated)] // Testing deprecated to_flat_features for backward compatibility
 fn test_pipeline_output_flat_features_with_arc() {
     // Create mock sequences with Arc features
     let seq1 = Sequence {

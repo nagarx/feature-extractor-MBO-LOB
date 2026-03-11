@@ -1,0 +1,195 @@
+# NVDA Extended Dataset - Multi-Horizon TLOB Configuration
+#
+# Extended date range: Feb 3, 2025 to Jan 6, 2026 (~233 trading days)
+# This configuration combines the original dataset with new data for
+# more robust training with out-of-sample validation.
+#
+# IMPORTANT: This uses TLOB labeling (smoothed average trend), NOT Triple Barrier.
+# Triple Barrier export is not yet integrated into the aligned export pipeline.
+#
+# Prerequisites:
+#   1. Ensure all data files are downloaded and complete
+#   2. Decompress to hot store:
+#      cd MBO-LOB-reconstructor
+#      cargo run --release --bin decompress_to_hot_store -- \
+#          --input ../data/NVDA_2025-02-01_to_2025-09-30 \
+#          --output ../data/hot_store
+#      cargo run --release --bin decompress_to_hot_store -- \
+#          --input ../data/NVDA_2025-09-29_to_2026-01-08 \
+#          --output ../data/hot_store
+#
+# Usage:
+#   cd feature-extractor-MBO-LOB
+#   cargo run --release --features parallel --bin export_dataset -- \
+#       --config configs/nvda_extended_multi_horizon.toml
+
+[experiment]
+name = "NVDA Extended Multi-Horizon v3.0"
+description = "Extended dataset (Feb 2025 - Jan 2026) with multi-horizon TLOB labels"
+version = "3.0.0"
+tags = [
+    "nvda",
+    "98-features",
+    "multi-horizon",
+    "extended-dataset",
+    "tlob",
+]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+tick_size = 0.01
+
+[data]
+# Use hot store for ~30% faster processing
+# Hot store contains decompressed files from BOTH dataset directories
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_extended_multi_horizon"
+
+# Note: input_dir is not used when hot_store_dir is provided
+# The hot store should contain all files from both date ranges
+input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+
+[dates]
+# Extended date range: Feb 3, 2025 to Jan 6, 2026
+# Original: Feb 3 - Sept 29, 2025 (~165 days)
+# New: Sept 30, 2025 - Jan 6, 2026 (~70 days, excluding overlap)
+# Total: ~233 trading days
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+
+# US market holidays to exclude (2025-2026)
+# Source: NYSE/NASDAQ holiday calendar
+exclude_dates = [
+    # 2025 holidays
+    "2025-02-17",  # Presidents Day
+    "2025-04-18",  # Good Friday
+    "2025-05-26",  # Memorial Day
+    "2025-06-19",  # Juneteenth
+    "2025-07-04",  # Independence Day
+    "2025-09-01",  # Labor Day
+    "2025-11-27",  # Thanksgiving Day
+    "2025-12-25",  # Christmas Day
+    # 2026 holidays
+    "2026-01-01",  # New Year's Day
+]
+
+[features]
+# Full 98-feature set for maximum signal extraction
+lob_levels = 10          # 10 levels × 4 = 40 base features
+include_derived = true   # +8 derived features (spread, mid_price, etc.)
+include_mbo = true       # +36 MBO features (order flow, queue dynamics)
+include_signals = true   # +14 trading signals (OFI, VPIN, etc.)
+mbo_window_size = 1000   # Rolling statistics window
+
+[sampling]
+strategy = "event_based"
+event_count = 1000       # Sample every 1000 events (~1 sample per second in active markets)
+
+[sequence]
+window_size = 100        # 100 snapshots per sequence
+stride = 10              # 90% overlap between sequences
+max_buffer_size = 50000  # Memory limit for sequence buffer
+
+# =============================================================================
+# MULTI-HORIZON TLOB LABELING
+# =============================================================================
+#
+# TLOB (Trend LOB) labels based on smoothed average mid-price change.
+# Multi-horizon enables training models that can predict at different timescales.
+#
+# Label formula (per horizon h):
+#   m_smooth(t+h) = (1/k) * Σ_{i=0}^{k-1} mid_price(t+h-i)
+#   return = (m_smooth(t+h) - mid_price(t)) / mid_price(t)
+#
+#   Label = Up (+1)    if return > threshold
+#           Down (-1)  if return < -threshold
+#           Stable (0) otherwise
+#
+# Reference: Zhang et al. (2019), "DeepLOB: Deep Convolutional Neural Networks
+#            for Limit Order Books", §3.1
+
+[labels]
+# TLOB strategy (default, backward compatible)
+strategy = "tlob"
+
+# Multiple prediction horizons (similar to FI-2010 benchmark)
+# Each horizon represents "ticks ahead" to predict
+# With event_count=1000 sampling:
+#   - h=10:  ~10 seconds ahead (very short-term)
+#   - h=20:  ~20 seconds ahead (short-term)
+#   - h=50:  ~50 seconds ahead (medium-term)
+#   - h=100: ~100 seconds ahead (longer-term)
+horizons = [10, 20, 50, 100]
+
+# Smoothing window for noise reduction (k in formula above)
+smoothing_window = 10
+
+# Classification threshold (θ)
+# 0.0008 = 8 basis points = common HFT threshold
+threshold = 0.0008
+
+[split]
+# Temporal split: first 70% train, next 15% val, last 15% test
+# With ~233 trading days:
+#   - Train: ~165 days (Feb-Aug 2025)
+#   - Val: ~35 days (Aug-Sept 2025)
+#   - Test: ~35 days (Oct 2025 - Jan 2026)
+#
+# This gives true out-of-sample evaluation on the newest data
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"  # Continue on errors, report at end
+verbose = true                 # Show progress for each day processed
+
+# =============================================================================
+# EXPECTED OUTPUTS
+# =============================================================================
+#
+# This configuration will generate:
+#
+# Structure:
+#   nvda_extended_multi_horizon/
+#   ├── train/
+#   │   ├── 20250203_sequences.npy   # Shape: [N, 100, 98]
+#   │   ├── 20250203_labels.npy      # Shape: [N, 4] (4 horizons)
+#   │   ├── 20250203_normalization.json
+#   │   ├── 20250203_metadata.json
+#   │   └── ...
+#   ├── val/
+#   │   └── ...
+#   ├── test/
+#   │   └── ...
+#   └── manifest.json
+#
+# Labels are encoded as: -1=Down, 0=Stable, 1=Up
+# Python dataset adds +1 to convert to: 0=Down, 1=Stable, 2=Up
+#
+# =============================================================================
+# TRAINING RECOMMENDATIONS
+# =============================================================================
+#
+# 1. MODEL SELECTION:
+#    - TLOB/TransLOB: Best for multi-horizon prediction
+#    - Can train separate models per horizon or joint model
+#
+# 2. LOSS FUNCTION:
+#    - CrossEntropyLoss with class weights if imbalanced
+#    - Or FocalLoss with gamma=2.0 for hard examples
+#
+# 3. HORIZONS ANALYSIS:
+#    - Shorter horizons (h=10, 20): More samples, noisier
+#    - Longer horizons (h=50, 100): Fewer samples, cleaner signal
+#    - Start with h=50 as primary target, analyze other horizons
+#
+# 4. EXPECTED CLASS DISTRIBUTION:
+#    With threshold=0.0008 (8 bps):
+#      - Up: ~30-35%
+#      - Stable: ~30-40%
+#      - Down: ~30-35%
+#    Distribution varies by market regime and horizon.
+#
