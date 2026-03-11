@@ -14,7 +14,6 @@ use feature_extractor::contract;
 use feature_extractor::export::{
     DataPathConfig, DatasetConfig, DateRangeConfig, FeatureSetConfig, SymbolConfig,
 };
-use std::path::Path;
 use std::sync::Arc;
 
 /// Test directory path for hot store data

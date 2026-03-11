@@ -40,8 +40,8 @@ jobs:
 
       - name: Verify minimum test count
         run: |
-          PASSED=$(grep -oP '\d+ passed' test_output.txt | tail -1 | grep -oP '\d+')
-          echo "Tests passed: $PASSED"
+          PASSED=$(grep -oP '\d+ passed' test_output.txt | grep -oP '\d+' | awk '{s+=$1}END{print s}')
+          echo "Total tests passed (summed across all test binaries): $PASSED"
           if [ -z "$PASSED" ] || [ "$PASSED" -lt 700 ]; then
             echo "::error::Expected at least 700 tests, got ${PASSED:-0}. Possible test module breakage."
             exit 1
