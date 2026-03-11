@@ -2,7 +2,7 @@
 # NVDA 11-Month Triple Barrier Dataset Configuration (CALIBRATED)
 # =============================================================================
 #
-# Complete NVIDIA dataset: Feb 3, 2025 → Jan 7, 2026 (234 trading days)
+# Complete NVIDIA dataset: Feb 3, 2025 → Jan 6, 2026 (233 trading days)
 # with Triple Barrier labeling using DATA-DRIVEN barrier thresholds.
 #
 # Schema version: 3.2 (98 features, per-horizon Triple Barrier labels)
@@ -43,7 +43,7 @@
 
 [experiment]
 name = "NVDA 11-Month Triple Barrier Dataset (Calibrated)"
-description = "Full 234-day dataset with per-horizon calibrated Triple Barrier labeling"
+description = "Full 233-day dataset with per-horizon calibrated Triple Barrier labeling"
 version = "3.2.0"
 tags = [
     "nvda",
@@ -68,7 +68,7 @@ hot_store_dir = "../data/hot_store"
 
 [dates]
 start_date = "2025-02-03"
-end_date = "2026-01-07"
+end_date = "2026-01-06"
 
 exclude_dates = [
     "2025-01-20",  # MLK Day

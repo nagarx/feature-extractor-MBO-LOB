@@ -1055,7 +1055,7 @@ The pipeline supports multiple labeling strategies, selected via `strategy` in T
 | Triple Barrier | `TripleBarrierLabeler` | TripleBarrierClassIndex `{0,1,2}` | Risk-managed trading |
 
 All strategies are validated via `LabelEncoding` which defines the expected label range and class
-names for each strategy. See `export_aligned.rs` for the unified `validate_label_alignment()` function.
+names for each strategy. See `export_aligned/validation.rs` for the unified `validate_label_alignment()` function.
 
 ---
 
@@ -2217,4 +2217,4 @@ When `include_experimental = true` is set, additional features are appended afte
 
 ---
 
-*This document reflects the actual implementation as of 2026-01-25. All formulas and code snippets are derived from source files in `MBO-LOB-reconstructor`, `feature-extractor-MBO-LOB`, and `lob-dataset-analyzer`.*
+*This document reflects the actual implementation as of 2026-03-05. All formulas and code snippets are derived from source files in `MBO-LOB-reconstructor`, `feature-extractor-MBO-LOB`, and `lob-dataset-analyzer`.*

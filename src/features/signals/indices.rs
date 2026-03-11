@@ -41,7 +41,7 @@ pub const DT_SECONDS: usize = 95;
 /// Invalidity events since last sample
 pub const INVALIDITY_DELTA: usize = 96;
 
-/// Schema version (2.0)
+/// Schema version (current: 2.2, from contract::SCHEMA_VERSION)
 pub const SCHEMA_VERSION: usize = 97;
 
 #[cfg(test)]

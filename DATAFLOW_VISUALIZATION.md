@@ -143,8 +143,8 @@ flowchart LR
         feat_mod["mod.rs<br/>━━━━━━━━━━━━<br/>FeatureConfig {<br/>  lob_levels: 10<br/>  tick_size: 0.01<br/>  include_derived<br/>  include_mbo<br/>  include_signals<br/>}<br/>feature_count() → usize<br/>FeatureExtractor"]
         lob["lob_features.rs<br/>━━━━━━━━━━━━<br/>extract_raw_features()<br/>extract_normalized_features()<br/>price: i64/1e9 → f64<br/>size: u32 → f64"]
         derived["derived_features.rs<br/>━━━━━━━━━━━━<br/>compute_derived_features()<br/>compute_depth_features()<br/>Returns [f64; 8]"]
-        mbo["mbo_features.rs<br/>━━━━━━━━━━━━<br/>MboAggregator<br/>MboWindow (3 scales)<br/>OrderInfo tracker<br/>MboEvent conversion<br/>~8MB memory/symbol"]
-        signals_mod["signals.rs<br/>━━━━━━━━━━━━<br/>OfiComputer<br/>  update(&amp;lob)<br/>  sample_and_reset()<br/>  is_warm() ≥100<br/>TimeRegime enum<br/>compute_signals()<br/>SIGNAL_COUNT = 14"]
+        mbo["mbo_features/<br/>━━━━━━━━━━━━<br/>MboAggregator<br/>MboWindow (3 scales)<br/>OrderTracker (BTreeMap)<br/>MboEvent conversion<br/>~8MB memory/symbol"]
+        signals_mod["signals/<br/>━━━━━━━━━━━━<br/>OfiComputer (ofi.rs)<br/>  update(&amp;lob)<br/>  sample_and_reset()<br/>  is_warm() ≥100<br/>TimeRegime (time_regime.rs)<br/>compute_signals() (compute.rs)<br/>SIGNAL_COUNT = 14"]
         order_flow["order_flow.rs<br/>━━━━━━━━━━━━<br/>compute_ofi()<br/>compute_mlofi()<br/>QueueImbalance<br/>TradeFlowImbalance"]
         fi2010["fi2010.rs<br/>━━━━━━━━━━━━<br/>FI2010_FEATURE_COUNT=80<br/>Time-insensitive (20)<br/>Time-sensitive (20)<br/>Depth features (40)"]
         market_impact["market_impact.rs<br/>━━━━━━━━━━━━<br/>estimate_slippage()<br/>compute_vwap()<br/>MarketImpactEstimator"]
@@ -182,7 +182,7 @@ flowchart LR
         export_mod["mod.rs<br/>━━━━━━━━━━━━<br/>NumpyExporter<br/>BatchExporter<br/>Re-exports all"]
         tensor_format["tensor_format.rs<br/>━━━━━━━━━━━━<br/>TensorFormat enum {<br/>  Flat (T,F)<br/>  DeepLOB (T,4,L)<br/>  HLOB (T,L,4)<br/>  Image (T,C,H,W)<br/>}<br/>TensorFormatter<br/>FeatureMapping<br/>TensorOutput enum"]
         dataset_config["dataset_config.rs<br/>━━━━━━━━━━━━<br/>DatasetConfig<br/>SymbolConfig<br/>DataPathConfig<br/>DateRangeConfig<br/>FeatureSetConfig<br/>ExportSamplingConfig<br/>SplitConfig<br/>load_toml()/save_toml()"]
-        export_aligned["export_aligned.rs<br/>━━━━━━━━━━━━<br/>AlignedBatchExporter<br/>align_sequences_with_labels()<br/>normalize_sequences()<br/>NormalizationStrategy<br/>NormalizationParams<br/>market_structure_zscore"]
+        export_aligned["export_aligned/<br/>━━━━━━━━━━━━<br/>AlignedBatchExporter (mod.rs)<br/>alignment.rs, normalization.rs<br/>npy_export.rs, validation.rs<br/>strategies/ (tlob, opportunity,<br/>triple_barrier)<br/>market_structure_zscore"]
     end
 
     lib --> core
@@ -296,7 +296,7 @@ flowchart TB
         subgraph sig_meta["Meta [95-97]"]
             s95["[95] dt_seconds: f64<br/>Time since last sample"]
             s96["[96] invalidity_delta: f64<br/>Quote anomaly count"]
-            s97["[97] schema_version: 2.1"]
+            s97["[97] schema_version: 2.2"]
         end
     end
 
@@ -580,7 +580,7 @@ flowchart TB
         stats["Statistics<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>messages_processed: usize<br/>features_extracted: usize<br/>sequences_generated: usize<br/>stride: usize<br/>window_size: usize"]
     end
 
-    subgraph alignment["Sequence-Label Alignment (export_aligned.rs)"]
+    subgraph alignment["Sequence-Label Alignment (export_aligned/)"]
         align_fn["align_sequences_with_labels()<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>Input: sequences, labels<br/>Output: (aligned_seqs, aligned_labels)<br/>Ensures 1:1 mapping"]
         ending_idx["Ending Index Formula<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>ending_idx = seq_idx × stride + window_size - 1<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>Seq 0: 0×10 + 100 - 1 = 99<br/>Seq 1: 1×10 + 100 - 1 = 109<br/>Seq 2: 2×10 + 100 - 1 = 119"]
         match_label["Label Matching<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>Label at ending_idx predicts<br/>future from sequence end<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>Drop if no valid label<br/>Typical: 5-15% dropped at day end"]
@@ -884,7 +884,7 @@ graph LR
         S3["[88-89] Confirm<br/>━━━━━━━━━━━━━━━━<br/>trade_asymmetry<br/>cancel_asymmetry"]
         S4["[90-91] Impact<br/>━━━━━━━━━━━━━━━━<br/>fragility_score<br/>depth_asymmetry"]
         S5["[92-94] Safety<br/>━━━━━━━━━━━━━━━━<br/>book_valid {0,1}<br/>time_regime {0-4}<br/>mbo_ready {0,1}"]
-        S6["[95-97] Meta<br/>━━━━━━━━━━━━━━━━<br/>dt_seconds<br/>invalidity_delta<br/>schema_version=2.1"]
+        S6["[95-97] Meta<br/>━━━━━━━━━━━━━━━━<br/>dt_seconds<br/>invalidity_delta<br/>schema_version=2.2"]
     end
 
     raw --> derived --> mbo --> signals
@@ -981,4 +981,4 @@ flowchart TB
 
 ---
 
-*Generated from codebase analysis on 2025-12-21 | Version 2.0 (Enhanced Technical Details)*
+*Generated from codebase analysis on 2025-12-21 | Updated 2026-03-05 | Version 2.1 (Fixed module paths, schema_version 2.2)*

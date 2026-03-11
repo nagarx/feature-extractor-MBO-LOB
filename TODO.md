@@ -47,7 +47,7 @@ use it. Documentation should be updated to mark this as "planned" or "not implem
 
 **Status**: ✅ Implemented
 
-**Location**: `src/features/mbo_features.rs`
+**Location**: `src/features/mbo_features/lifecycle_features.rs` (directory module)
 
 **Implementation** (2026-01-25):
 - Added `completed_lifetimes: VecDeque<f64>` bounded buffer (size 1000)
@@ -191,16 +191,18 @@ Preset::FI2010 => {
 
 ---
 
-### 3.2 Triple Barrier and Magnitude Export Integration (P2)
+### 3.2 Magnitude Export Integration (P2)
 
 **Status**: ⚠️ API implemented, export_dataset integration pending
 
-**Location**: `src/labeling/triple_barrier.rs`, `src/labeling/magnitude.rs`
+**Location**: `src/labeling/magnitude.rs`
 
 **Current State**:
-- ✅ Labelers fully implemented and tested
+- ✅ `MagnitudeGenerator` fully implemented and tested
 - ❌ NOT integrated into `export_dataset` CLI tool
 - ❌ Cannot be configured via TOML
+
+> **Note**: Triple Barrier IS fully integrated (Schema 2.4+). Use `strategy = "triple_barrier"` in TOML config.
 
 **Tracking**: Documented in `docs/LABELING_STRATEGIES.md#integration-status`
 
@@ -210,7 +212,7 @@ Preset::FI2010 => {
 
 **Status**: ⚠️ Declared but using fallback implementations
 
-**Location**: `src/export_aligned.rs:2261-2278`, `src/export/dataset_config.rs`
+**Location**: `src/export_aligned/normalization.rs`, `src/export/dataset_config.rs`
 
 **Issue**: The `FeatureNormStrategy::MinMax` and `FeatureNormStrategy::Bilinear` variants are
 declared in the enum and can be configured via TOML, but their implementations are incomplete:
@@ -270,14 +272,12 @@ From `ARCHITECTURE.md:279`:
 
 ### 5.1 Reset Semantics Integration Tests
 
-**Current State**: Unit tests exist for individual component resets, but no integration test
-verifies that `Pipeline::reset()` properly clears ALL state for multi-day processing.
+**Status**: ✅ Resolved
 
-**Recommended**: Add integration test that:
-1. Processes Day 1
-2. Calls `pipeline.reset()`
-3. Processes Day 2
-4. Verifies no state leakage
+**Current State**: Multiple integration tests now verify reset semantics:
+- `tests/state_leak_test.rs` (9 tests) -- verifies no state leakage across resets
+- `tests/multiscale_reset_leak_test.rs` (4 tests) -- multi-scale window reset verification
+- `tests/phase3_real_data_validation.rs::test_cross_day_state_isolation` -- processes day A + reset + day B == fresh pipeline on day B
 
 ---
 
@@ -292,8 +292,8 @@ verifies that `Pipeline::reset()` properly clears ALL state for multi-day proces
 | 2.2 | Missing citations | ⏳ Pending | - |
 | 1.3 | FI-2010 regression features | ⏳ Documented | - |
 | 3.1 | fi2010.rs integration | ⏳ Documented | - |
-| 3.2 | Triple Barrier export integration | ⏳ Documented | - |
+| 3.2 | Triple Barrier export integration | ✅ Integrated | 2026-02-15 |
 
 ---
 
-*Last Updated: 2026-01-25*
+*Last Updated: 2026-03-05*

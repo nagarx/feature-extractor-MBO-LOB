@@ -70,7 +70,7 @@ output_dir = "../data/exports/nvda_116feat_full_analysis"
 [dates]
 # Full date range: ~230 trading days
 start_date = "2025-02-03"
-end_date = "2026-01-07"
+end_date = "2026-01-06"
 
 # US Market Holidays 2025-2026
 exclude_dates = [

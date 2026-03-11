@@ -38,12 +38,14 @@ else:
 ### Configuration
 
 ```rust
-use feature_extractor::TlobLabelGenerator;
+use feature_extractor::{LabelConfig, TlobLabelGenerator};
 
-let mut labeler = TlobLabelGenerator::new(
-    10,     // horizon (k): forward window
+let config = LabelConfig::new(
+    10,     // horizon (h): forward prediction window
+    5,      // smoothing_window (k): past/future smoothing
     0.0002, // threshold: classification boundary
 );
+let mut labeler = TlobLabelGenerator::new(config);
 ```
 
 ### When to Use
@@ -79,23 +81,23 @@ for each horizon h in [10, 50, 100, 200]:
 ```rust
 use feature_extractor::{MultiHorizonConfig, MultiHorizonLabelGenerator, ThresholdStrategy};
 
-let config = MultiHorizonConfig {
-    horizons: vec![10, 50, 100, 200],
-    threshold_strategy: ThresholdStrategy::Quantile(0.33),
-    ..Default::default()
-};
+let config = MultiHorizonConfig::new(
+    vec![10, 50, 100, 200],
+    5,  // smoothing_window
+    ThresholdStrategy::quantile(0.33, 5000, 0.002),  // target_proportion, window_size, fallback
+);
 
 let mut labeler = MultiHorizonLabelGenerator::new(config);
 ```
 
 ### Threshold Strategies
 
-| Strategy | Description | Use Case |
-|----------|-------------|----------|
-| `Fixed(0.001)` | Same threshold for all horizons | Simple, predictable |
-| `Quantile(0.33)` | Adaptive based on distribution | Balanced classes |
-| `Volatility(1.0)` | Scales with realized volatility | Regime-adaptive |
-| `TlobDynamic` | `mean(\|pct_change\|) / 2` (TLOB paper) | Match official TLOB repo |
+| Strategy | Constructor | Description | Use Case |
+|----------|------------|-------------|----------|
+| `Fixed(f64)` | `ThresholdStrategy::fixed(0.001)` | Same threshold for all horizons | Simple, predictable |
+| `RollingSpread { window_size, multiplier, fallback }` | `ThresholdStrategy::rolling_spread(5000, 1.5, 0.002)` | avg_spread x multiplier | Cost-aware |
+| `Quantile { target_proportion, window_size, fallback }` | `ThresholdStrategy::quantile(0.33, 5000, 0.002)` | Adaptive balanced classes | Equal class distribution |
+| `TlobDynamic { fallback, divisor }` | `ThresholdStrategy::tlob_dynamic(0.0008, 2.0)` | `mean(\|pct_change\|) / divisor` | Match official TLOB repo |
 
 #### TLOB Dynamic Threshold (New)
 
@@ -181,12 +183,13 @@ Opportunity (peak): max_return = 3% → BIG_UP
 ```rust
 use feature_extractor::{OpportunityConfig, OpportunityLabelGenerator, ConflictPriority};
 
-let config = OpportunityConfig::new(
+let mut config = OpportunityConfig::new(
     50,    // horizon: look-ahead window
-    0.005, // up_threshold: 0.5% for big up
-    0.005, // down_threshold: 0.5% for big down
-    ConflictPriority::LargerMagnitude, // how to handle conflicts
+    0.005, // threshold: 0.5% for big moves (symmetric by default)
 );
+config.conflict_priority = ConflictPriority::LargerMagnitude;
+// Optional: asymmetric thresholds
+config.down_threshold = Some(0.003); // Separate down threshold
 
 let mut labeler = OpportunityLabelGenerator::new(config);
 ```
@@ -197,10 +200,10 @@ When both thresholds are exceeded within the horizon:
 
 | Strategy | Behavior | Use Case |
 |----------|----------|----------|
-| `LargerMagnitude` | Pick the larger move | Capture dominant direction |
-| `PrioritizeUp` | Always pick up | Long-only strategies |
-| `PrioritizeDown` | Always pick down | Short-only strategies |
-| `MarkAmbiguous` | Label as Ambiguous | Conservative approach |
+| `LargerMagnitude` | Pick the larger move | Capture dominant direction (default) |
+| `UpPriority` | Always pick BigUp | Long-only strategies |
+| `DownPriority` | Always pick BigDown | Short-only strategies |
+| `Ambiguous` | Label as NoOpportunity | Conservative approach |
 
 ### When to Use
 
@@ -462,7 +465,7 @@ stop_loss_pct = 0.003
 ### 4. Consider Regime Dependence
 
 What works in trending markets may fail in choppy markets. Consider:
-- Using `ThresholdStrategy::Volatility` for adaptive thresholds
+- Using `ThresholdStrategy::RollingSpread` or `ThresholdStrategy::TlobDynamic` for adaptive thresholds
 - Training separate models for different regimes
 - Including regime indicators as features
 

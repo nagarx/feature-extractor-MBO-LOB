@@ -2,7 +2,7 @@
 # NVDA 11-Month Complete Dataset Configuration
 # =============================================================================
 #
-# Complete NVIDIA dataset: Feb 3, 2025 → Jan 7, 2026 (234 trading days)
+# Complete NVIDIA dataset: Feb 3, 2025 → Jan 6, 2026 (233 trading days)
 #
 # This is the canonical configuration for the full dataset.
 # Schema version: 2.1 (98 features, multi-horizon TLOB labels)
@@ -24,14 +24,14 @@
 #       --config configs/nvda_11month_complete.toml
 #
 # Prerequisites:
-#   1. Complete dataset in: data/NVDA_2025-02-03_to_2026-01-07 (234 files)
+#   1. Complete dataset in: data/NVDA_2025-02-03_to_2026-01-07 (233 files)
 #   2. Hot store will be populated on-demand during extraction
 #
 # =============================================================================
 
 [experiment]
 name = "NVDA 11-Month Complete Dataset"
-description = "Full 234-day dataset (Feb 2025 - Jan 2026) with multi-horizon TLOB labels"
+description = "Full 233-day dataset (Feb 2025 - Jan 2026) with multi-horizon TLOB labels"
 version = "3.1.0"
 tags = [
     "nvda",
@@ -60,10 +60,10 @@ output_dir = "../data/exports/nvda_11month_complete"
 hot_store_dir = "../data/hot_store"
 
 [dates]
-# Full date range: Feb 3, 2025 to Jan 7, 2026
+# Full date range: Feb 3, 2025 to Jan 6, 2026
 # Total trading days: 234 (weekends and holidays excluded)
 start_date = "2025-02-03"
-end_date = "2026-01-07"
+end_date = "2026-01-06"
 
 # US market holidays to exclude (NYSE/NASDAQ calendar 2025-2026)
 # Reference: https://www.nyse.com/markets/hours-calendars
@@ -145,7 +145,7 @@ threshold = 0.0008
 # Temporal split for proper time-series cross-validation
 # No data leakage: test set is always AFTER training data
 #
-# With 234 trading days:
+# With 233 trading days:
 #   - Train: ~164 days (Feb 2025 - Aug 2025)
 #   - Val:   ~35 days  (Sep 2025 - Oct 2025)
 #   - Test:  ~35 days  (Nov 2025 - Jan 2026)

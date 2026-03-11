@@ -1,6 +1,6 @@
 # NVDA Extended Dataset - Multi-Horizon TLOB Configuration
 #
-# Extended date range: Feb 3, 2025 to Jan 7, 2026 (~235 trading days)
+# Extended date range: Feb 3, 2025 to Jan 6, 2026 (~233 trading days)
 # This configuration combines the original dataset with new data for
 # more robust training with out-of-sample validation.
 #
@@ -52,12 +52,12 @@ output_dir = "../data/exports/nvda_extended_multi_horizon"
 input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
 
 [dates]
-# Extended date range: Feb 3, 2025 to Jan 7, 2026
+# Extended date range: Feb 3, 2025 to Jan 6, 2026
 # Original: Feb 3 - Sept 29, 2025 (~165 days)
-# New: Sept 30, 2025 - Jan 7, 2026 (~70 days, excluding overlap)
-# Total: ~235 trading days
+# New: Sept 30, 2025 - Jan 6, 2026 (~70 days, excluding overlap)
+# Total: ~233 trading days
 start_date = "2025-02-03"
-end_date = "2026-01-07"
+end_date = "2026-01-06"
 
 # US market holidays to exclude (2025-2026)
 # Source: NYSE/NASDAQ holiday calendar
@@ -132,7 +132,7 @@ threshold = 0.0008
 
 [split]
 # Temporal split: first 70% train, next 15% val, last 15% test
-# With ~235 trading days:
+# With ~233 trading days:
 #   - Train: ~165 days (Feb-Aug 2025)
 #   - Val: ~35 days (Aug-Sept 2025)
 #   - Test: ~35 days (Oct 2025 - Jan 2026)

@@ -48,8 +48,9 @@ fn main() -> Result<()> {
     println!("Processed {} messages", output.messages_processed);
     println!("Generated {} sequences", output.sequences_generated);
 
-    // Export to NumPy for Python/PyTorch
-    let exporter = NumpyExporter::new("output/");
+    // Export to NumPy for Python/PyTorch (AlignedBatchExporter is the production exporter)
+    let label_config = LabelConfig::short_term();
+    let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
     exporter.export_day("2025-02-03", &output)?;
 
     Ok(())
@@ -81,17 +82,28 @@ let pipeline = PipelineBuilder::new()
     .with_derived_features()
     .build()?;
 
-// With MBO features (76 features = 40 + 36)
-let pipeline = PipelineBuilder::new()
-    .with_mbo_features()
-    .build()?;
-
-// Full feature set (84 features = 40 + 8 + 36)
+// With MBO features (84 features = 40 + 8 + 36)
 let pipeline = PipelineBuilder::new()
     .with_derived_features()
     .with_mbo_features()
     .build()?;
+
+// Full standard feature set (98 features = 40 + 8 + 36 + 14)
+let pipeline = PipelineBuilder::new()
+    .with_derived_features()
+    .with_mbo_features()
+    .with_trading_signals()   // +14 signals (OFI, microprice, time regime, safety gates)
+    .build()?;
+
+// With experimental features (116 features = 98 + 18)
+// Requires experimental config in DatasetConfig TOML:
+//   [features.experimental]
+//   enabled = true
+//   groups = ["institutional_v2", "volatility", "seasonality"]
 ```
+
+> **Note**: Trading signals require exactly 10 LOB levels (`lob_levels(10)`).
+> Signal indices (84-97) are hardcoded for the 10-level layout.
 
 ### Sampling Configuration
 
@@ -149,8 +161,9 @@ Controls which features are extracted:
 |-------|------|---------|-------------|
 | `lob_levels` | `usize` | 10 | Number of LOB price levels |
 | `tick_size` | `f64` | 0.01 | Minimum price increment |
-| `include_derived` | `bool` | false | Include 8 derived features |
-| `include_mbo` | `bool` | false | Include 36 MBO features |
+| `include_derived` | `bool` | false | Include 8 derived features (indices 40-47) |
+| `include_mbo` | `bool` | false | Include 36 MBO features (indices 48-83) |
+| `include_signals` | `bool` | false | Include 14 trading signals (indices 84-97). Requires `lob_levels == 10` |
 | `mbo_window_size` | `usize` | 1000 | MBO aggregation window |
 
 ### SequenceConfig
@@ -172,7 +185,7 @@ Controls when to sample LOB snapshots:
 |----------|-------------|----------|
 | `VolumeBased` | Sample after N shares traded | Activity-weighted sampling |
 | `EventBased` | Sample after N MBO events | Uniform event-time sampling |
-| `TimeBased` | Sample at fixed intervals | Calendar-time analysis |
+| `TimeBased` | Sample at fixed intervals | Calendar-time analysis (**not yet implemented**) |
 
 ## Feature Sets
 
@@ -192,15 +205,56 @@ For each of 10 levels:
 - Weighted mid-price
 - Price impact estimate
 
-### MBO Features (36)
+### MBO Features (36, indices 48-83)
 
 Order flow dynamics across fast/medium/slow windows:
-- Order arrival rates
-- Trade intensity
-- Order flow imbalance
-- Cancellation rates
-- Fill ratios
-- Queue position metrics
+
+| Sub-group | Count | Indices | Key Features |
+|-----------|-------|---------|--------------|
+| Flow | 12 | 48-59 | add/cancel/trade rates, net_order_flow, flow_regime_indicator |
+| Size | 8 | 60-67 | size percentiles (p25-p90), size_zscore, size_skewness, HHI |
+| Queue | 6 | 68-73 | orders_per_level, level_concentration, depth_ticks |
+| Institutional | 4 | 74-77 | large_order_frequency, large_order_imbalance, iceberg_proxy |
+| Lifecycle | 6 | 78-83 | avg_order_age, fill_ratio, cancel_to_add_ratio, active_count |
+
+Source: `src/features/mbo_features/` (directory module)
+
+### Trading Signals (14, indices 84-97)
+
+Computed from the LOB state and MBO event stream. Requires `include_signals: true` and `lob_levels == 10`.
+
+| Index | Signal | Description |
+|-------|--------|-------------|
+| 84 | `TRUE_OFI` | Streaming OFI (Cont et al., 2014) |
+| 85 | `DEPTH_NORM_OFI` | OFI normalized by book depth |
+| 86 | `EXECUTED_PRESSURE` | trade_ask - trade_bid |
+| 87 | `SIGNED_MP_DELTA_BPS` | Microprice delta in basis points |
+| 88 | `TRADE_ASYMMETRY` | Normalized trade asymmetry [-1, 1] |
+| 89 | `CANCEL_ASYMMETRY` | Normalized cancel asymmetry [-1, 1] |
+| 90 | `FRAGILITY_SCORE` | Book fragility measure |
+| 91 | `DEPTH_ASYMMETRY` | Depth asymmetry [-1, 1] |
+| 92 | `BOOK_VALID` | Validity flag (0/1) -- categorical |
+| 93 | `TIME_REGIME` | Market session (0-4) -- categorical |
+| 94 | `MBO_READY` | MBO warmup flag (0/1) -- categorical |
+| 95 | `DT_SECONDS` | Sample duration in seconds |
+| 96 | `INVALIDITY_DELTA` | Crossed/locked events counter |
+| 97 | `SCHEMA_VERSION` | Schema version (2.2) -- categorical |
+
+Categorical indices [92, 93, 94, 97] must NOT be normalized.
+
+Source: `src/features/signals/` (directory module)
+
+### Experimental Features (18, indices 98-115)
+
+Opt-in features enabled via `DatasetConfig` TOML:
+
+| Sub-group | Count | Indices | Features |
+|-----------|-------|---------|----------|
+| institutional_v2 | 8 | 98-105 | round_lot_ratio, sweep_ratio, fill_patience |
+| volatility | 6 | 106-111 | realized_vol_fast/slow, vol_momentum, vol_of_vol |
+| seasonality | 4 | 112-115 | minutes_since_open/close, session_progress, time_bucket |
+
+Source: `src/features/experimental/`
 
 ## Sampling Strategies
 
@@ -303,40 +357,65 @@ let config = LabelConfig::medium_term();  // h=100, k=20, threshold=0.5%
 
 ## Export to NumPy
 
-### Single Day Export
+### Recommended: Config-Driven Export (`export_dataset` CLI)
 
-```rust
-let exporter = NumpyExporter::new("output/");
-exporter.export_day("2025-02-03", &output)?;
+The primary production export path uses TOML configuration files:
 
-// Creates:
-// - output/2025-02-03_features.npy
-// - output/2025-02-03_labels.npy (if labels generated)
-// - output/2025-02-03_metadata.json
+```bash
+cargo run --release --features parallel --bin export_dataset -- --config configs/nvda_98feat.toml
 ```
 
-### Batch Export with Labels
+See [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) for the full `DatasetConfig` schema and all available configs.
+
+### Programmatic: AlignedBatchExporter (Recommended)
+
+`AlignedBatchExporter` is the production exporter. It handles sequence-label alignment,
+normalization, NaN/Inf validation, and metadata provenance.
 
 ```rust
+use feature_extractor::prelude::*;
+use feature_extractor::export_aligned::AlignedBatchExporter;
+
 let label_config = LabelConfig::short_term();
-let exporter = BatchExporter::new("output/", Some(label_config));
+let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
+//                                       ^dir       ^labels       ^window ^stride
 
-for day in trading_days {
-    pipeline.reset();  // Clear state between days
-    let output = pipeline.process(&format!("data/{}.dbn.zst", day))?;
-    exporter.export_day(&day, &output)?;
-}
-```
-
-### Aligned Export
-
-Ensures features and labels are properly aligned:
-
-```rust
-let exporter = AlignedBatchExporter::new("output/", label_config);
 let result = exporter.export_day("2025-02-03", &output)?;
 
-println!("Exported {} sequences with {} labels", result.n_sequences, result.n_labels);
+// Creates per day:
+// - {day}_sequences.npy    [N_seq, window, n_features] f32
+// - {day}_labels.npy        [N_seq] or [N_seq, num_horizons] i8
+// - {day}_normalization.json
+// - {day}_metadata.json     (provenance: git hash, config hash, schema_version)
+// - {day}_horizons.json     (if multi-horizon)
+```
+
+#### Labeling strategy dispatch (priority order):
+
+1. **Triple Barrier** (if `triple_barrier_configs` set)
+2. **Opportunity** (if `opportunity_configs` set)
+3. **Multi-Horizon TLOB** (if `multi_horizon_config` set)
+4. **Single-Horizon TLOB** (default)
+
+```rust
+// Multi-horizon export
+let mut exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
+exporter.with_multi_horizon(MultiHorizonConfig::tlob());
+
+// Triple Barrier export
+let mut exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
+exporter.with_triple_barrier(vec![TripleBarrierConfig::intraday()]);
+```
+
+### Legacy Exporters (Deprecated)
+
+> **WARNING**: `NumpyExporter` and `BatchExporter` are deprecated since v0.9.0.
+> Use `AlignedBatchExporter` or config-driven export via `export_dataset` CLI instead.
+
+```rust
+// DEPRECATED - do not use for new code
+let exporter = NumpyExporter::new("output/");
+let exporter = BatchExporter::new("output/", Some(label_config));
 ```
 
 ## Parallel Batch Processing
@@ -621,21 +700,24 @@ for day in days {
 
 ```rust
 use feature_extractor::prelude::*;
+use feature_extractor::export_aligned::AlignedBatchExporter;
 use std::time::Instant;
 
 fn main() -> Result<()> {
-    // Configure pipeline
+    // Configure pipeline (98 features: LOB + derived + MBO + signals)
     let mut pipeline = PipelineBuilder::new()
         .lob_levels(10)
         .with_derived_features()
+        .with_mbo_features()
+        .with_trading_signals()
         .window(100, 10)
         .event_sampling(1000)
-        .experiment("nvda_experiment", "NVDA feature extraction")
+        .experiment("nvda_experiment", "NVDA 98-feature extraction")
         .build()?;
 
-    // Configure labeling
+    // Configure labeling and export
     let label_config = LabelConfig::short_term();
-    let exporter = BatchExporter::new("output/", Some(label_config));
+    let exporter = AlignedBatchExporter::new("output/", label_config, 100, 10);
 
     // Process multiple days
     let days = vec!["2025-02-03", "2025-02-04", "2025-02-05"];
@@ -643,14 +725,11 @@ fn main() -> Result<()> {
     for day in days {
         let start = Instant::now();
         
-        // Reset pipeline state
-        pipeline.reset();
+        pipeline.reset();  // Critical: prevents cross-day state leakage
         
-        // Process data
         let path = format!("data/xnas-itch-{}.mbo.dbn.zst", day.replace("-", ""));
         let output = pipeline.process(&path)?;
         
-        // Export
         let result = exporter.export_day(day, &output)?;
         
         println!("{}: {} sequences, {} labels in {:.1}s",

@@ -67,7 +67,7 @@ feature_extractor/
 │   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats, re-exports
 │   │   ├── tlob.rs              # TLOB labeling (decoupled h/k) - ✅ Export integrated
 │   │   ├── deeplob.rs           # DeepLOB labeling (k=h) - ✅ Export integrated
-│   │   ├── multi_horizon.rs     # Multi-horizon labels - ✅ Export integrated
+│   │   ├── multi_horizon.rs     # Multi-horizon labels + ThresholdStrategy (Fixed/RollingSpread/Quantile/TlobDynamic) - ✅ Export integrated
 │   │   ├── opportunity.rs       # Opportunity/big-move detection - ✅ Export integrated
 │   │   ├── triple_barrier.rs    # Triple Barrier (de Prado) - ✅ Export integrated (Schema 2.4+)
 │   │   └── magnitude.rs         # Magnitude/regression targets - ⚠️ API only, export pending
@@ -128,7 +128,12 @@ feature_extractor/
 │   └── ...
 │
 └── docs/
-    └── USAGE_GUIDE.md            # Comprehensive usage documentation
+    ├── USAGE_GUIDE.md            # Comprehensive usage documentation
+    ├── FEATURE_REFERENCE.md      # Authoritative 116-feature index (formulas, units, ranges)
+    ├── TEST_INVENTORY.md         # Complete test map (389 tests, 39 files, coverage)
+    ├── CONFIG_REFERENCE.md       # DatasetConfig schema + TOML config inventory
+    ├── LABELING_STRATEGIES.md    # All 6 labeling strategies with formulas
+    └── full-data-pipeline.md     # End-to-end pipeline data flow documentation
 ```
 
 ## Key Components
@@ -231,7 +236,7 @@ pub enum Preset {
     TransLOB,  // 40 raw + multi-horizon
     LiT,       // 80 features (20 levels × 4)
     Minimal,   // 40 raw LOB only
-    Full,      // All available features (84)
+    Full,      // All available features: 84 via Preset (40 raw + 8 derived + 36 MBO); add .with_trading_signals() for 98
 }
 ```
 
@@ -261,11 +266,13 @@ pub enum Preset {
 
 ## Test Coverage
 
-- **300+ unit tests** covering all modules
-- **100+ integration tests** with real NVIDIA MBO data
-- **50+ doc tests** with working examples
+- **~730 unit tests** (`cargo test --lib`) covering all modules
+- **389 integration tests** across 39 test files with real NVIDIA MBO data
+- **4-level validation pyramid**: transformation tracing, golden snapshot, full-day stats, export round-trip
 - **Comprehensive validation**: 151M+ messages, 21 days data
 - **99.42% price accuracy** against MBP-10 ground truth
+- All 98 stable features fully deterministic (BTreeMap-backed OrderTracker)
+- Golden snapshot and determinism tests enforce bit-exact matching at `contract::FLOAT_CMP_EPS` (1e-10)
 
 ## Dependencies
 

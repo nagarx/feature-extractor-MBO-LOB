@@ -2880,4 +2880,4 @@ data = report.to_dict()  # With version metadata
 
 ---
 
-*Last updated: March 6, 2026*
+*Last updated: March 5, 2026*
