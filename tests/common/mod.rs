@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 /// Decompressed MBO files (`.mbo.dbn`), preferred for speed.
 pub const HOT_STORE_DIR: &str = "../data/hot_store";
 
-/// Compressed MBO files (`.mbo.dbn.zst`).
-pub const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+/// Compressed MBO files (`.mbo.dbn`).
+pub const COMPRESSED_DIR: &str = "../data/hot_store";
 
 /// MBP-10 ground truth files (`.mbp-10.dbn.zst`).
 pub const MBP10_DIR: &str = "../data/NVDA_MBP10_2025-07";
@@ -41,7 +41,7 @@ pub fn find_hot_store_file(date: &str) -> Option<PathBuf> {
 /// Returns `None` if the file doesn't exist.
 #[allow(dead_code)]
 pub fn find_compressed_file(date: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(COMPRESSED_DIR).join(format!("xnas-itch-{date}.mbo.dbn.zst"));
+    let path = PathBuf::from(COMPRESSED_DIR).join(format!("xnas-itch-{date}.mbo.dbn"));
     if path.exists() {
         Some(path)
     } else {

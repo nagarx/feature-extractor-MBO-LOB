@@ -54,7 +54,7 @@ fn run_benchmark() -> Result<()> {
     println!("   Memory: 16 GB unified\n");
 
     // Find test files
-    let data_dir = Path::new("../data/NVDA_2025-02-01_to_2025-09-30");
+    let data_dir = Path::new("../data/hot_store");
     if !data_dir.exists() {
         println!("❌ Data directory not found: {:?}", data_dir);
         return Ok(());

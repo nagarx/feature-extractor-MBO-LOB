@@ -9,7 +9,7 @@
 //! Usage:
 //! ```bash
 //! cargo run --release --example test_phase2_features \
-//!   /Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250203.mbo.dbn.zst
+//!   ../data/hot_store/xnas-itch-20250203.mbo.dbn
 //! ```
 
 use feature_extractor::{FeatureConfig, FeatureExtractor, MboEvent};

@@ -1,4 +1,4 @@
-# Feature Reference: Complete 116-Feature Index
+# Feature Reference: Complete 148-Feature Index
 
 > **Purpose**: Authoritative single source of truth for all features extracted by the pipeline.
 > Look up any feature by index or name to find its exact formula, units, range, normalization behavior, and source file.
@@ -11,8 +11,10 @@
 | Constant | Value | Source |
 |----------|-------|--------|
 | `STABLE_FEATURE_COUNT` | 98 | `src/contract.rs` |
-| `EXPERIMENTAL_FEATURE_COUNT` | 18 | `src/contract.rs` |
-| `FULL_FEATURE_COUNT` | 116 | `src/contract.rs` |
+| `EXPERIMENTAL_FEATURE_COUNT` | 50 | `src/contract.rs` (8 + 6 + 4 + 12 + 20) |
+| `FULL_FEATURE_COUNT` | 148 | `src/contract.rs` (98 + 50) |
+| `LEGACY_FULL_FEATURE_COUNT` | 128 | `src/contract.rs` (98 + 30, without kolm_of) |
+| `KOLM_OF_FEATURE_COUNT` | 20 | `src/contract.rs` |
 | `LOB_LEVELS` | 10 | `src/contract.rs` |
 | `SIGNAL_COUNT` | 14 | `src/contract.rs` |
 | `CATEGORICAL_INDICES` | \[92, 93, 94, 97\] | `src/contract.rs` -- must NOT be normalized |
@@ -28,10 +30,10 @@ Features are assembled in `src/features/extractor.rs`:
 
 1. `extract_into(&lob_state, &mut buf)` appends: **LOB raw** (0-39), then **Derived** (40-47) if enabled, then **MBO** (48-83) if enabled.
 2. `extract_with_signals()` calls `extract_into()` then appends: **Signals** (84-97).
-3. Experimental features (98-115) are appended by `extract_experimental_into()` on top of the 98-feature vector.
+3. Experimental features (98-147) are appended by `extract_experimental_into()` on top of the 98-feature vector. Experimental groups are config-driven; enabling a subset produces a feature count between 98 and 148.
 
 ```
-[0..39] LOB raw  →  [40..47] Derived  →  [48..83] MBO  →  [84..97] Signals  →  [98..115] Experimental
+[0..39] LOB raw  →  [40..47] Derived  →  [48..83] MBO  →  [84..97] Signals  →  [98..147] Experimental
 ```
 
 ---
@@ -208,10 +210,11 @@ An `OrderTracker` (BTreeMap-backed, deterministic iteration) tracks active order
 
 ---
 
-## 5. Experimental Features (18 features, indices 98-115)
+## 5. Experimental Features (up to 50 features, indices 98-147)
 
 **Source**: `src/features/experimental/`
-**Activation**: `[features.experimental] enabled = true` in DatasetConfig TOML
+**Activation**: `[features.experimental] enabled = true` with `groups = [...]` in DatasetConfig TOML
+**Available groups**: `institutional_v2` (8), `volatility` (6), `seasonality` (4), `mlofi` (12), `kolm_of` (20)
 
 ### 5.1 Institutional V2 (8 features, indices 98-105)
 
@@ -252,6 +255,58 @@ An `OrderTracker` (BTreeMap-backed, deterministic iteration) tracks active order
 | 114 | `session_progress` | Fraction of trading session elapsed | \[0, 1\] |
 | 115 | `time_bucket` | 30-minute bucket index (0-12) | {0..12} |
 
+### 5.4 Multi-Level OFI / MLOFI (12 features, indices 116-127)
+
+**Source**: `src/features/experimental/mlofi.rs` (wraps `MultiLevelOfiTracker` from `order_flow.rs`)
+**Reference**: Kolm, Turiel & Westray (2023), Section 2.1.2
+
+Computes OFI across multiple LOB levels, combining bid+ask per level into a single value.
+
+| Index | Name | Description | Range |
+|-------|------|-------------|-------|
+| 116 | `total_mlofi` | Sum of OFI across all 10 levels | unbounded |
+| 117 | `weighted_mlofi` | Level-weighted sum (w_k = 1/k, level 1 weight 1.0, level 2 weight 0.5, ...) | unbounded |
+| 118 | `ofi_level_1` | Per-level OFI at level 1 (bid+ask combined) | unbounded |
+| 119 | `ofi_level_2` | Per-level OFI at level 2 | unbounded |
+| 120 | `ofi_level_3` | Per-level OFI at level 3 | unbounded |
+| 121 | `ofi_level_4` | Per-level OFI at level 4 | unbounded |
+| 122 | `ofi_level_5` | Per-level OFI at level 5 | unbounded |
+| 123 | `ofi_level_6` | Per-level OFI at level 6 | unbounded |
+| 124 | `ofi_level_7` | Per-level OFI at level 7 | unbounded |
+| 125 | `ofi_level_8` | Per-level OFI at level 8 | unbounded |
+| 126 | `ofi_level_9` | Per-level OFI at level 9 | unbounded |
+| 127 | `ofi_level_10` | Per-level OFI at level 10 | unbounded |
+
+### 5.5 Per-Level Order Flow / Kolm OF (20 features, indices 128-147)
+
+**Source**: `src/features/experimental/kolm_of.rs` (wraps `MultiLevelOfiTracker` from `order_flow.rs`)
+**Reference**: Kolm, Turiel & Westray (2023), "Deep Order Flow Imbalance", Mathematical Finance, Section 2.1.2
+
+Exposes bid and ask order flow **separately** per level (20-dim OF), matching Kolm's finding that the 20-dim representation significantly outperforms combined OFI (10-dim) across 115 NASDAQ stocks. Ask values use Kolm sign convention (positive when ask improves).
+
+| Index | Name | Description | Range |
+|-------|------|-------------|-------|
+| 128 | `bof_level_1` | Bid order flow at level 1 | unbounded |
+| 129 | `bof_level_2` | Bid order flow at level 2 | unbounded |
+| 130 | `bof_level_3` | Bid order flow at level 3 | unbounded |
+| 131 | `bof_level_4` | Bid order flow at level 4 | unbounded |
+| 132 | `bof_level_5` | Bid order flow at level 5 | unbounded |
+| 133 | `bof_level_6` | Bid order flow at level 6 | unbounded |
+| 134 | `bof_level_7` | Bid order flow at level 7 | unbounded |
+| 135 | `bof_level_8` | Bid order flow at level 8 | unbounded |
+| 136 | `bof_level_9` | Bid order flow at level 9 | unbounded |
+| 137 | `bof_level_10` | Bid order flow at level 10 | unbounded |
+| 138 | `aof_level_1` | Ask order flow at level 1 (Kolm convention: positive = ask improved) | unbounded |
+| 139 | `aof_level_2` | Ask order flow at level 2 | unbounded |
+| 140 | `aof_level_3` | Ask order flow at level 3 | unbounded |
+| 141 | `aof_level_4` | Ask order flow at level 4 | unbounded |
+| 142 | `aof_level_5` | Ask order flow at level 5 | unbounded |
+| 143 | `aof_level_6` | Ask order flow at level 6 | unbounded |
+| 144 | `aof_level_7` | Ask order flow at level 7 | unbounded |
+| 145 | `aof_level_8` | Ask order flow at level 8 | unbounded |
+| 146 | `aof_level_9` | Ask order flow at level 9 | unbounded |
+| 147 | `aof_level_10` | Ask order flow at level 10 | unbounded |
+
 ---
 
 ## Feature Count Summary
@@ -263,7 +318,9 @@ An `OrderTracker` (BTreeMap-backed, deterministic iteration) tracks active order
 | + MBO | 76 | 40 + 36 |
 | + Derived + MBO | 84 | 40 + 8 + 36 |
 | + Derived + MBO + Signals | **98** | 40 + 8 + 36 + 14 |
-| + Experimental (all groups) | **116** | 98 + 8 + 6 + 4 |
+| + Experimental (original 3) | **116** | 98 + 8 + 6 + 4 |
+| + Experimental (with MLOFI) | **128** | 98 + 8 + 6 + 4 + 12 |
+| + Experimental (all 5 groups) | **148** | 98 + 8 + 6 + 4 + 12 + 20 |
 
 ---
 
@@ -279,8 +336,8 @@ An `OrderTracker` (BTreeMap-backed, deterministic iteration) tracks active order
 | MBO ratios | 48-83 | Already normalized or `z_score` | Most are bounded [-1, 1] or [0, 1] |
 | Signal continuous | 84-91, 95-96 | `z_score` or raw | OFI may benefit from z-score |
 | **Categorical** | **92, 93, 94, 97** | **No normalization** | Must be excluded from all normalizers |
-| Experimental | 98-115 | `z_score` or raw | Depends on feature nature |
+| Experimental | 98-147 | `z_score` or raw | Depends on feature nature |
 
 ---
 
-*This document is derived from the source code in `src/features/`, `src/contract.rs`, and `contracts/pipeline_contract.toml`. Last updated: March 5, 2026.*
+*This document is derived from the source code in `src/features/`, `src/contract.rs`, and `contracts/pipeline_contract.toml`. Last updated: March 16, 2026.*

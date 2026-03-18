@@ -56,5 +56,8 @@ pub use normalization::{
     BilinearNormalizer, GlobalZScoreNormalizer, MinMaxNormalizer, Normalizer, PerFeatureNormalizer,
     PercentageChangeNormalizer, RollingZScoreNormalizer, ZScoreNormalizer,
 };
-pub use sampling::{EventBasedSampler, VolumeBasedSampler};
+pub use sampling::{
+    CompositeSampler, CompositeMode, EventBasedSampler, Sampler, SamplerMetrics, SamplingContext,
+    TimeBasedSampler, VolumeBasedSampler,
+};
 pub use volatility::VolatilityEstimator;

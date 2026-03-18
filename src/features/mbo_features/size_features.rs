@@ -175,4 +175,80 @@ mod tests {
         let expected = 0.9f64 * 0.9 + 0.1 * 0.1; // 0.82
         assert!((size_concentration(&w) - expected).abs() < 1e-10);
     }
+
+    // ====================================================================
+    // Edge case tests — zero variance, small samples (Rule §2, §6)
+    // ====================================================================
+
+    #[test]
+    fn test_size_zscore_zero_variance() {
+        // All identical sizes → std ≈ 0 → zscore should use DIVISION_GUARD_EPS
+        let mut w = MboWindow::new(1000);
+        push_events(&mut w, &[100, 100, 100, 100, 100]);
+        let zscore = size_zscore(&mut w);
+        assert!(
+            zscore.is_finite(),
+            "size_zscore must be finite when all sizes are identical, got {}",
+            zscore
+        );
+        assert!(
+            zscore.abs() < 1e-3,
+            "size_zscore should be ~0 when all sizes equal (last = mean). Got {}",
+            zscore
+        );
+    }
+
+    #[test]
+    fn test_size_zscore_empty_window() {
+        let mut w = MboWindow::new(1000);
+        let zscore = size_zscore(&mut w);
+        assert_eq!(zscore, 0.0, "Empty window must return 0.0");
+    }
+
+    #[test]
+    fn test_size_skewness_zero_variance() {
+        // All identical sizes → std ≈ 0 → skewness = 0.0 (guard)
+        let mut w = MboWindow::new(1000);
+        push_events(&mut w, &[100, 100, 100, 100]);
+        let skew = size_skewness(&mut w);
+        assert_eq!(
+            skew, 0.0,
+            "Skewness must be 0.0 when variance is zero (identical sizes)"
+        );
+    }
+
+    #[test]
+    fn test_all_size_features_finite() {
+        // Extract full 8-feature vector and verify all finite
+        let mut w = MboWindow::new(1000);
+        push_events(&mut w, &[50, 100, 200, 500, 100, 150, 80]);
+        let features = extract(&mut w);
+        for (i, &val) in features.iter().enumerate() {
+            assert!(
+                val.is_finite(),
+                "Size feature {} must be finite, got {}",
+                i, val
+            );
+        }
+        assert_eq!(features.len(), 8, "Must produce exactly 8 size features");
+    }
+
+    #[test]
+    fn test_large_order_ratio_no_outliers() {
+        // All same size → no orders above p90 (or p90 == size) → ratio ~0
+        let mut w = MboWindow::new(1000);
+        push_events(&mut w, &[100, 100, 100, 100, 100]);
+        let ratio = large_order_ratio(&mut w);
+        assert!(
+            ratio.is_finite(),
+            "large_order_ratio must be finite, got {}",
+            ratio
+        );
+        // All same → p90 = 100, no orders > 100 → ratio = 0
+        assert!(
+            ratio <= 1.0,
+            "large_order_ratio must be <= 1.0, got {}",
+            ratio
+        );
+    }
 }

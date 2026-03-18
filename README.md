@@ -22,7 +22,7 @@ This library provides a modular, research-aligned feature extraction pipeline fo
 - **Multi-Horizon Labels**: Generate labels for multiple prediction horizons (FI-2010, DeepLOB presets)
 - **Labeling Strategies**: TLOB, Multi-Horizon, Opportunity, Triple Barrier (all ✅ Export integrated)
 - **Volatility-Adaptive Barriers**: Per-day barrier scaling based on realized volatility
-- **Experimental Features**: Opt-in 18 additional features (institutional, volatility, seasonality)
+- **Experimental Features**: Opt-in up to 50 additional features (5 groups: institutional_v2, volatility, seasonality, mlofi, kolm_of)
 - **TensorFormatter**: Model-specific tensor shapes (DeepLOB, HLOB, Flat, Image formats)
 - **Multiple Normalization Strategies**: Z-score, Rolling Z-score, Global Z-score, Bilinear
 - **Multi-Scale Sequences**: Fast/Medium/Slow temporal resolution
@@ -158,7 +158,9 @@ let pipeline = PipelineBuilder::new()
 | Experimental: institutional_v2 | 8 | 98-105 | Enhanced whale detection (opt-in) |
 | Experimental: volatility | 6 | 106-111 | Realized vol & regime (opt-in) |
 | Experimental: seasonality | 4 | 112-115 | Time-of-day features (opt-in) |
-| **Max Total** | **116** | 0-115 | All features including experimental |
+| Experimental: mlofi | 12 | 116-127 | Multi-Level OFI per level (opt-in) |
+| Experimental: kolm_of | 20 | 128-147 | Per-level Order Flow, bid/ask separate (Kolm et al. 2023, opt-in) |
+| **Max Total** | **148** | 0-147 | All features including all experimental groups |
 
 ### Additional Feature Sets (standalone usage)
 
@@ -256,9 +258,20 @@ let pipeline = PipelineBuilder::new()
     .build()?;
 ```
 
+### Time-Based Sampling
+
+Sample at fixed wall-clock intervals, grid-aligned to 09:30 ET market open.
+Preserves OFI temporal persistence (ACF structure validated by profiler).
+
+```rust
+let pipeline = PipelineBuilder::new()
+    .time_sampling(5_000_000_000, -5) // 5-second intervals, EST (UTC-5)
+    .build()?;
+```
+
 ### Adaptive Sampling
 
-Automatically adjust threshold based on market volatility:
+Automatically adjust volume threshold based on market volatility:
 
 ```rust
 let pipeline = PipelineBuilder::new()

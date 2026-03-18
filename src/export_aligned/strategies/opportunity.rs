@@ -87,7 +87,8 @@ impl AlignedBatchExporter {
 
         Ok(LabelingResult {
             label_indices,
-            label_matrix,
+            classification_labels: Some(label_matrix),
+            regression_labels: None,
             encoding: LabelEncoding::SignedOpportunity,
             distribution: combined_dist,
             strategy_name: "opportunity",

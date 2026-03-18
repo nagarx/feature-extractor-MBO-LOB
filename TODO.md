@@ -18,28 +18,21 @@
 
 ## 1. Not Yet Implemented
 
-### 1.1 TimeBased Sampling Strategy (P2)
+### 1.1 Trait-Based Sampling Architecture
 
-**Status**: ⚠️ Declared but not implemented
+**Status**: ✅ Implemented (2026-03)
 
-**Location**: `src/config.rs:183` (SamplingStrategy enum), `src/pipeline.rs:815-821`
+**Location**: `src/preprocessing/sampling.rs` (trait + all implementations)
 
-**Current Behavior**: Returns explicit error if used:
-```rust
-Err("TimeBased sampling strategy is not yet implemented. \
-     Please use VolumeBased or EventBased sampling instead.")
-```
-
-**Documentation Impact**: The enum variant exists and appears in documentation, but users cannot
-use it. Documentation should be updated to mark this as "planned" or "not implemented".
-
-**Workaround**: Use `VolumeBased` (recommended) or `EventBased` sampling.
-
-**Files to Update When Implementing**:
-- `src/pipeline.rs` - Add TimeBasedSampler handling
-- `src/preprocessing/sampling.rs` - Implement TimeBasedSampler struct
-- `docs/USAGE_GUIDE.md` - Update sampling strategies section
-- `CODEBASE.md` - Update sampling documentation
+**What was done**:
+- `Sampler` trait with unified `should_sample(&SamplingContext) -> bool` interface
+- `TimeBasedSampler`: fixed-interval grid aligned to 09:30 ET market open
+- `CompositeSampler`: OR/AND composition of child samplers
+- Pipeline dispatch via `Box<dyn Sampler>` (replaces old `SamplerType` enum)
+- `MlofiComputer`/`KolmOfComputer` `sample_and_reset()` for interval-scoped MLOFI/Kolm OF
+- Config: `time_interval_ns`, `utc_offset_hours` fields on `SamplingConfig`
+- Builder: `.time_sampling(interval_ns, utc_offset_hours)` method
+- 18 new unit tests + 10 integration tests in `tests/sampling_integration_tests.rs`
 
 ---
 

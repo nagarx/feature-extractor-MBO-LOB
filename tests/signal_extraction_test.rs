@@ -318,11 +318,11 @@ fn test_signals_have_correct_indices() {
         book_valid
     );
 
-    // Verify time_regime is in valid range [0, 4]
+    // Verify time_regime is in valid range [0, 6] (7-regime system from hft-statistics)
     let time_regime = output[indices::TIME_REGIME];
     assert!(
-        (0.0..=4.0).contains(&time_regime),
-        "time_regime should be 0-4, got {}",
+        (0.0..=6.0).contains(&time_regime),
+        "time_regime should be 0-6 (7 regimes), got {}",
         time_regime
     );
 }

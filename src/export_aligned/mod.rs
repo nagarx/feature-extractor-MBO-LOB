@@ -32,7 +32,7 @@ mod validation;
 use metadata::{build_normalization_metadata, build_processing_metadata, build_provenance};
 pub use types::{AlignedDayExport, LabelEncoding, NormalizationParams, NormalizationStrategy};
 
-use crate::export::config::NormalizationConfig;
+use crate::export::config::{NormalizationConfig, RegressionExportConfig};
 use crate::export::tensor_format::{FeatureMapping, TensorFormat};
 use crate::labeling::{LabelConfig, MultiHorizonConfig, OpportunityConfig};
 use crate::pipeline::PipelineOutput;
@@ -72,6 +72,7 @@ pub struct AlignedBatchExporter {
     pub(super) tensor_format: Option<TensorFormat>,
     pub(super) feature_mapping: Option<FeatureMapping>,
     pub(super) multi_horizon_config: Option<MultiHorizonConfig>,
+    pub(super) regression_config: Option<RegressionExportConfig>,
     pub(super) opportunity_configs: Option<Vec<OpportunityConfig>>,
     /// Tuple of (configs, horizons). López de Prado (2018), Chapter 3.
     pub(super) triple_barrier_configs:
@@ -80,6 +81,17 @@ pub struct AlignedBatchExporter {
     pub(super) volatility_scaling: Option<(f64, f64, f64)>,
     pub(super) normalization_config: NormalizationConfig,
     pub(super) config_hash: Option<String>,
+    /// Export forward mid-price trajectories for Python-side label computation.
+    /// When enabled, exports `{day}_forward_prices.npy` with shape [N, k + max_H + 1]
+    /// containing raw USD mid_prices from t-k to t+max_H for each aligned sequence.
+    /// This enables computing any label type (smoothed, point-return, triple-barrier)
+    /// in Python without re-exporting from Rust.
+    pub(super) export_forward_prices: bool,
+    /// Smoothing window offset for forward prices array layout.
+    /// When export_forward_prices=true, the first `smoothing_window_offset` columns
+    /// contain past prices (t-k to t-1), enabling exact TLOB smoothed return computation.
+    /// Column `smoothing_window_offset` = price at t (sequence end / prediction point).
+    pub(super) smoothing_window_offset: usize,
 }
 
 impl AlignedBatchExporter {
@@ -104,17 +116,45 @@ impl AlignedBatchExporter {
             tensor_format: None,
             feature_mapping: None,
             multi_horizon_config: None,
+            regression_config: None,
             opportunity_configs: None,
             triple_barrier_configs: None,
             volatility_scaling: None,
             normalization_config: NormalizationConfig::default(), // Raw by default
             config_hash: None,
+            export_forward_prices: false,
+            smoothing_window_offset: 0,
         }
     }
 
     /// Set the config hash for provenance tracking (builder pattern).
     pub fn with_config_hash(mut self, hash: String) -> Self {
         self.config_hash = Some(hash);
+        self
+    }
+
+    /// Enable export of forward mid-price trajectories (builder pattern).
+    ///
+    /// When enabled, exports `{day}_forward_prices.npy` alongside existing outputs.
+    /// Shape: `[N, smoothing_window + max_horizon + 1]` float64 USD prices.
+    ///
+    /// This enables Python-side computation of ANY label type (smoothed-return,
+    /// point-return, triple-barrier, etc.) from the same aligned samples,
+    /// without re-exporting from Rust.
+    ///
+    /// # Arguments
+    /// * `smoothing_window` - Number of past price columns to include (for TLOB
+    ///   smoothed return formula). Column `smoothing_window` = base price at t.
+    ///
+    /// # Column Layout
+    /// ```text
+    /// [t-k, t-k+1, ..., t, t+1, ..., t+max_H]
+    ///  ├── past (k cols) ──┤  ├── forward ──┤
+    /// ```
+    /// Where k = smoothing_window, and max_H = max horizon from label config.
+    pub fn with_forward_prices(mut self, smoothing_window: usize) -> Self {
+        self.export_forward_prices = true;
+        self.smoothing_window_offset = smoothing_window;
         self
     }
 
@@ -221,6 +261,17 @@ impl AlignedBatchExporter {
     /// - `{day}_metadata.json`: Includes horizon configuration
     pub fn with_multi_horizon_labels(mut self, config: MultiHorizonConfig) -> Self {
         self.multi_horizon_config = Some(config);
+        self
+    }
+
+    /// Enable regression labeling: continuous forward returns in bps (builder pattern).
+    ///
+    /// Exports continuous float64 values instead of discretized int8 classes.
+    /// The return formula depends on `config.return_type`:
+    /// - `SmoothedReturn`: TLOB-style smoothed average (default)
+    /// - `PointReturn`, `PeakReturn`, etc.: via `MagnitudeGenerator`
+    pub fn with_regression_labels(mut self, config: RegressionExportConfig) -> Self {
+        self.regression_config = Some(config);
         self
     }
 
@@ -363,6 +414,34 @@ impl AlignedBatchExporter {
         self.multi_horizon_config.as_ref()
     }
 
+    /// Compute the maximum forward horizon from all configured label strategies.
+    ///
+    /// This determines how many forward price columns to export.
+    /// Uses the largest horizon across all configured strategies.
+    fn max_forward_horizon(&self) -> usize {
+        let mut max_h: usize = self.label_config.horizon;
+
+        if let Some(ref mh) = self.multi_horizon_config {
+            if let Some(&h) = mh.horizons().iter().max() {
+                max_h = max_h.max(h);
+            }
+        }
+
+        if let Some(ref reg) = self.regression_config {
+            if let Some(&h) = reg.multi_horizon_config.horizons().iter().max() {
+                max_h = max_h.max(h);
+            }
+        }
+
+        if let Some((_, ref horizons)) = self.triple_barrier_configs {
+            if let Some(&h) = horizons.iter().max() {
+                max_h = max_h.max(h);
+            }
+        }
+
+        max_h
+    }
+
     /// Export a single day with aligned sequences and labels
     ///
     /// # Process
@@ -393,8 +472,10 @@ impl AlignedBatchExporter {
         println!("    Mid-prices collected: {}", output.mid_prices.len());
 
         // Strategy dispatch: generate labels → LabelingResult → common pipeline.
-        // Priority order: Triple Barrier > Opportunity > Multi-horizon TLOB > Single-horizon TLOB
-        let labeling = if let Some((tb_configs, horizons)) = &self.triple_barrier_configs {
+        // Priority: Regression > Triple Barrier > Opportunity > Multi-horizon TLOB > Single TLOB
+        let labeling = if let Some(reg_config) = &self.regression_config {
+            self.labeling_regression(output, reg_config)?
+        } else if let Some((tb_configs, horizons)) = &self.triple_barrier_configs {
             self.labeling_triple_barrier(output, tb_configs, horizons)?
         } else if let Some(opp_configs) = &self.opportunity_configs {
             self.labeling_opportunity(output, opp_configs)?
@@ -420,13 +501,29 @@ impl AlignedBatchExporter {
         let features_extracted = output.features_extracted;
         let sequences_generated = output.sequences.len();
 
-        // Step 1: Align sequences with labels
+        // For alignment, we need label_indices and at least one label matrix.
+        // Classification strategies provide classification_labels.
+        // Regression provides only regression_labels.
+        // The alignment function uses label_indices for the mapping.
+
+        // Build a "dummy" empty classification matrix if None (for pure regression).
+        // The alignment function needs a label matrix to pair with sequences, but
+        // for regression mode the regression_labels are what matters.
+        let empty_class_labels: Vec<Vec<i8>> = Vec::new();
+        let class_labels_for_alignment = labeling
+            .classification_labels
+            .as_deref()
+            .unwrap_or(&empty_class_labels);
+
+        // Step 1: Align sequences with labels (classification + optional regression in one pass)
         println!("  🔗 Aligning sequences with labels...");
-        let (aligned_sequences, aligned_label_matrix) = self.align_sequences_with_multi_labels(
-            &output.sequences,
-            &labeling.label_indices,
-            &labeling.label_matrix,
-        )?;
+        let (aligned_sequences, aligned_label_matrix, aligned_regression_matrix, aligned_ending_indices) =
+            self.align_sequences_with_multi_labels(
+                &output.sequences,
+                &labeling.label_indices,
+                class_labels_for_alignment,
+                labeling.regression_labels.as_deref(),
+            )?;
 
         let sequences_dropped = sequences_generated.saturating_sub(aligned_sequences.len());
         println!(
@@ -435,12 +532,69 @@ impl AlignedBatchExporter {
         );
         println!("    Dropped {sequences_dropped} sequences (no label)");
 
+        // Step 1b: Build forward mid-price trajectories (if enabled)
+        // Uses aligned_ending_indices (mid_price snapshot indices for ALIGNED sequences only)
+        // to extract price trajectories. Guarantees forward_prices.shape[0] == sequences.shape[0].
+        let forward_price_trajectories: Option<Vec<Vec<f64>>> = if self.export_forward_prices {
+            let mid_prices = &output.mid_prices;
+            let n_mid = mid_prices.len();
+            let k = self.smoothing_window_offset;
+            let max_h = self.max_forward_horizon();
+            let n_cols = k + max_h + 1; // [t-k, ..., t, t+1, ..., t+max_H]
+
+            let mut trajectories = Vec::with_capacity(aligned_ending_indices.len());
+
+            for &idx in &aligned_ending_indices {
+                let mut row = Vec::with_capacity(n_cols);
+                for offset in 0..n_cols {
+                    // Column 0 = t-k, column k = t, column k+h = t+h
+                    // idx is the snapshot index at t (sequence ending point)
+                    let price_idx = (idx + offset).wrapping_sub(k);
+                    if price_idx < n_mid {
+                        row.push(mid_prices[price_idx]);
+                    } else {
+                        // Should not happen for valid label_indices, but guard against it
+                        row.push(f64::NAN);
+                    }
+                }
+                trajectories.push(row);
+            }
+
+            println!(
+                "  📈 Forward prices: {} trajectories × {} columns (k={}, max_H={})",
+                trajectories.len(),
+                n_cols,
+                k,
+                max_h,
+            );
+            Some(trajectories)
+        } else {
+            None
+        };
+
+        // Validate forward_prices alignment contract
+        if let Some(ref fwd) = forward_price_trajectories {
+            assert_eq!(
+                fwd.len(),
+                aligned_sequences.len(),
+                "Contract violation: forward_prices rows ({}) != sequences rows ({}). \
+                 Forward prices must be aligned 1:1 with sequences.",
+                fwd.len(),
+                aligned_sequences.len()
+            );
+        }
+
         // Step 2: Validate alignment
-        self.validate_label_alignment(
-            &aligned_sequences,
-            &aligned_label_matrix,
-            &labeling.encoding,
-        )?;
+        if labeling.encoding.is_classification() {
+            self.validate_label_alignment(
+                &aligned_sequences,
+                &aligned_label_matrix,
+                &labeling.encoding,
+            )?;
+        }
+        if let Some(ref aligned_reg) = aligned_regression_matrix {
+            self.validate_regression_labels(&aligned_sequences, aligned_reg)?;
+        }
 
         // Step 3: Verify raw spreads
         self.verify_raw_spreads(&aligned_sequences)?;
@@ -470,12 +624,33 @@ impl AlignedBatchExporter {
         self.export_sequences_with_format(&aligned_sequences, seq_shape, &sequences_path)?;
 
         // Step 8: Export labels NPY
-        let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
-        if labeling.is_multi_horizon {
-            self.export_multi_horizon_labels(&aligned_label_matrix, &labels_path)?;
+        if let Some(ref aligned_reg) = aligned_regression_matrix {
+            // Regression mode: export float64 regression labels as primary
+            let reg_path = self.output_dir.join(format!("{day_name}_regression_labels.npy"));
+            self.export_regression_labels(aligned_reg, &reg_path)?;
+
+            // Export classification labels only if classification was also generated
+            if labeling.classification_labels.is_some() && !aligned_label_matrix.is_empty() {
+                let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
+                self.export_multi_horizon_labels(&aligned_label_matrix, &labels_path)?;
+            }
         } else {
-            let single_labels: Vec<i8> = aligned_label_matrix.iter().map(|v| v[0]).collect();
-            self.export_labels(&single_labels, &labels_path)?;
+            // Classification mode: export int8 labels
+            let labels_path = self.output_dir.join(format!("{day_name}_labels.npy"));
+            if labeling.is_multi_horizon {
+                self.export_multi_horizon_labels(&aligned_label_matrix, &labels_path)?;
+            } else {
+                let single_labels: Vec<i8> = aligned_label_matrix.iter().map(|v| v[0]).collect();
+                self.export_labels(&single_labels, &labels_path)?;
+            }
+        }
+
+        // Step 8b: Export forward mid-price trajectories (if enabled)
+        if let Some(ref fwd_prices) = forward_price_trajectories {
+            let fwd_path = self
+                .output_dir
+                .join(format!("{day_name}_forward_prices.npy"));
+            self.export_forward_prices(fwd_prices, &fwd_path)?;
         }
 
         // Step 9: Export normalization params
@@ -483,6 +658,13 @@ impl AlignedBatchExporter {
             self.output_dir
                 .join(format!("{day_name}_normalization.json")),
         )?;
+
+        // For metadata validation, count from whichever label source is available
+        let aligned_label_count = if let Some(ref reg) = aligned_regression_matrix {
+            reg.len()
+        } else {
+            aligned_label_matrix.len()
+        };
 
         // Step 10: Build and export metadata
         let tensor_format_str = self.tensor_format.as_ref().map(|f| format!("{:?}", f));
@@ -496,6 +678,7 @@ impl AlignedBatchExporter {
             "schema_version": crate::contract::SCHEMA_VERSION.to_string(),
             "contract_version": crate::contract::SCHEMA_VERSION.to_string(),
             "label_strategy": labeling.strategy_name,
+            "label_dtype": labeling.encoding.label_dtype(),
             "tensor_format": tensor_format_str,
             "labeling": labeling.strategy_metadata,
             "label_distribution": labeling.distribution,
@@ -503,7 +686,7 @@ impl AlignedBatchExporter {
             "normalization": build_normalization_metadata(&norm_params, day_name),
             "provenance": build_provenance(config_hash_str),
             "validation": {
-                "sequences_labels_match": aligned_sequences.len() == aligned_label_matrix.len(),
+                "sequences_labels_match": aligned_sequences.len() == aligned_label_count,
                 "label_range_valid": true,
                 "no_nan_inf": nan_inf_report.is_clean,
                 "values_scanned": nan_inf_report.total_values_scanned,
@@ -515,6 +698,23 @@ impl AlignedBatchExporter {
                 aligned_sequences.len(),
                 sequences_dropped,
             ),
+            "forward_prices": if self.export_forward_prices {
+                serde_json::json!({
+                    "exported": true,
+                    "max_horizon": self.max_forward_horizon(),
+                    "smoothing_window_offset": self.smoothing_window_offset,
+                    "n_columns": self.smoothing_window_offset + self.max_forward_horizon() + 1,
+                    "units": "USD",
+                    "column_layout": format!(
+                        "col_0=t-{}, col_{}=t, col_{}=t+max_H",
+                        self.smoothing_window_offset,
+                        self.smoothing_window_offset,
+                        self.smoothing_window_offset + self.max_forward_horizon(),
+                    ),
+                })
+            } else {
+                serde_json::json!({"exported": false})
+            },
         });
 
         let metadata_path = self.output_dir.join(format!("{day_name}_metadata.json"));

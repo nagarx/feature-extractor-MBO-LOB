@@ -1,0 +1,97 @@
+# =============================================================================
+# NVDA XNAS 128-Feature — Fine-Grained Regression (event_count=200)
+# =============================================================================
+#
+# KEY DIFFERENCE from nvda_xnas_128feat_regression.toml:
+#   event_count = 200 (was 1000). 5x finer sampling granularity.
+#   horizons = [1, 2, 5, 10, 20] (was [10, 60, 300]). Short horizons.
+#   return_type = "point_return" (was default smoothed).
+#
+# MOTIVATION (from RESEARCH_SYNTHESIS_REPORT.md):
+#   Kolm, Turiel & Westray (2023) show OFI effective horizon ~2 price
+#   changes (~0.1-0.5s for NVDA). Our event_count=1000 sampling (2.3s/sample)
+#   puts H10 at 23s — 50-200x beyond signal lifetime. With event_count=200
+#   each sample covers ~0.46s, and H5 = 1000 events = ~2.3s, close to the
+#   upper bound of OFI predictability (~50-300 events per Lucchese et al. 2024).
+#
+#   Point-return labels should have measurable signal at these horizons
+#   (unlike H10 at 1000-event sampling where R²=0.000).
+#
+# TRADE-OFFS:
+#   - 5x more sequences (~1.3M instead of 267K)
+#   - 5x more disk space (~65 GB)
+#   - stride=5 reduces overlap vs stride=10
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA XNAS 128-Feature Fine-Grained Regression"
+description = "Fine-grained regression: event_count=200, short horizons, point-return labels"
+version = "1.0.0"
+tags = ["nvda", "xnas", "128-features", "regression", "fine-grained", "point-return", "short-horizon"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/hot_store"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_xnas_128feat_regression_finegrained"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+exclude_dates = [
+    "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27",
+    "2025-12-25", "2026-01-01",
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[features.experimental]
+enabled = true
+groups = ["institutional_v2", "volatility", "seasonality", "mlofi"]
+
+[sampling]
+strategy = "event_based"
+event_count = 200
+
+[sequence]
+window_size = 100
+stride = 5
+max_buffer_size = 50000
+
+[labels]
+strategy = "regression"
+horizon = 10
+horizons = [1, 2, 5, 10, 20]
+return_type = "point_return"
+smoothing_window = 10
+threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = false
+
+[normalization]
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

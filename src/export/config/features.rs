@@ -218,19 +218,24 @@ impl FeatureSetConfig {
     }
 
     /// Compute the total number of features.
+    ///
+    /// Uses named constants from `FeatureConfig` (single source of truth)
+    /// to prevent drift between production and export configurations.
     pub fn feature_count(&self) -> usize {
+        use crate::features::FeatureConfig;
+
         let mut count = self.lob_levels * 4; // Raw LOB
 
         if self.include_derived {
-            count += 8; // Derived features
+            count += FeatureConfig::DERIVED_FEATURE_COUNT;
         }
 
         if self.include_mbo {
-            count += 36; // MBO features
+            count += FeatureConfig::MBO_FEATURE_COUNT;
         }
 
         if self.include_signals {
-            count += 14; // Trading signals
+            count += FeatureConfig::SIGNAL_FEATURE_COUNT;
         }
 
         // Experimental features (indices 98+)

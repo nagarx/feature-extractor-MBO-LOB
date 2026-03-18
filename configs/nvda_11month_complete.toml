@@ -24,7 +24,7 @@
 #       --config configs/nvda_11month_complete.toml
 #
 # Prerequisites:
-#   1. Complete dataset in: data/NVDA_2025-02-03_to_2026-01-07 (233 files)
+#   1. Complete dataset in: data/hot_store (233 files)
 #   2. Hot store will be populated on-demand during extraction
 #
 # =============================================================================
@@ -45,12 +45,12 @@ tags = [
 [symbol]
 name = "NVDA"
 exchange = "XNAS"
-filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
 tick_size = 0.01  # NVIDIA tick size in USD
 
 [data]
 # Primary input: Complete merged dataset
-input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+input_dir = "../data/hot_store"
 
 # Output directory for exported features
 output_dir = "../data/exports/nvda_11month_complete"

@@ -10,7 +10,7 @@
 //! Usage:
 //! ```bash
 //! cargo run --release --example test_sequence_builder \
-//!     data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250203.mbo.dbn.zst
+//!     data/hot_store/xnas-itch-20250203.mbo.dbn
 //! ```
 
 use std::env;
@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Usage: {} <path-to-dbn-file>", args[0]);
         eprintln!("\nExample:");
         eprintln!(
-            "  {} data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250203.mbo.dbn.zst",
+            "  {} data/hot_store/xnas-itch-20250203.mbo.dbn",
             args[0]
         );
         std::process::exit(1);

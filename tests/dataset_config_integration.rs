@@ -112,7 +112,7 @@ fn test_symbol_config_filename_patterns() {
     let nvda = SymbolConfig::nasdaq("NVDA");
     assert_eq!(
         nvda.filename_for_date("2025-02-03"),
-        "xnas-itch-20250203.mbo.dbn.zst"
+        "xnas-itch-20250203.mbo.dbn"
     );
 
     // Custom pattern with symbol substitution
@@ -489,11 +489,11 @@ fn test_full_config_toml_roundtrip() {
         [symbol]
         name = "NVDA"
         exchange = "XNAS"
-        filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+        filename_pattern = "xnas-itch-{date}.mbo.dbn"
         tick_size = 0.01
 
         [data]
-        input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+        input_dir = "../data/hot_store"
         output_dir = "../data/exports/nvda_balanced"
         hot_store_dir = "../data/hot_store"
 

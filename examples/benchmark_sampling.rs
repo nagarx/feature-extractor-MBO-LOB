@@ -9,7 +9,7 @@
 //! Usage:
 //! ```bash
 //! cargo run --release --example test_sampling_strategies \
-//!   /Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250203.mbo.dbn.zst
+//!   ../data/hot_store/xnas-itch-20250203.mbo.dbn
 //! ```
 
 use feature_extractor::{EventBasedSampler, FeatureExtractor, VolumeBasedSampler};
@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Usage: {} <path_to_dbn_file>", args[0]);
         eprintln!("\nExample:");
         eprintln!("  cargo run --release --example test_sampling_strategies \\");
-        eprintln!("    data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250203.mbo.dbn.zst");
+        eprintln!("    data/hot_store/xnas-itch-20250203.mbo.dbn");
         std::process::exit(1);
     }
     let file_path = &args[1];

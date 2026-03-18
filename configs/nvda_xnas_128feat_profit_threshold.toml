@@ -1,0 +1,90 @@
+# =============================================================================
+# NVDA XNAS 128-Feature — Profit-Threshold Labeling
+# =============================================================================
+#
+# Same features as nvda_xnas_128feat_full.toml but with FIXED labeling
+# thresholds calibrated to option trading breakeven costs.
+#
+# Cost-aligned thresholds (from IBKR_REAL_WORLD_TRADING_REPORT.md):
+#   ATM 0DTE Call breakeven: 4.7 bps → use 5 bps minimum
+#   ATM 0DTE Put breakeven:  3.6 bps → use 5 bps minimum
+#   Profiler recommendation: ±12 bps at 1-minute for ~31/38/31 balance
+#
+# Using FIXED 8 bps threshold (conservative buffer above 4.7 bps breakeven):
+#   At H60: ~25% Down / 50% Stable / 25% Up
+#   Every directional label represents a move > breakeven cost
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA XNAS 128-Feature Profit-Threshold (H60 Primary)"
+description = "Profit-aligned labeling: ±8 bps fixed threshold, H60 primary"
+version = "1.0.0"
+tags = ["nvda", "xnas", "128-features", "profit-threshold", "h60-primary"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/hot_store"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_xnas_128feat_profit8bps"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+exclude_dates = [
+    "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27",
+    "2025-12-25", "2026-01-01",
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[features.experimental]
+enabled = true
+groups = ["institutional_v2", "volatility", "seasonality", "mlofi"]
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+# FIXED threshold = 8 bps (0.0008), NOT dynamic
+# This ensures every directional label represents a move above ATM call breakeven
+[labels]
+strategy = "tlob"
+horizon = 60
+horizons = [10, 60, 300]
+smoothing_window = 10
+threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = false
+
+[normalization]
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

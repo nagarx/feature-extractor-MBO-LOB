@@ -80,7 +80,10 @@ use crate::{
     export::tensor_format::{TensorFormat, TensorFormatter, TensorOutput},
     features::mbo_features::MboEvent,
     labeling::{MultiHorizonConfig, MultiHorizonLabelGenerator, MultiHorizonLabels},
-    preprocessing::{AdaptiveVolumeThreshold, EventBasedSampler, VolumeBasedSampler},
+    preprocessing::{
+        AdaptiveVolumeThreshold, EventBasedSampler, VolumeBasedSampler,
+        sampling::{Sampler, SamplingContext, TimeBasedSampler},
+    },
     sequence_builder::{FeatureVec, MultiScaleSequence, MultiScaleWindow},
     FeatureExtractor, Sequence, SequenceBuilder,
 };
@@ -541,7 +544,7 @@ impl Pipeline {
     /// let mut pipeline = PipelineBuilder::new().build()?;
     ///
     /// // With Databento DBN files
-    /// let source = DbnSource::new("data/NVDA.mbo.dbn.zst")?;
+    /// let source = DbnSource::new("data/hot_store/xnas-itch-20250203.mbo.dbn")?;
     /// let output = pipeline.process_source(source)?;
     ///
     /// // With hot store (faster)
@@ -622,6 +625,9 @@ impl Pipeline {
                 ofi.update(&lob_state);
             }
 
+            // Multi-level OFI (Kolm et al. 2023): accumulated on every LOB transition
+            self.feature_extractor.update_experimental_lob(&lob_state);
+
             // Process MBO event for MBO feature aggregation
             if self.feature_extractor.has_mbo() {
                 let mbo_event = MboEvent::from_mbo_message(&msg);
@@ -630,27 +636,20 @@ impl Pipeline {
 
             let ts = msg.timestamp.unwrap_or(0) as u64;
 
-            // Determine threshold (adaptive or fixed)
-            let current_threshold = if let (Some(ref mut adaptive), Some(mid_price)) =
+            // Adaptive threshold adjustment (only affects volume-based sampler)
+            if let (Some(ref mut adaptive), Some(mid_price)) =
                 (&mut self.adaptive_threshold, lob_state.mid_price())
             {
-                adaptive.update(mid_price)
-            } else {
-                self.config
-                    .sampling
-                    .as_ref()
-                    .and_then(|s| s.volume_threshold)
-                    .unwrap_or(1000)
-            };
+                let threshold = adaptive.update(mid_price);
+                sampler.set_threshold(threshold);
+            }
 
-            // Check if we should sample
-            let should_sample = match &mut sampler {
-                SamplerType::Volume(s) => {
-                    s.set_threshold(current_threshold);
-                    s.should_sample(msg.size, ts)
-                }
-                SamplerType::Event(s) => s.should_sample(),
+            // Unified sampling decision via Sampler trait
+            let ctx = SamplingContext {
+                timestamp_ns: ts,
+                event_volume: msg.size,
             };
+            let should_sample = sampler.should_sample(&ctx);
 
             if should_sample {
                 // Skip if LOB not ready (no bid/ask yet)
@@ -704,16 +703,18 @@ impl Pipeline {
                     feature_buffer.extend(signals.to_vec());
                 }
 
-                // Extract experimental features if enabled (indices 98-115)
-                // Must be called AFTER signals (index 84-97) to maintain correct order
+                // Extract experimental features if enabled (indices 98-147)
+                // Must be called AFTER signals (index 84-97) to maintain correct order.
+                // Uses extract_and_reset to scope MLOFI/Kolm OF to the sampling interval
+                // (not cumulative since day start), matching OfiComputer::sample_and_reset().
                 if self.feature_extractor.has_experimental() {
                     // Update price for volatility features
                     if let Some(mid) = lob_state.mid_price() {
                         self.feature_extractor.update_experimental_price(mid, ts);
                     }
-                    // Extract and append experimental features
+                    // Extract experimental features and reset MLOFI/Kolm OF accumulators
                     self.feature_extractor
-                        .extract_experimental_into(ts, &mut feature_buffer);
+                        .extract_and_reset_experimental_into(ts, &mut feature_buffer);
                 }
 
                 features_extracted += 1;
@@ -840,9 +841,11 @@ impl Pipeline {
         }
     }
 
-    // Helper: Create sampler from config
-    fn create_sampler(&self) -> Result<SamplerType> {
-        // Use default sampling config if none provided
+    /// Create a sampler from the pipeline's config.
+    ///
+    /// Returns a trait object so the pipeline loop doesn't need to know
+    /// which concrete strategy is in use.
+    fn create_sampler(&self) -> Result<Box<dyn Sampler>> {
         let default_config = crate::config::SamplingConfig::default();
         let sampling_config = self.config.sampling.as_ref().unwrap_or(&default_config);
 
@@ -850,41 +853,28 @@ impl Pipeline {
             SamplingStrategy::VolumeBased => {
                 let threshold = sampling_config.volume_threshold.unwrap_or(1000);
                 let min_interval = sampling_config.min_time_interval_ns.unwrap_or(1_000_000);
-                Ok(SamplerType::Volume(VolumeBasedSampler::new(
-                    threshold,
-                    min_interval,
-                )))
+                Ok(Box::new(VolumeBasedSampler::new(threshold, min_interval)))
             }
             SamplingStrategy::EventBased => {
                 let count = sampling_config.event_count.unwrap_or(100) as u64;
-                Ok(SamplerType::Event(EventBasedSampler::new(count)))
+                Ok(Box::new(EventBasedSampler::new(count)))
             }
             SamplingStrategy::TimeBased => {
-                // TimeBased sampling is not yet implemented
-                // Return an explicit error instead of silently falling back
-                Err(mbo_lob_reconstructor::TlobError::generic(
-                    "TimeBased sampling strategy is not yet implemented. \
-                     Please use VolumeBased or EventBased sampling instead.",
-                ))
+                let interval = sampling_config
+                    .time_interval_ns
+                    .unwrap_or(5_000_000_000); // default 5s
+                let utc_offset = sampling_config.utc_offset_hours.unwrap_or(-5); // default EST
+                Ok(Box::new(TimeBasedSampler::new(interval, utc_offset)))
             }
             SamplingStrategy::MultiScale => {
-                // MultiScale uses the multi-scale window, not a traditional sampler
-                // For the sampler itself, we use volume-based as the base
+                // MultiScale uses the multi-scale window, not a traditional sampler.
+                // For the sampler itself, use volume-based as the base.
                 let threshold = sampling_config.volume_threshold.unwrap_or(1000);
                 let min_interval = sampling_config.min_time_interval_ns.unwrap_or(1_000_000);
-                Ok(SamplerType::Volume(VolumeBasedSampler::new(
-                    threshold,
-                    min_interval,
-                )))
+                Ok(Box::new(VolumeBasedSampler::new(threshold, min_interval)))
             }
         }
     }
-}
-
-// Internal sampler enum (simple, no trait needed)
-enum SamplerType {
-    Volume(VolumeBasedSampler),
-    Event(EventBasedSampler),
 }
 
 // ============================================================================
@@ -1027,7 +1017,7 @@ mod tests {
         let initial_changes = pipeline
             .ofi_computer
             .as_ref()
-            .unwrap()
+            .expect("ofi_computer asserted Some at line 1027")
             .state_changes_since_reset();
         assert_eq!(initial_changes, 0);
 
@@ -1049,7 +1039,7 @@ mod tests {
         let after_update = pipeline
             .ofi_computer
             .as_ref()
-            .unwrap()
+            .expect("ofi_computer asserted Some at line 1027")
             .state_changes_since_reset();
         assert!(after_update > 0, "State changes should be tracked");
 
@@ -1060,7 +1050,7 @@ mod tests {
         let after_reset = pipeline
             .ofi_computer
             .as_ref()
-            .unwrap()
+            .expect("ofi_computer asserted Some at line 1027")
             .state_changes_since_reset();
         assert_eq!(after_reset, 0, "Reset should clear state changes");
     }

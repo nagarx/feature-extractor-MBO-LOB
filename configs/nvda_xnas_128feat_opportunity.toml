@@ -1,0 +1,99 @@
+# =============================================================================
+# NVDA XNAS 128-Feature Opportunity Labels (0DTE-Aligned)
+# =============================================================================
+#
+# Same 128-feature extraction as nvda_xnas_128feat_full.toml but with
+# Opportunity labeling instead of TLOB. Opportunity labels detect PEAK
+# returns within the horizon window, matching the 0DTE ATM options profit
+# model where any sufficient move during the holding period is tradeable.
+#
+# Threshold: 30 bps (0.003)
+# - 25 bps is the minimum underlying move for 0DTE ATM option profitability
+#   (delta ~0.50, so 25 bps underlying → ~12.5 bps option value, marginal)
+# - 30 bps provides a small buffer above the profitability threshold
+# - Expected ~15-25% opportunity rate (vs ~70% NoOpportunity)
+#
+# This export produces the same 7 horizons as the TLOB export, so the
+# HMHP config with horizons=[10, 60, 300] can be reused directly.
+#
+# Usage:
+#   cargo run --release --features parallel --bin export_dataset -- \
+#       --config configs/nvda_xnas_128feat_opportunity.toml
+# =============================================================================
+
+[experiment]
+name = "NVDA XNAS 128-Feature Opportunity (0DTE-Aligned)"
+description = "233-day extraction with Opportunity labels, 30 bps threshold, for 0DTE ATM options alignment"
+version = "1.0.0"
+tags = ["nvda", "xnas", "128-features", "opportunity", "0dte-aligned"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/hot_store"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_xnas_128feat_opportunity"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+exclude_dates = [
+    "2025-01-20",   # MLK Day
+    "2025-02-17",   # Presidents Day
+    "2025-04-18",   # Good Friday
+    "2025-05-26",   # Memorial Day
+    "2025-06-19",   # Juneteenth
+    "2025-07-04",   # Independence Day
+    "2025-09-01",   # Labor Day
+    "2025-11-27",   # Thanksgiving
+    "2025-12-25",   # Christmas
+    "2026-01-01",   # New Year's Day
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[features.experimental]
+enabled = true
+groups = ["institutional_v2", "volatility", "seasonality", "mlofi"]
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+[labels]
+strategy = "opportunity"
+horizons = [10, 20, 50, 60, 100, 200, 300]
+threshold = 0.003
+conflict_priority = "larger_magnitude"
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = false
+
+[normalization]
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

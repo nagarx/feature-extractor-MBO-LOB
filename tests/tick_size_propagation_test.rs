@@ -13,7 +13,7 @@ fn test_tick_size_propagates_from_symbol_config() {
 [symbol]
 name = "BTCUSD"
 exchange = "BINANCE"
-filename_pattern = "binance-{date}.mbo.dbn.zst"
+filename_pattern = "binance-{date}.mbo.dbn"
 tick_size = 0.001  # Custom tick_size for crypto
 
 [data]
@@ -82,7 +82,7 @@ fn test_default_tick_size_is_001() {
 [symbol]
 name = "NVDA"
 exchange = "XNAS"
-filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
 # tick_size not specified, should default to 0.01
 
 [data]
@@ -156,7 +156,7 @@ fn test_tick_size_various_values() {
 [symbol]
 name = "TEST"
 exchange = "TEST"
-filename_pattern = "test-{{date}}.mbo.dbn.zst"
+filename_pattern = "test-{{date}}.mbo.dbn"
 tick_size = {}
 
 [data]

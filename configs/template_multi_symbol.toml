@@ -24,10 +24,10 @@ name = "SYMBOL_NAME"
 exchange = "XNAS"
 
 # Filename pattern - common patterns:
-# - NASDAQ: "xnas-itch-{date}.mbo.dbn.zst"
-# - NYSE: "xnys-trades-{date}.mbo.dbn.zst"
-# - Custom: "{symbol}_{date}.dbn.zst" (uses symbol name)
-filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+# - NASDAQ: "xnas-itch-{date}.mbo.dbn"
+# - NYSE: "xnys-trades-{date}.mbo.dbn"
+# - Custom: "{symbol}_{date}.mbo.dbn" (uses symbol name)
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
 
 tick_size = 0.01  # US stocks: 0.01, some ETFs: 0.0001
 

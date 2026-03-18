@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 /// let nvda = SymbolConfig {
 ///     name: "NVDA".to_string(),
 ///     exchange: "XNAS".to_string(),
-///     filename_pattern: "xnas-itch-{date}.mbo.dbn.zst".to_string(),
+///     filename_pattern: "xnas-itch-{date}.mbo.dbn".to_string(),
 ///     tick_size: 0.01,
 /// };
 /// ```
@@ -38,7 +38,7 @@ pub struct SymbolConfig {
     ///
     /// Use `{date}` as placeholder for YYYYMMDD date format.
     /// Examples:
-    /// - `"xnas-itch-{date}.mbo.dbn.zst"` → `xnas-itch-20250203.mbo.dbn.zst`
+    /// - `"xnas-itch-{date}.mbo.dbn"` → `xnas-itch-20250203.mbo.dbn`
     /// - `"{symbol}_{date}.dbn.zst"` → `NVDA_20250203.dbn.zst`
     pub filename_pattern: String,
 
@@ -64,12 +64,12 @@ impl SymbolConfig {
 
     /// Create NASDAQ symbol configuration with standard naming.
     ///
-    /// Uses pattern: `xnas-itch-{date}.mbo.dbn.zst`
+    /// Uses pattern: `xnas-itch-{date}.mbo.dbn` (decompressed hot store format)
     pub fn nasdaq(name: &str) -> Self {
         Self {
             name: name.to_string(),
             exchange: "XNAS".to_string(),
-            filename_pattern: "xnas-itch-{date}.mbo.dbn.zst".to_string(),
+            filename_pattern: "xnas-itch-{date}.mbo.dbn".to_string(),
             tick_size: 0.01,
         }
     }
@@ -82,7 +82,7 @@ impl SymbolConfig {
     ///
     /// # Returns
     ///
-    /// Filename with date substituted (e.g., "xnas-itch-20250203.mbo.dbn.zst")
+    /// Filename with date substituted (e.g., "xnas-itch-20250203.mbo.dbn")
     pub fn filename_for_date(&self, date: &str) -> String {
         // Convert YYYY-MM-DD to YYYYMMDD
         let date_compact = date.replace('-', "");
@@ -347,7 +347,7 @@ mod tests {
         let symbol = SymbolConfig::nasdaq("NVDA");
         assert_eq!(
             symbol.filename_for_date("2025-02-03"),
-            "xnas-itch-20250203.mbo.dbn.zst"
+            "xnas-itch-20250203.mbo.dbn"
         );
     }
 

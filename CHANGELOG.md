@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Trait-Based Sampling Architecture** (`src/preprocessing/sampling.rs`)
+  - `Sampler` trait — unified interface with `should_sample(&SamplingContext) -> bool`
+  - `TimeBasedSampler` — fixed-interval grid aligned to 09:30 ET market open
+    - Config: `time_interval_ns` (nanoseconds), `utc_offset_hours` (EST=-5, EDT=-4)
+    - Builder: `.time_sampling(interval_ns, utc_offset_hours)`
+    - Gap handling: one sample per gap (not one per missed boundary)
+  - `CompositeSampler` — OR/AND composition of child samplers (`CompositeMode::Any`/`All`)
+  - `SamplingContext` struct (16 bytes, stack-allocated) — passed to every `should_sample()` call
+  - `SamplerMetrics` — sample_count, events_observed, volume_observed, last_sample_timestamp_ns
+  - Pipeline dispatch via `Box<dyn Sampler>` — replaces `SamplerType` enum
+  - 30 unit tests + 10 integration tests in `tests/sampling_integration_tests.rs`
+
+- **MLOFI/Kolm OF Interval-Scoped Sampling** (`src/features/experimental/`)
+  - `MultiLevelOfiTracker::sample_and_reset_accumulators()` — zeroes OFI, preserves `prev_*` book state
+  - `MlofiComputer::sample_and_reset()` — extract + reset for interval-scoped MLOFI
+  - `KolmOfComputer::sample_and_reset()` — extract + reset for interval-scoped Kolm OF
+  - `ExperimentalExtractor::extract_and_reset_into()` — production method at sample points
+  - Pipeline calls `extract_and_reset_experimental_into()` instead of `extract_experimental_into()`
+  - Fixes data correctness bug: experimental OFI features were cumulative since day start
+
+### Changed
+
+- `SamplingConfig` now includes `time_interval_ns: Option<u64>` and `utc_offset_hours: Option<i32>` fields
+- `ExportSamplingConfig` / `SamplingStrategyConfig` enum includes `TimeBased` variant
+- `SamplingStrategy::TimeBased` now creates a `TimeBasedSampler` (previously returned error)
+
+### Removed
+
+- `SamplerType` internal enum (replaced by `Box<dyn Sampler>` trait object)
+
+- **Forward Mid-Price Trajectories Export** (`src/export_aligned/mod.rs`, `npy_export.rs`)
+  - New `{day}_forward_prices.npy` output: shape [N, k+max_H+1] float64 USD prices
+  - TOML config: `export_forward_prices = true` at root level
+  - Builder: `AlignedBatchExporter::new(...).with_forward_prices(smoothing_window)`
+  - Column layout: col 0 = price at t-k, col k = base price at t, col k+h = price at t+h
+  - Enables Python-side label computation via `hft-contracts` LabelFactory
+  - Zero changes to existing label computation (additive only)
+  - Contract enforced: `forward_prices.shape[0] == sequences.shape[0]`
+  - Metadata JSON includes `forward_prices` section with layout specification
+  - Used for P0 label-execution mismatch validation (r=0.642, win_rate=69.3%)
+
 - **Trading Signals (14 features)** (`src/features/signals.rs`)
   - 14 research-backed signals at indices 84-97
   - `OfiComputer` - Streaming OFI per Cont et al. (2014)

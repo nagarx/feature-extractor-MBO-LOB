@@ -24,8 +24,15 @@ parallel = ["dep:rayon"]
 # Core CI tests run without this flag (~5-7 min).
 # Use: cargo test --features extended_validation --release
 extended_validation = []
+# Legacy feature modules: FI-2010 features, market impact, OrderFlowTracker.
+# These are standalone implementations NOT integrated into the production FeatureExtractor pipeline.
+# Enable to access their public APIs for standalone research use.
+# Use: cargo build --features legacy_features
+legacy_features = []
 
 [dependencies]
+# Error handling
+thiserror = "1.0"
 # MBO-LOB Reconstructor
 # For local development with path override, see .cargo/config.toml
 mbo-lob-reconstructor = { git = "https://github.com/nagarx/MBO-LOB-reconstructor.git", branch = "main" }
@@ -54,6 +61,9 @@ md5 = "0.7"
 
 # Timezone support
 chrono-tz = "0.10"
+
+# Shared HFT statistics (time regime, accumulators)
+hft-statistics = { path = "../hft-statistics" }
 
 [dev-dependencies]
 tempfile = "3.8"

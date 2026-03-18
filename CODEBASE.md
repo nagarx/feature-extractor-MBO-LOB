@@ -101,7 +101,9 @@ src/
 │       ├── mod.rs            # ExperimentalConfig, group registry, feature_count()
 │       ├── institutional_v2.rs  # Enhanced whale detection (8 features, indices 98-105)
 │       ├── volatility.rs     # Realized vol & regime (6 features, indices 106-111)
-│       └── seasonality.rs    # Time-of-day features (4 features, indices 112-115)
+│       ├── seasonality.rs    # Time-of-day features (4 features, indices 112-115)
+│       ├── mlofi.rs          # Multi-level order flow imbalance (12 features, indices 116-127)
+│       └── kolm_of.rs        # Kolm order flow (20 features, indices 128-147)
 │
 ├── sequence_builder/
 │   ├── mod.rs                # Module exports, FeatureVec type alias
@@ -123,7 +125,7 @@ src/
 │   ├── multi_horizon.rs      # MultiHorizonLabelGenerator - ✅ Export integrated
 │   ├── opportunity.rs        # OpportunityLabelGenerator - ✅ Export integrated
 │   ├── triple_barrier.rs     # TripleBarrierLabeler - ✅ Export integrated (Schema 2.4+)
-│   └── magnitude.rs          # MagnitudeGenerator (regression) - ⚠️ API only, export pending
+│   └── magnitude.rs          # MagnitudeGenerator (regression) - ✅ Export integrated via regression strategy
 │
 ├── schema/
 │   ├── mod.rs                # Module exports
@@ -148,7 +150,8 @@ src/
 │       ├── mod.rs            # Sub-module declarations
 │       ├── tlob.rs           # labeling_single_horizon_tlob(), labeling_multi_horizon_tlob()
 │       ├── opportunity.rs    # labeling_opportunity(), build_opportunity_label_matrix()
-│       └── triple_barrier.rs # labeling_triple_barrier(), compute_daily_volatility(), build_triple_barrier_label_matrix()
+│       ├── triple_barrier.rs # labeling_triple_barrier(), compute_daily_volatility(), build_triple_barrier_label_matrix()
+│       └── regression.rs     # labeling_regression(), continuous return magnitude labels
 │
 ├── tools/                    # CLI tools (binaries)
 │   ├── export_dataset.rs     # Configuration-driven export CLI
@@ -159,7 +162,7 @@ src/
     ├── nvda_98feat_v2.toml   # Updated 98-feature config
     ├── nvda_98feat_full.toml # Full 98-feature config (all features)
     ├── nvda_84feat_baseline.toml # 84-feature baseline configuration
-    ├── nvda_116feat_full_analysis.toml # 116-feature config (includes experimental)
+    ├── nvda_116feat_full_analysis.toml # 148-feature config (includes experimental)
     ├── nvda_triple_barrier.toml       # Triple Barrier labeling config
     ├── nvda_11month_triple_barrier.toml           # 11-month Triple Barrier export
     ├── nvda_11month_triple_barrier_calibrated.toml # Calibrated per-horizon barriers
@@ -301,7 +304,7 @@ The total feature count depends on configuration:
 | LOB + MBO | `levels × 4 + 36` | 76 |
 | LOB + Derived + MBO | `levels × 4 + 8 + 36` | 84 |
 | LOB + Derived + MBO + Signals | `levels × 4 + 8 + 36 + 14` | 98 |
-| + Experimental (all groups) | `98 + 8 + 6 + 4` | 116 |
+| + Experimental (all groups) | `98 + 8 + 6 + 4 + 12 + 20` | 148 |
 
 ### FeatureConfig
 
@@ -639,7 +642,7 @@ let pipeline = PipelineBuilder::new()
 assert_eq!(pipeline.config().features.feature_count(), 98);
 ```
 
-### Experimental Features (18 features, indices 98-115)
+### Experimental Features (50 features, indices 98-147)
 
 Opt-in features for analysis and experimentation. Enabled via `include_experimental` in `FeatureConfig`
 or `include_experimental = true` in TOML. Subject to change without schema version bumps.
@@ -651,12 +654,14 @@ or `include_experimental = true` in TOML. Subject to change without schema versi
 | `institutional_v2` | 8 | 98-105 | round_lot_ratio, odd_lot_ratio, size_clustering, price_clustering, mod_before_cancel, sweep_ratio, fill_patience_bid, fill_patience_ask |
 | `volatility` | 6 | 106-111 | realized_vol_fast, realized_vol_slow, vol_ratio, vol_momentum, return_autocorr, vol_of_vol |
 | `seasonality` | 4 | 112-115 | minutes_since_open, minutes_until_close, session_progress, time_bucket |
+| `mlofi` | 12 | 116-127 | Multi-level order flow imbalance features |
+| `kolm_of` | 20 | 128-147 | Kolm order flow features |
 
 **Configuration:**
 
 ```rust
 let config = ExperimentalConfig::new()
-    .with_all_groups();  // Enable all 18 features
+    .with_all_groups();  // Enable all 50 features
 
 let config = ExperimentalConfig::new()
     .with_groups(vec!["volatility".into(), "seasonality".into()]);  // Selective
@@ -665,7 +670,7 @@ let config = ExperimentalConfig::new()
 ```toml
 [features]
 include_experimental = true
-experimental_groups = ["institutional_v2", "volatility", "seasonality"]
+experimental_groups = ["institutional_v2", "volatility", "seasonality", "mlofi", "kolm_of"]
 ```
 
 **Promotion Path**: Features that prove valuable in analysis can be promoted to the main schema
@@ -824,25 +829,94 @@ pub struct AdaptiveVolumeThreshold {
 }
 ```
 
-### TimeBasedSampler (⚠️ NOT YET IMPLEMENTED)
+### Sampler Trait (Unified Sampling Interface)
 
-The `SamplingStrategy::TimeBased` enum variant is declared but **not implemented**.
-Attempting to use it will result in an explicit error:
+All sampling strategies implement the `Sampler` trait. The pipeline uses `Box<dyn Sampler>` for dispatch — adding a new strategy requires only implementing the trait, zero changes to `pipeline.rs`.
 
 ```rust
-// This will return an error at runtime:
-let config = SamplingConfig {
-    strategy: SamplingStrategy::TimeBased,
-    min_time_interval_ns: Some(100_000_000),  // 100ms
-    ..Default::default()
-};
-// Error: "TimeBased sampling strategy is not yet implemented.
-//         Please use VolumeBased or EventBased sampling instead."
+/// Context passed to every should_sample() call (16 bytes, stack-allocated).
+pub struct SamplingContext {
+    pub timestamp_ns: u64,   // UTC nanoseconds since epoch
+    pub event_volume: u32,   // Trade volume (0 for cancels)
+}
+
+pub struct SamplerMetrics {
+    pub sample_count: u64,
+    pub events_observed: u64,
+    pub volume_observed: u64,
+    pub last_sample_timestamp_ns: u64,
+}
+
+/// All strategies implement this. O(1), zero-alloc hot path.
+pub trait Sampler: Send {
+    fn should_sample(&mut self, ctx: &SamplingContext) -> bool;
+    fn reset(&mut self);                         // Between-day reset
+    fn metrics(&self) -> SamplerMetrics;
+    fn strategy_name(&self) -> &'static str;
+    fn set_threshold(&mut self, _threshold: u64) {} // For adaptive (default no-op)
+}
 ```
 
-**Workaround**: Use `SamplingStrategy::VolumeBased` (recommended) or `SamplingStrategy::EventBased`.
+**Pipeline dispatch** (`pipeline.rs:585`):
+```rust
+let mut sampler: Box<dyn Sampler> = self.create_sampler()?;
+// ... in loop:
+let ctx = SamplingContext { timestamp_ns: ts, event_volume: msg.size };
+if sampler.should_sample(&ctx) { /* extract features */ }
+```
 
-**Tracking**: See `TODO.md` for implementation status.
+### TimeBasedSampler
+
+Fixed-interval grid aligned to 09:30 ET market open. Matches the canonical grid used by `mbo-statistical-profiler`'s `resample_to_grid()`, preserving OFI temporal persistence (ACF structure).
+
+```rust
+pub struct TimeBasedSampler {
+    interval_ns: u64,        // e.g., 5_000_000_000 (5 seconds)
+    next_boundary_ns: u64,   // Next grid-aligned sample point
+    utc_offset_hours: i32,   // EST=-5, EDT=-4 (for 09:30 alignment)
+    // ... metrics fields
+}
+```
+
+**Grid semantics**: Boundaries at `open + k*interval` for k=1,2,3,... The first sample fires after a full interval elapses (bin-end aggregation, matching profiler). If a gap spans multiple boundaries (e.g., market halt), only ONE sample is emitted on the first event after the gap.
+
+**Config**: `strategy = "time_based"`, `time_interval_ns`, `utc_offset_hours`.
+**Builder**: `.time_sampling(interval_ns, utc_offset_hours)`.
+
+### CompositeSampler
+
+Combines multiple child samplers with OR or AND logic for experimentation.
+
+```rust
+pub enum CompositeMode {
+    Any,  // Sample when ANY child triggers (union)
+    All,  // Sample when ALL children have triggered since last sample (intersection)
+}
+
+pub struct CompositeSampler {
+    children: Vec<Box<dyn Sampler>>,
+    mode: CompositeMode,
+}
+```
+
+**Algebraic properties** (tested):
+- `Composite(Any, [A]) ≡ A` (single-child identity)
+- `Composite(Any, [A, B]).count >= max(A.count, B.count)` (union superset)
+- `Composite(All, [A, B]).count <= min(A.count, B.count)` (intersection subset)
+
+### MLOFI/Kolm OF Sample-and-Reset
+
+`MlofiComputer` and `KolmOfComputer` (experimental features 116-147) accumulate OFI continuously. At each sample point, the pipeline calls `extract_and_reset_experimental_into()` which:
+1. Extracts current MLOFI/Kolm OF values into the feature buffer
+2. Resets the OFI accumulators (but preserves `prev_*` book state)
+
+This ensures each sample captures interval-scoped OFI, not cumulative-since-day-start. The pattern mirrors `OfiComputer::sample_and_reset()` used by trading signals (indices 84-91).
+
+```rust
+// MultiLevelOfiTracker has two reset modes:
+tracker.reset();                        // Full reset (between days): zeroes everything
+tracker.sample_and_reset_accumulators(); // Interval reset (at sample points): zeroes OFI only
+```
 
 ### Critical Design Constraints
 
@@ -1037,10 +1111,10 @@ The library provides multiple labeling strategies for different trading objectiv
 | **Multi-Horizon** | Down/Stable/Up × N | ✅ Integrated | FI-2010 benchmarks, multi-task learning |
 | **Opportunity** | BigDown/NoOpp/BigUp | ✅ Integrated | Big move detection, peak returns |
 | **Triple Barrier** | StopLoss/Timeout/ProfitTarget | ✅ Integrated | Risk-managed trading, volatility-scaled barriers |
-| **Magnitude** | Continuous returns | ⚠️ API only | Regression, position sizing |
+| **Magnitude** | Continuous returns | ✅ Integrated | Regression, position sizing |
 
-> **Note**: "API only" means the labeler is fully implemented and tested in Rust, but NOT yet
-> integrated into `export_dataset` CLI. Use the Rust API directly or wait for export integration.
+> **All labeling strategies are fully integrated** into the `export_dataset` CLI tool.
+> Use `strategy = "regression"` in TOML config for regression labels.
 > See [docs/LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md) for detailed documentation.
 
 ### LabelingStrategy Enum (TOML `strategy` field)
@@ -1052,10 +1126,11 @@ pub enum LabelingStrategy {
     Tlob,           // Default: smoothed average trend labels
     Opportunity,    // Peak return based big-move detection
     TripleBarrier,  // Trade outcome based on profit/stop barriers
+    Regression,     // Continuous return magnitude labels
 }
 ```
 
-**TOML usage**: `strategy = "tlob"`, `strategy = "opportunity"`, `strategy = "triple_barrier"`
+**TOML usage**: `strategy = "tlob"`, `strategy = "opportunity"`, `strategy = "triple_barrier"`, `strategy = "regression"`
 
 ### LabelEncoding (Unified Validation Contract)
 
@@ -1220,8 +1295,10 @@ Single Rust-side source of truth for pipeline-wide constants. All values **must*
 | `SCHEMA_VERSION` | `2.2` (f64) | `[contract].schema_version` |
 | `SCHEMA_VERSION_STR` | `"2.2"` | `[contract].schema_version` |
 | `STABLE_FEATURE_COUNT` | `98` | `[features].stable_count` |
-| `EXPERIMENTAL_FEATURE_COUNT` | `18` | `[features].experimental_count` |
-| `FULL_FEATURE_COUNT` | `116` | `[features].full_count` |
+| `EXPERIMENTAL_FEATURE_COUNT` | `50` | `[features].experimental_count` |
+| `FULL_FEATURE_COUNT` | `148` | `[features].full_count` |
+| `LEGACY_FULL_FEATURE_COUNT` | `128` | `[features].legacy_full_count` |
+| `KOLM_OF_FEATURE_COUNT` | `20` | `[features].kolm_of_count` |
 | `LOB_LEVELS` | `10` | `[features].lob_levels` |
 | `SIGNAL_COUNT` | `14` | count of `[features.signals]` entries |
 | `CATEGORICAL_INDICES` | `[92, 93, 94, 97]` | `[features.categorical].indices` |
@@ -1257,6 +1334,7 @@ export_aligned/
     tlob.rs         ← labeling_single_horizon_tlob(), labeling_multi_horizon_tlob()
     opportunity.rs  ← labeling_opportunity(), build_opportunity_label_matrix()
     triple_barrier.rs ← labeling_triple_barrier(), compute_daily_volatility(), build_triple_barrier_label_matrix()
+    regression.rs   ← labeling_regression(), continuous return magnitude labels
 ```
 
 #### Deduplication Pattern: LabelingResult
@@ -1327,12 +1405,12 @@ impl AlignedBatchExporter {
 
 ### ExportLabelConfig (Multi-Strategy, Multi-Horizon)
 
-The `ExportLabelConfig` supports all three labeling strategies with multi-horizon generation:
+The `ExportLabelConfig` supports all four labeling strategies with multi-horizon generation:
 
 ```rust
 pub struct ExportLabelConfig {
     // Strategy selection (Schema 2.3+)
-    pub strategy: LabelingStrategy,                     // tlob (default), opportunity, triple_barrier
+    pub strategy: LabelingStrategy,                     // tlob (default), opportunity, triple_barrier, regression
     pub conflict_priority: Option<ExportConflictPriority>, // For opportunity only
 
     // Horizon configuration
@@ -1642,7 +1720,7 @@ Every `{day}_metadata.json` now includes standardized fields enforced by the pip
 |-------|------|-------------|
 | `schema_version` | string | Pipeline schema version (e.g., "2.2") |
 | `contract_version` | string | Same as schema_version |
-| `label_strategy` | string | "tlob", "opportunity", or "triple_barrier" |
+| `label_strategy` | string | "tlob", "opportunity", "triple_barrier", or "regression" |
 | `label_encoding` | object | Strategy-specific class name mapping |
 | `normalization` | object | Strategy, applied flag, params_file |
 | `provenance` | object | Git commit, dirty flag, extractor version, config hash |
@@ -2039,18 +2117,20 @@ impl PipelineConfig {
 ```rust
 pub struct SamplingConfig {
     pub strategy: SamplingStrategy,
-    pub volume_threshold: Option<u64>,
-    pub min_time_interval_ns: Option<u64>,
-    pub event_count: Option<usize>,
+    pub volume_threshold: Option<u64>,       // VolumeBased: shares per sample
+    pub min_time_interval_ns: Option<u64>,   // VolumeBased: min ns between samples
+    pub event_count: Option<usize>,          // EventBased: events per sample
+    pub time_interval_ns: Option<u64>,       // TimeBased: grid interval in nanoseconds
+    pub utc_offset_hours: Option<i32>,       // TimeBased: EST=-5, EDT=-4
     pub adaptive: Option<AdaptiveSamplingConfig>,
     pub multiscale: Option<MultiScaleSamplingConfig>,
 }
 
 pub enum SamplingStrategy {
-    VolumeBased,
-    EventBased,
-    TimeBased,
-    MultiScale,
+    VolumeBased,   // Sample after N shares traded
+    EventBased,    // Sample every N MBO events
+    TimeBased,     // Fixed-interval grid aligned to 09:30 ET market open
+    MultiScale,    // Multi-resolution (uses VolumeBased as base)
 }
 ```
 
@@ -2059,12 +2139,22 @@ pub enum SamplingStrategy {
 ```rust
 use feature_extractor::prelude::*;
 
+// Volume-based (TLOB paper recommendation)
 let pipeline = PipelineBuilder::new()
-    .with_lob_levels(10)
-    .with_derived_features(true)
-    .with_mbo_features(true)
-    .with_volume_sampling(1000, 1)  // 1000 shares, 1ms min interval
-    .with_window(100, 10)           // window=100, stride=10
+    .lob_levels(10)
+    .include_derived(true)
+    .include_mbo(true)
+    .volume_sampling(1000)          // 1000 shares per sample
+    .window(100, 10)                // window=100, stride=10
+    .build()?;
+
+// Time-based (preserves OFI persistence, matches profiler grid)
+let pipeline = PipelineBuilder::new()
+    .lob_levels(10)
+    .include_derived(true)
+    .include_mbo(true)
+    .time_sampling(5_000_000_000, -5) // 5s intervals, EST
+    .window(100, 10)
     .build()?;
 ```
 
@@ -2297,7 +2387,7 @@ Core CI tests complete in ~3-5 minutes. Extended multi-day tests are feature-gat
 
 | Tier | Tests | Runtime | When |
 |------|-------|---------|------|
-| Unit tests (~730) | `cargo test --lib` | ~30s | Always |
+| Unit tests (~797) | `cargo test --lib` | ~30s | Always |
 | Synthetic integration (~180) | No features needed | ~60s | Always |
 | Level 1: Transformation Tracing (50K events) | `skip_if_no_data!()` | ~10s | CI + local |
 | Level 2: Golden Snapshot (full day) | `skip_if_no_data!()` | ~15-30s | CI + local |
@@ -2339,7 +2429,7 @@ fn test_example() {
 }
 ```
 
-#### Unit Tests (~730 tests, `cargo test --lib`)
+#### Unit Tests (~797 tests, `cargo test --lib`)
 
 Each module contains `#[cfg(test)] mod tests` with:
 - Formula validation against hand-calculated expected values
@@ -2350,7 +2440,7 @@ Each module contains `#[cfg(test)] mod tests` with:
 #### Contract Validation (`tests/contract_validation_test.rs`)
 
 Exhaustive, data-driven validation of `src/contract.rs` constants against `contracts/pipeline_contract.toml`:
-- All 116 feature indices (LOB, derived, MBO, signal, experimental) validated for uniqueness and correct range
+- All 148 feature indices (LOB, derived, MBO, signal, experimental) validated for uniqueness and correct range
 - `SCHEMA_VERSION`, `STABLE_FEATURE_COUNT`, `FULL_FEATURE_COUNT`, `SIGNAL_COUNT`, `LOB_LEVELS`
 - `CATEGORICAL_INDICES` validated against TOML normalization rules
 - Label encoding contracts (TLOB, TripleBarrier, Opportunity): strategies, values, class names
@@ -2774,15 +2864,14 @@ assert!(config.validate().is_err()); // Error: requires 10 levels
 Signal indices are hardcoded for the 10-level layout. Non-10-level configurations
 with signals enabled will fail validation.
 
-### 7. Magnitude Export Not Integrated
+### 7. Magnitude Export (Resolved)
 
-The `MagnitudeGenerator` (regression targets) is fully implemented and tested but NOT integrated
-into `export_dataset`. Use the Rust API directly.
+**Previous state**: `MagnitudeGenerator` was API-only, not integrated into `export_dataset`.
 
-> **Note**: Triple Barrier labeling IS fully integrated into the export pipeline (Schema 2.4+),
-> including per-horizon barriers, volatility-adaptive scaling, and TOML configuration support.
-
-**Tracking**: See roadmap in [docs/LABELING_STRATEGIES.md](docs/LABELING_STRATEGIES.md#roadmap).
+**Resolution**: Regression labeling is now fully integrated. Use `strategy = "regression"` in TOML config.
+The `return_type` field selects the return formula: `smoothed_return` (TLOB smoothing, default),
+`point_return`, `peak_return`, `mean_return`, or `dominant_return` (via `MagnitudeGenerator`).
+Export produces `{day}_regression_labels.npy` as float64 in basis points.
 
 ### 8. OrderTracker Determinism (Resolved)
 
@@ -2805,7 +2894,7 @@ into `export_dataset`. Use the Rust API directly.
 | +MBO | 76 | 40 + 36 |
 | +Derived +MBO | 84 | 40 + 8 + 36 |
 | +Derived +MBO +Signals | 98 | 40 + 8 + 36 + 14 |
-| +Experimental (all) | 116 | 98 + 8 + 6 + 4 |
+| +Experimental (all) | 148 | 98 + 8 + 6 + 4 + 12 + 20 |
 
 ### Key Defaults
 

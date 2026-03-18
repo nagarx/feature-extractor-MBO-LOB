@@ -57,9 +57,10 @@
   LobState { bid/ask prices & sizes }   MboWindow { rolling event stats }
        │                                      │
        ▼                                      │
-  [Stage 3: Sampling]                         │
+  [Stage 3: Sampling (Sampler trait)]          │
   ├─ EventBasedSampler (every N events)       │
-  └─ VolumeBasedSampler (every N shares)      │
+  ├─ VolumeBasedSampler (every N shares)      │
+  └─ TimeBasedSampler (fixed-interval grid)   │
        │                                      │
        ▼                                      │
   Sampled LobState + mid_price (f64)          │
@@ -79,7 +80,9 @@
        ├─ TlobLabelGenerator (smoothed past vs smoothed future) — strategy = "tlob"
        ├─ DeepLobLabelGenerator (alternative TLOB method)
        ├─ OpportunityLabelGenerator (peak return detection) — strategy = "opportunity"
-       └─ TripleBarrierLabeler (profit/stop/timeout barriers) — strategy = "triple_barrier"
+       ├─ TripleBarrierLabeler (profit/stop/timeout barriers) — strategy = "triple_barrier"
+       └─ Regression (strategy = "regression"): MultiHorizonLabelGenerator or MagnitudeGenerator
+          → float64 continuous bps, {day}_regression_labels.npy (no classification labels in pure regression mode)
        │
        ▼ [Stage 6b: Volatility-Adaptive Scaling (optional, Triple Barrier only)]
        barrier_day = barrier_base * clamp(vol_day / vol_reference, floor, cap)
@@ -1053,6 +1056,7 @@ The pipeline supports multiple labeling strategies, selected via `strategy` in T
 | Multi-Horizon | `MultiHorizonLabelGenerator` | SignedTrend `{-1,0,1}` × N | Multi-task learning |
 | Opportunity | `OpportunityLabelGenerator` | SignedOpportunity `{-1,0,1}` | Big move detection |
 | Triple Barrier | `TripleBarrierLabeler` | TripleBarrierClassIndex `{0,1,2}` | Risk-managed trading |
+| **Regression** | `MultiHorizonLabelGenerator` or `MagnitudeGenerator` | ContinuousBps (float64) | Continuous target prediction |
 
 All strategies are validated via `LabelEncoding` which defines the expected label range and class
 names for each strategy. See `export_aligned/validation.rs` for the unified `validate_label_alignment()` function.
@@ -1301,14 +1305,55 @@ fn compute_quantile_threshold_for_horizon(horizon: usize) -> Option<f64> {
 
 ---
 
+### 7D. Regression Labeling Method
+
+When `strategy = "regression"` in the export config, the pipeline produces continuous float64 targets (basis-point returns) instead of discrete classification labels.
+
+#### Implementation
+
+| File | Module |
+|------|--------|
+| `feature-extractor-MBO-LOB/src/labeling/multi_horizon.rs` | `MultiHorizonLabelGenerator` (smoothed returns) |
+| `feature-extractor-MBO-LOB/src/labeling/magnitude.rs` | `MagnitudeGenerator` (point, peak, mean returns) |
+
+#### Configuration
+
+```toml
+[labels]
+strategy = "regression"
+horizons = [10, 20, 50, 100, 200]
+smoothing_window = 10
+# Optional: return_type = "SmoothedReturn" | "PointReturn" | "PeakReturn" | "MeanReturn"
+```
+
+- **SmoothedReturn** (default): Uses `MultiHorizonLabelGenerator` — same smoothed past/future formula as TLOB but outputs raw percentage change (×10000 → bps) instead of thresholded classes.
+- **PointReturn, PeakReturn, MeanReturn**: Uses `MagnitudeGenerator` — point-in-time, peak-to-peak, or mean return over horizon.
+
+#### Output
+
+| Artifact | Shape | Dtype | Description |
+|----------|-------|-------|-------------|
+| `{day}_regression_labels.npy` | `(N,)` or `(N, H)` | `float64` | Continuous basis-point returns; 2D for multi-horizon |
+| `{day}_labels.npy` | — | — | **Not produced** in pure regression mode |
+
+In pure regression mode, no classification labels (`{day}_labels.npy`) are generated. The pipeline exports only `{day}_regression_labels.npy` with float64 values (continuous bps).
+
+#### Validation
+
+Regression labels are validated via `validate_regression_labels()` in `export_aligned/validation.rs`: no NaN/Inf, consistent horizon width, sequence/label count alignment.
+
+---
+
 ### Output Schema
 
 ```rust
-// Single-horizon
+// Single-horizon (classification)
 Vec<(usize, TrendLabel, f64)>  // (sample_index, label, pct_change)
 
-// Multi-horizon
+// Multi-horizon (classification)
 labels: BTreeMap<usize, Vec<(usize, TrendLabel, f64)>>  // horizon → [(index, label, change)]
+
+// Regression: Vec<f64> or Vec<Vec<f64>> (bps, see 7D)
 ```
 
 ### Label Encoding
@@ -2165,9 +2210,9 @@ let valid_idx = indices::BOOK_VALID;    // 92
 
 ¹ `depth_ticks_*` = volume-weighted average distance from BBO in ticks. Measures liquidity positioning, NOT raw volume.
 
-#### Experimental Features (18, opt-in)
+#### Experimental Features (up to 50, opt-in)
 
-When `include_experimental = true` is set, additional features are appended after index 97:
+When `include_experimental = true` is set, additional features are appended after index 97. Select groups via `groups = [...]`. Five groups available:
 
 | Index | Name | Group | Description |
 |-------|------|-------|-------------|
@@ -2189,6 +2234,11 @@ When `include_experimental = true` is set, additional features are appended afte
 | 113 | `minutes_until_close` | seasonality | Minutes until market close |
 | 114 | `session_progress` | seasonality | Session progress [0, 1] |
 | 115 | `time_bucket` | seasonality | Discrete time bucket |
+| 116 | `total_mlofi` | mlofi | Sum of OFI across all 10 levels |
+| 117 | `weighted_mlofi` | mlofi | Level-weighted sum (w_k = 1/k) |
+| 118-127 | `ofi_level_1..10` | mlofi | Per-level OFI (bid+ask combined) |
+| 128-137 | `bof_level_1..10` | kolm_of | Per-level bid order flow (Kolm et al. 2023) |
+| 138-147 | `aof_level_1..10` | kolm_of | Per-level ask order flow (Kolm sign convention) |
 
 ### Feature Configuration Presets
 
@@ -2200,7 +2250,9 @@ When `include_experimental = true` is set, additional features are appended afte
 | LOB + Order Flow | 76 | 0-39, 48-83 | + MBO patterns |
 | Full Base Set | 84 | 0-83 | All base features |
 | Full + Signals | 98 | 0-97 | Maximum information + trading signals |
-| Full + Experimental | 116 | 0-115 | All features including experimental |
+| Full + Experimental (3 groups) | 116 | 0-115 | institutional_v2 + volatility + seasonality |
+| Full + Experimental (4 groups) | 128 | 0-127 | + mlofi |
+| Full + Experimental (all 5) | 148 | 0-147 | + kolm_of (per-level bid/ask OF) |
 
 ### Normalization Considerations
 

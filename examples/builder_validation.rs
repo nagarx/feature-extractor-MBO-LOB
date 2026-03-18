@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     println!("PipelineBuilder Validation with Real NVDA Data");
     println!("{}", "=".repeat(60));
 
-    let data_path = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250203.mbo.dbn.zst";
+    let data_path = "../data/hot_store/xnas-itch-20250203.mbo.dbn";
 
     // Check if data exists
     if !std::path::Path::new(data_path).exists() {

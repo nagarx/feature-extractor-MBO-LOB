@@ -26,11 +26,17 @@ pub const SCHEMA_VERSION_STR: &str = "2.2";
 /// Number of stable (non-experimental) features.
 pub const STABLE_FEATURE_COUNT: usize = 98;
 
-/// Number of experimental features.
-pub const EXPERIMENTAL_FEATURE_COUNT: usize = 18;
+/// Number of experimental features (18 original + 12 MLOFI + 20 Kolm OF).
+pub const EXPERIMENTAL_FEATURE_COUNT: usize = 50;
 
-/// Total feature count (stable + experimental).
-pub const FULL_FEATURE_COUNT: usize = 116;
+/// Total feature count (stable + all experimental).
+pub const FULL_FEATURE_COUNT: usize = 148;
+
+/// Feature count without Kolm OF (stable + original experimental + MLOFI).
+pub const LEGACY_FULL_FEATURE_COUNT: usize = 128;
+
+/// Number of Kolm per-level OF features (Kolm, Turiel & Westray 2023).
+pub const KOLM_OF_FEATURE_COUNT: usize = 20;
 
 /// Number of LOB depth levels.
 pub const LOB_LEVELS: usize = 10;

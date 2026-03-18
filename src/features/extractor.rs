@@ -185,7 +185,10 @@ impl FeatureExtractor {
 
         self.extract_into(lob, output)?;
 
-        let ofi_computer = self.ofi_computer.as_mut().unwrap();
+        // Safety: ofi_computer is guaranteed Some by the is_none() check at line 178
+        // which returns early with an error if signals are disabled.
+        let ofi_computer = self.ofi_computer.as_mut()
+            .expect("ofi_computer guaranteed Some by is_none() guard above");
         let ofi_sample = ofi_computer.sample_and_reset(ctx.timestamp_ns as i64);
 
         let book_valid = signals::is_book_valid_from_lob(lob);
@@ -361,11 +364,45 @@ impl FeatureExtractor {
         }
     }
 
+    /// Update experimental MLOFI features with a new LOB state.
+    ///
+    /// Must be called on every LOB state transition (not just at sample time)
+    /// for correct OFI accumulation across all levels.
+    /// No-op if experimental features are disabled or MLOFI group is not included.
+    ///
+    /// Reference: Kolm, Turiel & Westray (2023)
+    #[inline]
+    pub fn update_experimental_lob(&mut self, lob: &mbo_lob_reconstructor::LobState) {
+        if let Some(ref mut exp) = self.experimental_extractor {
+            exp.update_lob(lob);
+        }
+    }
+
     /// Extract experimental features into the output buffer.
+    ///
+    /// Does NOT reset accumulators — use `extract_and_reset_experimental_into()`
+    /// at sample points for interval-scoped MLOFI/Kolm OF values.
     #[inline]
     pub fn extract_experimental_into(&mut self, timestamp_ns: u64, output: &mut Vec<f64>) {
         if let Some(ref mut exp) = self.experimental_extractor {
             exp.extract_into(timestamp_ns, output);
+        }
+    }
+
+    /// Extract experimental features AND reset continuous accumulators (MLOFI, Kolm OF).
+    ///
+    /// This is the production method called at each sample point. It ensures that
+    /// MLOFI and Kolm OF values are interval-scoped (accumulated since last sample),
+    /// not cumulative since day start. Matches the `OfiComputer::sample_and_reset()`
+    /// pattern used by trading signals (indices 84-91).
+    #[inline]
+    pub fn extract_and_reset_experimental_into(
+        &mut self,
+        timestamp_ns: u64,
+        output: &mut Vec<f64>,
+    ) {
+        if let Some(ref mut exp) = self.experimental_extractor {
+            exp.extract_and_reset_into(timestamp_ns, output);
         }
     }
 

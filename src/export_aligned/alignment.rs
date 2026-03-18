@@ -39,15 +39,15 @@ impl AlignedBatchExporter {
 
             let value = match label {
                 TrendLabel::Up => {
-                    *distribution.get_mut("Up").unwrap() += 1;
+                    *distribution.entry("Up".to_string()).or_insert(0) += 1;
                     1
                 }
                 TrendLabel::Down => {
-                    *distribution.get_mut("Down").unwrap() += 1;
+                    *distribution.entry("Down".to_string()).or_insert(0) += 1;
                     -1
                 }
                 TrendLabel::Stable => {
-                    *distribution.get_mut("Stable").unwrap() += 1;
+                    *distribution.entry("Stable".to_string()).or_insert(0) += 1;
                     0
                 }
             };
@@ -105,7 +105,12 @@ impl AlignedBatchExporter {
         let mut horizon_maps: Vec<HashMap<usize, i8>> = Vec::with_capacity(horizons.len());
 
         for horizon in horizons {
-            let labels = multi_labels.labels_for_horizon(*horizon).unwrap();
+            let labels = multi_labels.labels_for_horizon(*horizon).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("No labels for horizon {horizon} in build_multi_horizon_label_matrix"),
+                )
+            })?;
             let map: HashMap<usize, i8> = labels
                 .iter()
                 .map(|(idx, label, _)| {
@@ -131,33 +136,50 @@ impl AlignedBatchExporter {
         Ok((valid_indices, label_matrix))
     }
 
-    /// Align sequences with multi-horizon labels.
+    /// Align sequences with multi-horizon labels (classification and optional regression).
+    ///
+    /// Both classification and regression label matrices share the same `label_indices`.
+    /// This function filters both in a single pass so they remain perfectly aligned
+    /// with each other and with the output sequences.
     #[allow(clippy::type_complexity)]
     pub(super) fn align_sequences_with_multi_labels(
         &self,
         sequences: &[crate::sequence_builder::Sequence],
         label_indices: &[usize],
         label_matrix: &[Vec<i8>],
-    ) -> Result<(Vec<Vec<Vec<f64>>>, Vec<Vec<i8>>)> {
-        let mut label_map: HashMap<usize, &Vec<i8>> = HashMap::new();
-        for (i, &idx) in label_indices.iter().enumerate() {
-            label_map.insert(idx, &label_matrix[i]);
+        regression_matrix: Option<&[Vec<f64>]>,
+    ) -> Result<(Vec<Vec<Vec<f64>>>, Vec<Vec<i8>>, Option<Vec<Vec<f64>>>, Vec<usize>)> {
+        let mut index_to_row: HashMap<usize, usize> = HashMap::with_capacity(label_indices.len());
+        for (row_idx, &label_idx) in label_indices.iter().enumerate() {
+            index_to_row.insert(label_idx, row_idx);
         }
 
         let mut aligned_sequences = Vec::new();
         let mut aligned_labels = Vec::new();
+        let mut aligned_regression: Option<Vec<Vec<f64>>> = regression_matrix.map(|_| Vec::new());
+        let mut aligned_ending_indices = Vec::new();
 
         for (seq_idx, sequence) in sequences.iter().enumerate() {
             let ending_idx = seq_idx * self.stride + self.window_size - 1;
 
-            if let Some(&label_row) = label_map.get(&ending_idx) {
+            if let Some(&row_idx) = index_to_row.get(&ending_idx) {
                 let features_owned: Vec<Vec<f64>> = sequence
                     .features
                     .iter()
                     .map(|arc_vec| arc_vec.to_vec())
                     .collect();
                 aligned_sequences.push(features_owned);
-                aligned_labels.push(label_row.clone());
+                aligned_ending_indices.push(ending_idx);
+
+                if !label_matrix.is_empty() {
+                    aligned_labels.push(label_matrix[row_idx].clone());
+                }
+
+                if let (Some(ref mut aligned_reg), Some(reg_mat)) =
+                    (&mut aligned_regression, regression_matrix)
+                {
+                    aligned_reg.push(reg_mat[row_idx].clone());
+                }
             }
         }
 
@@ -169,6 +191,6 @@ impl AlignedBatchExporter {
             .into());
         }
 
-        Ok((aligned_sequences, aligned_labels))
+        Ok((aligned_sequences, aligned_labels, aligned_regression, aligned_ending_indices))
     }
 }

@@ -16,7 +16,7 @@
 # PREREQUISITE: Decompress all files to hot store first:
 #   cd MBO-LOB-reconstructor
 #   cargo run --release --bin decompress_to_hot_store -- \
-#       --input ../data/NVDA_2025-02-01_to_2025-09-30 \
+#       --input ../data/hot_store \
 #       --output ../data/hot_store
 #
 # Usage:
@@ -32,12 +32,12 @@ tags = ["nvda", "98-features", "multi-horizon", "balanced-classes", "quantile-th
 [symbol]
 name = "NVDA"
 exchange = "XNAS"
-filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
 tick_size = 0.01
 
 [data]
 # Paths relative to feature-extractor-MBO-LOB directory
-input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+input_dir = "../data/hot_store"
 output_dir = "../data/exports/nvda_balanced"
 
 # Hot store for ~30% faster processing (REQUIRED for efficient processing)

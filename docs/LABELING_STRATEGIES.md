@@ -12,9 +12,9 @@ Choosing the right labeling strategy is crucial for training effective trading m
 | Multi-Horizon | Classification | Adaptive strategies | Multiple timeframes | ✅ Integrated |
 | Opportunity | Classification | Big move detection | Peak return focus | ✅ Integrated |
 | Triple Barrier | Classification | Risk-managed trading | Explicit risk/reward, vol-adaptive | ✅ **Integrated** |
-| Magnitude | Regression | Position sizing | Continuous targets | ⚠️ **API Only** |
+| Magnitude | Regression | Position sizing | Continuous targets | ✅ **Integrated** |
 
-> **Important**: "API Only" means the labeler is fully implemented and tested for use in Rust code, but not yet integrated into the `export_dataset` CLI tool. See [Integration Status](#integration-status) for details.
+> **All labeling strategies are fully integrated** into the `export_dataset` CLI tool. See [Integration Status](#integration-status) for details.
 
 ## 1. TLOB Labeling (Original DeepLOB)
 
@@ -341,10 +341,13 @@ python tools/calibrate_triple_barrier.py \
 
 ## 5. Magnitude Generation (Regression)
 
-> ⚠️ **API Only - Not Yet Integrated into Export Pipeline**
+> ✅ **Fully Integrated into Export Pipeline**
 >
-> The Magnitude generator is **fully implemented and tested** for use in Rust code,
-> but is **NOT yet integrated** into the `export_dataset` CLI tool.
+> Use `strategy = "regression"` in your TOML config. Features include:
+> - Multiple return types: `smoothed_return`, `point_return`, `peak_return`, `mean_return`, `dominant_return`
+> - Configurable via `return_type` field in TOML
+> - Multi-horizon and single-horizon support
+> - Pure regression mode (no classification labels generated)
 
 Generates continuous return values instead of discrete labels, enabling regression-based approaches.
 
@@ -388,6 +391,31 @@ let config = MagnitudeConfig::multi_horizon(vec![10, 50, 100, 200]);
 | `MinReturn` | min(prices[t+1:t+h+1]) / price[t] - 1 | Short opportunities |
 | `DominantReturn` | Larger of max/min by magnitude | Direction detection |
 | `MeanReturn` | mean(prices[t+1:t+h+1]) / price[t] - 1 | Smoothed target |
+
+### TOML Export Configuration
+
+```toml
+# Basic regression (smoothed returns, default)
+[labels]
+strategy = "regression"
+horizons = [10, 60, 300]
+smoothing_window = 10
+threshold = 0.0008
+
+# Point returns (no smoothing)
+[labels]
+strategy = "regression"
+horizons = [10, 60, 300]
+smoothing_window = 10
+return_type = "point_return"
+
+# Peak returns (max opportunity in horizon)
+[labels]
+strategy = "regression"
+horizons = [10, 60, 300]
+smoothing_window = 10
+return_type = "peak_return"
+```
 
 ### When to Use
 
@@ -523,25 +551,11 @@ These strategies can be used via TOML config and `export_dataset`:
 | **Multi-Horizon** | `horizons = [10, 50, 100]` | Down/Stable/Up × N | `{-1, 0, 1}` (SignedTrend) | Multiple horizons |
 | **Opportunity** | `strategy = "opportunity"` | BigDown/NoOpp/BigUp | `{-1, 0, 1}` (SignedOpportunity) | Peak return based |
 | **Triple Barrier** | `strategy = "triple_barrier"` | StopLoss/Timeout/ProfitTarget | `{0, 1, 2}` (TripleBarrierClassIndex) | Vol-adaptive, per-horizon barriers |
-
-### API Only (Not in Export Pipeline)
-
-| Strategy | Rust API | Status | Tracking |
-|----------|----------|--------|----------|
-| **Magnitude** | `MagnitudeGenerator` | ✅ Tests pass | Pending export integration |
+| **Magnitude** | `strategy = "regression"` | Regression (continuous) | continuous_bps, float64 | Label file: `{day}_regression_labels.npy` |
 
 ### Using API-Only Strategies
 
-To use Magnitude labeling, you must write Rust code:
-
-```rust
-use feature_extractor::{MagnitudeConfig, MagnitudeGenerator};
-
-let config = MagnitudeConfig::point_return(50);
-let mut generator = MagnitudeGenerator::new(config);
-generator.add_prices(&mid_prices);
-let returns = generator.generate()?;
-```
+All strategies are now fully integrated into the export pipeline. Use TOML configuration as documented above for each strategy.
 
 ### Roadmap
 
@@ -550,8 +564,8 @@ let returns = generator.generate()?;
 - [x] Per-horizon barrier overrides ✅ (Schema 3.2+)
 - [x] Volatility-adaptive barrier scaling ✅ (Schema 3.3+)
 - [x] Unified `LabelEncoding` validation contract ✅
-- [ ] Integrate `MagnitudeGenerator` into export pipeline
-- [ ] Add regression label export support
+- [x] Integrate `MagnitudeGenerator` into export pipeline ✅
+- [x] Add regression label export support ✅
 
 ---
 

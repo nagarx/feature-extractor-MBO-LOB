@@ -23,7 +23,7 @@ use mbo_lob_reconstructor::{DbnLoader, LobReconstructor, LobState};
 use std::path::Path;
 
 /// Compressed data directory (fallback if hot store unavailable)
-const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const COMPRESSED_DIR: &str = "../data/hot_store";
 
 /// Information about which data source is being used
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,7 +70,7 @@ fn get_test_files_with_source() -> (Vec<String>, DataSource) {
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().map_or(false, |ext| ext == "zst"))
-        .filter(|p| p.to_string_lossy().contains(".mbo.dbn.zst"))
+        .filter(|p| p.to_string_lossy().contains(".mbo.dbn"))
         .map(|p| p.to_string_lossy().to_string())
         .collect();
 
@@ -813,10 +813,10 @@ fn test_hot_store_vs_compressed_identical() {
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.to_string_lossy().contains(".mbo.dbn.zst"))
+        .filter(|p| p.to_string_lossy().contains(".mbo.dbn"))
         .filter_map(|p| {
             let name = p.file_name()?.to_string_lossy().to_string();
-            Some(name.replace("xnas-itch-", "").replace(".mbo.dbn.zst", ""))
+            Some(name.replace("xnas-itch-", "").replace(".mbo.dbn", ""))
         })
         .collect();
 
@@ -831,7 +831,7 @@ fn test_hot_store_vs_compressed_identical() {
     // Use the first common date
     let test_date = common_dates[0];
     let hot_file = format!("{}/xnas-itch-{}.mbo.dbn", common::HOT_STORE_DIR, test_date);
-    let compressed_file = format!("{}/xnas-itch-{}.mbo.dbn.zst", COMPRESSED_DIR, test_date);
+    let compressed_file = format!("{}/xnas-itch-{}.mbo.dbn", COMPRESSED_DIR, test_date);
 
     println!("   📅 Testing date: {}", test_date);
     println!("   📂 Hot store: {}", hot_file);

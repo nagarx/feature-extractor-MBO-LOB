@@ -57,11 +57,13 @@ feature_extractor/
 │   │   ├── order_flow.rs        # OFI, queue imbalance, trade flow
 │   │   ├── fi2010.rs            # FI-2010 handcrafted features (80)
 │   │   ├── market_impact.rs     # Market impact estimation (slippage, VWAP)
-│   │   └── experimental/        # Opt-in experimental features (+18, indices 98-115)
-│   │       ├── mod.rs           # ExperimentalConfig, group registry
-│   │       ├── institutional_v2.rs  # Enhanced whale detection (8 features)
-│   │       ├── volatility.rs    # Realized vol & regime (6 features)
-│   │       └── seasonality.rs   # Time-of-day features (4 features)
+│   │   └── experimental/        # Opt-in experimental features (+50, indices 98-147)
+│   │       ├── mod.rs           # ExperimentalConfig, group registry (5 groups)
+│   │       ├── institutional_v2.rs  # Enhanced whale detection (8 features, 98-105)
+│   │       ├── volatility.rs    # Realized vol & regime (6 features, 106-111)
+│   │       ├── seasonality.rs   # Time-of-day features (4 features, 112-115)
+│   │       ├── mlofi.rs         # Multi-Level OFI, combined bid+ask (12 features, 116-127)
+│   │       └── kolm_of.rs       # Per-level Order Flow, bid/ask separate (20 features, 128-147)
 │   │
 │   ├── labeling/                 # Label generation for supervised learning
 │   │   ├── mod.rs               # TrendLabel, LabelConfig, LabelStats, re-exports
@@ -70,12 +72,12 @@ feature_extractor/
 │   │   ├── multi_horizon.rs     # Multi-horizon labels + ThresholdStrategy (Fixed/RollingSpread/Quantile/TlobDynamic) - ✅ Export integrated
 │   │   ├── opportunity.rs       # Opportunity/big-move detection - ✅ Export integrated
 │   │   ├── triple_barrier.rs    # Triple Barrier (de Prado) - ✅ Export integrated (Schema 2.4+)
-│   │   └── magnitude.rs         # Magnitude/regression targets - ⚠️ API only, export pending
+│   │   └── magnitude.rs         # Magnitude/regression targets - ✅ Export integrated via regression strategy
 │   │
-│   ├── preprocessing/            # Normalization and sampling
+│   ├── preprocessing/            # Sampling (Sampler trait) and normalization
 │   │   ├── mod.rs               # Module exports
 │   │   ├── normalization.rs     # All normalizers (Z-score, Bilinear, Global, Rolling, etc.)
-│   │   ├── sampling.rs          # Volume/Event-based sampling
+│   │   ├── sampling.rs          # Sampler trait + EventBased/VolumeBased/TimeBased/Composite
 │   │   ├── adaptive_sampling.rs # Volatility-adaptive thresholds
 │   │   └── volatility.rs        # Realized volatility estimation (Welford)
 │   │
@@ -102,7 +104,8 @@ feature_extractor/
 │       └── strategies/          # Per-strategy label generation → LabelingResult
 │           ├── tlob.rs          # Single + multi-horizon TLOB
 │           ├── opportunity.rs   # Opportunity/big-move detection
-│           └── triple_barrier.rs # Triple Barrier + volatility scaling
+│           ├── triple_barrier.rs # Triple Barrier + volatility scaling
+│           └── regression.rs    # Regression (continuous bps returns)
 │
 ├── tools/                        # CLI tools
 │   ├── export_dataset.rs        # Configuration-driven export CLI
@@ -129,7 +132,7 @@ feature_extractor/
 │
 └── docs/
     ├── USAGE_GUIDE.md            # Comprehensive usage documentation
-    ├── FEATURE_REFERENCE.md      # Authoritative 116-feature index (formulas, units, ranges)
+    ├── FEATURE_REFERENCE.md      # Authoritative 148-feature index (formulas, units, ranges)
     ├── TEST_INVENTORY.md         # Complete test map (389 tests, 39 files, coverage)
     ├── CONFIG_REFERENCE.md       # DatasetConfig schema + TOML config inventory
     ├── LABELING_STRATEGIES.md    # All 6 labeling strategies with formulas
@@ -164,7 +167,9 @@ Feature count is automatically computed:
 | + MBO | 76 | 40 + 36 |
 | + Derived + MBO | 84 | 40 + 8 + 36 |
 | + Derived + MBO + Signals | 98 | 40 + 8 + 36 + 14 |
-| + Experimental (all groups) | 116 | 98 + 8 + 6 + 4 |
+| + Experimental (original 3) | 116 | 98 + 8 + 6 + 4 |
+| + Experimental (with MLOFI) | 128 | 98 + 8 + 6 + 4 + 12 |
+| + Experimental (all 5 groups) | 148 | 98 + 8 + 6 + 4 + 12 + 20 |
 
 ### 3. Streaming Sequence Generation
 
@@ -326,11 +331,11 @@ pub enum Preset {
 - [x] **Volatility-Adaptive Scaling** - Per-day barrier scaling based on realized volatility (Schema 3.3+)
 - [x] **LabelEncoding** - Unified label validation contract across all strategies
 - [x] **LabelingStrategy Enum** - TOML `strategy` field for strategy selection
-- [x] **Experimental Features Module** - 18 opt-in features (institutional_v2, volatility, seasonality)
+- [x] **Experimental Features Module** - Up to 50 opt-in features (institutional_v2, volatility, seasonality, mlofi, kolm_of)
 - [x] **Calibration Tool** - `tools/calibrate_triple_barrier.py` for per-day volatility analysis
 
 ### Pending
-- [ ] **Magnitude Export Integration** - Integrate `MagnitudeGenerator` for regression targets
+- [x] **Magnitude Export Integration** - Integrated via `strategy = "regression"` with `return_type` config
 - [ ] crates.io publication
 - [ ] Additional paper presets (ViT-LOB)
 - [ ] Weighted MLOFI (depth-aware OFI scalar per Xu et al.)

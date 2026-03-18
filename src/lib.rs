@@ -29,7 +29,7 @@
 //! // Process MBO data through the complete pipeline
 //! let config = PipelineConfig::default();
 //! let mut pipeline = Pipeline::from_config(config)?;
-//! let output = pipeline.process("data/NVDA.mbo.dbn.zst")?;
+//! let output = pipeline.process("data/hot_store/xnas-itch-20250203.mbo.dbn")?;
 //!
 //! // Export to NumPy format using AlignedBatchExporter
 //! let exporter = AlignedBatchExporter::new("output/", Default::default());
@@ -75,6 +75,7 @@
 pub mod builder;
 pub mod config;
 pub mod contract;
+pub mod error;
 pub mod export;
 pub mod export_aligned;
 pub mod features;
@@ -90,6 +91,9 @@ pub mod validation;
 #[cfg(feature = "parallel")]
 pub mod batch;
 
+// Re-exports - Error types
+pub use error::FeatureExtractorError;
+
 // Re-exports - Schema
 pub use schema::{FeatureCategory, FeatureDef, FeatureSchema, Preset, PresetConfig};
 
@@ -99,13 +103,20 @@ pub use config::{
 };
 
 // Re-exports - Features
+pub use features::mbo_features::{MboAggregator, MboEvent};
+pub use features::order_flow::MultiLevelOfiTracker; // Used by experimental mlofi + kolm_of
+pub use features::{FeatureConfig, FeatureExtractor, SignalContext};
+
+// Legacy feature modules (not integrated into production FeatureExtractor pipeline).
+// Enable with: cargo build --features legacy_features
+#[cfg(feature = "legacy_features")]
 pub use features::fi2010::{FI2010Config, FI2010Extractor};
+#[cfg(feature = "legacy_features")]
 pub use features::market_impact::{
     estimate_buy_impact, estimate_sell_impact, MarketImpactFeatures,
 };
-pub use features::mbo_features::{MboAggregator, MboEvent};
-pub use features::order_flow::{MultiLevelOfiTracker, OrderFlowFeatures, OrderFlowTracker};
-pub use features::{FeatureConfig, FeatureExtractor, SignalContext};
+#[cfg(feature = "legacy_features")]
+pub use features::order_flow::{OrderFlowFeatures, OrderFlowTracker};
 
 // Re-exports - Preprocessing
 pub use preprocessing::{

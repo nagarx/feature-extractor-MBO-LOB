@@ -50,13 +50,15 @@
 //! 4. Python contract update
 
 pub mod institutional_v2;
+pub mod kolm_of;
+pub mod mlofi;
 pub mod seasonality;
 pub mod volatility;
 
 use std::collections::HashSet;
 
 /// Available experimental feature groups.
-pub const AVAILABLE_GROUPS: &[&str] = &["institutional_v2", "volatility", "seasonality"];
+pub const AVAILABLE_GROUPS: &[&str] = &["institutional_v2", "volatility", "seasonality", "mlofi", "kolm_of"];
 
 /// Configuration for experimental features.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -142,6 +144,12 @@ impl ExperimentalConfig {
         if groups.contains("seasonality") {
             count += seasonality::FEATURE_COUNT;
         }
+        if groups.contains("mlofi") {
+            count += mlofi::FEATURE_COUNT;
+        }
+        if groups.contains("kolm_of") {
+            count += kolm_of::FEATURE_COUNT;
+        }
 
         count
     }
@@ -185,6 +193,8 @@ pub struct ExperimentalExtractor {
     institutional: Option<institutional_v2::InstitutionalDetectorV2>,
     volatility: Option<volatility::VolatilityComputer>,
     seasonality: Option<seasonality::SeasonalityComputer>,
+    mlofi: Option<mlofi::MlofiComputer>,
+    kolm_of: Option<kolm_of::KolmOfComputer>,
 }
 
 impl ExperimentalExtractor {
@@ -217,11 +227,25 @@ impl ExperimentalExtractor {
             None
         };
 
+        let mlofi = if groups.contains("mlofi") {
+            Some(mlofi::MlofiComputer::new())
+        } else {
+            None
+        };
+
+        let kolm_of = if groups.contains("kolm_of") {
+            Some(kolm_of::KolmOfComputer::new())
+        } else {
+            None
+        };
+
         Self {
             config,
             institutional,
             volatility,
             seasonality,
+            mlofi,
+            kolm_of,
         }
     }
 
@@ -238,6 +262,19 @@ impl ExperimentalExtractor {
     pub fn update_price(&mut self, mid_price: f64, timestamp_ns: u64) {
         if let Some(ref mut vol) = self.volatility {
             vol.update(mid_price, timestamp_ns);
+        }
+    }
+
+    /// Update with a new LOB state (for MLOFI and Kolm OF).
+    ///
+    /// Must be called on every LOB state transition, not just at sample time.
+    #[inline]
+    pub fn update_lob(&mut self, lob: &mbo_lob_reconstructor::LobState) {
+        if let Some(ref mut m) = self.mlofi {
+            m.update(lob);
+        }
+        if let Some(ref mut k) = self.kolm_of {
+            k.update(lob);
         }
     }
 
@@ -264,6 +301,51 @@ impl ExperimentalExtractor {
         if let Some(ref seas) = self.seasonality {
             seas.extract_into(timestamp_ns, output);
         }
+
+        if let Some(ref m) = self.mlofi {
+            m.extract_into(output);
+        }
+
+        if let Some(ref k) = self.kolm_of {
+            k.extract_into(output);
+        }
+    }
+
+    /// Extract all enabled experimental features AND reset continuous accumulators.
+    ///
+    /// This is the production method called at each sample point. It extracts
+    /// features in the same order as `extract_into()`, but additionally resets
+    /// MLOFI and Kolm OF accumulators so each sample captures only the
+    /// interval's order flow (not cumulative since day start).
+    ///
+    /// Groups that are stateless or use rolling windows (institutional, volatility,
+    /// seasonality) are extracted normally — they don't need sample-and-reset.
+    pub fn extract_and_reset_into(&mut self, timestamp_ns: u64, output: &mut Vec<f64>) {
+        if !self.config.enabled {
+            return;
+        }
+
+        // Stateless / rolling-window groups: extract normally
+        if let Some(ref mut inst) = self.institutional {
+            inst.extract_into(output);
+        }
+
+        if let Some(ref vol) = self.volatility {
+            vol.extract_into(output);
+        }
+
+        if let Some(ref seas) = self.seasonality {
+            seas.extract_into(timestamp_ns, output);
+        }
+
+        // Continuous accumulators: extract AND reset for interval-scoped values
+        if let Some(ref mut m) = self.mlofi {
+            m.sample_and_reset(output);
+        }
+
+        if let Some(ref mut k) = self.kolm_of {
+            k.sample_and_reset(output);
+        }
     }
 
     /// Get the total feature count.
@@ -279,7 +361,12 @@ impl ExperimentalExtractor {
         if let Some(ref mut vol) = self.volatility {
             vol.reset();
         }
-        // Seasonality is stateless, no reset needed
+        if let Some(ref mut m) = self.mlofi {
+            m.reset();
+        }
+        if let Some(ref mut k) = self.kolm_of {
+            k.reset();
+        }
     }
 
     /// Check if warmed up (enough data for valid features).
@@ -292,6 +379,16 @@ impl ExperimentalExtractor {
         }
         if let Some(ref vol) = self.volatility {
             if !vol.is_warm() {
+                return false;
+            }
+        }
+        if let Some(ref m) = self.mlofi {
+            if !m.is_warm() {
+                return false;
+            }
+        }
+        if let Some(ref k) = self.kolm_of {
+            if !k.is_warm() {
                 return false;
             }
         }
@@ -317,7 +414,9 @@ mod tests {
 
         let expected = institutional_v2::FEATURE_COUNT
             + volatility::FEATURE_COUNT
-            + seasonality::FEATURE_COUNT;
+            + seasonality::FEATURE_COUNT
+            + mlofi::FEATURE_COUNT
+            + kolm_of::FEATURE_COUNT;
         assert_eq!(config.feature_count(), expected);
     }
 

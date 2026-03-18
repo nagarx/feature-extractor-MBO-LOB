@@ -49,7 +49,7 @@ mod time_regime;
 pub use book_valid::{is_book_valid, is_book_valid_from_lob};
 pub use compute::{compute_signals, compute_signals_with_book_valid, SignalVector};
 pub use ofi::{OfiComputer, OfiSample, MIN_WARMUP_STATE_CHANGES};
-pub use time_regime::{compute_time_regime, compute_time_regime_from_et, TimeRegime};
+pub use time_regime::{compute_time_regime, compute_time_regime_auto, N_REGIMES, REGIME_LABELS};
 
 // ============================================================================
 // Signal Context

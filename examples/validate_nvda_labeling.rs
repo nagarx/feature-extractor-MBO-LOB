@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     println!("═══════════════════════════════════════════════\n");
 
     // Configuration
-    let data_path = "/Users/nigo/local/tlob-hft-pipeline/data/NVDA_2025-02-01_to_2025-09-30/xnas-itch-20250203.mbo.dbn.zst";
+    let data_path = "../data/hot_store/xnas-itch-20250203.mbo.dbn";
     let sample_interval = 100; // Sample every 100 messages
 
     println!("📂 Loading data from: {}", data_path);

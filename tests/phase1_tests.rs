@@ -538,6 +538,8 @@ fn test_phase1_config_validation() {
         volume_threshold: Some(1000),
         min_time_interval_ns: Some(1_000_000),
         event_count: None,
+        time_interval_ns: None,
+        utc_offset_hours: None,
         adaptive: Some(AdaptiveSamplingConfig {
             enabled: true,
             volatility_window: 1000,
@@ -562,6 +564,8 @@ fn test_phase1_config_validation() {
         volume_threshold: Some(1000),
         min_time_interval_ns: Some(1_000_000),
         event_count: None,
+        time_interval_ns: None,
+        utc_offset_hours: None,
         adaptive: None,
         multiscale: Some(MultiScaleSamplingConfig {
             enabled: true,

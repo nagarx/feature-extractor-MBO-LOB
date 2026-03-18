@@ -290,6 +290,8 @@ fn test_pipeline_reset_clears_all_state() {
             volume_threshold: Some(1000),
             min_time_interval_ns: Some(1_000_000),
             event_count: None,
+            time_interval_ns: None,
+            utc_offset_hours: None,
             adaptive: None,
             multiscale: None,
         }),

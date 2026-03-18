@@ -1,0 +1,100 @@
+# =============================================================================
+# NVDA XNAS 128-Feature — Regression + Forward Prices (Test Split Only)
+# =============================================================================
+#
+# Purpose: Export forward_prices.npy for P0 validation of the 55.8% conditional
+# win rate claim (label-execution mismatch analysis).
+#
+# This config exports ONLY the test split dates (2025-11-14 to 2026-01-06)
+# with export_forward_prices=true. This adds {day}_forward_prices.npy alongside
+# the standard export files.
+#
+# Forward prices array:
+#   {day}_forward_prices.npy  [N, k + max_H + 1] float64 USD
+#   Where k=smoothing_window=10, max_H=300 → [N, 311] columns
+#   Column 10 = base price at t (sequence end / prediction point)
+#   Column 10+h = price at t+h events forward
+#
+# All other config matches nvda_xnas_128feat_regression.toml exactly.
+#
+# Reference: BACKTESTER_AUDIT_PLAN.md § P0, V1
+# =============================================================================
+
+# ENABLE FORWARD PRICES EXPORT (must be before any [section])
+export_forward_prices = true
+
+[experiment]
+name = "NVDA XNAS 128-Feature Regression + Forward Prices (Test Split)"
+description = "Forward price trajectories for P0 label-execution mismatch validation"
+version = "1.0.0"
+tags = ["nvda", "xnas", "128-features", "regression", "forward-prices", "p0-validation"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/hot_store"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_xnas_128feat_regression_fwd_prices"
+
+# Test split dates only (35 days: 2025-11-14 to 2026-01-06)
+[dates]
+start_date = "2025-11-14"
+end_date = "2026-01-06"
+exclude_dates = [
+    "2025-11-27",   # Thanksgiving
+    "2025-12-25",   # Christmas
+    "2026-01-01",   # New Year
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[features.experimental]
+enabled = true
+groups = ["institutional_v2", "volatility", "seasonality", "mlofi"]
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+# REGRESSION: continuous forward returns in bps
+# Same parameters as the production 128-feat regression export
+[labels]
+strategy = "regression"
+horizon = 60
+horizons = [10, 60, 300]
+smoothing_window = 10
+threshold = 0.0008
+
+# No train/val/test split — all dates go to a single directory
+[split]
+train_ratio = 1.0
+val_ratio = 0.0
+test_ratio = 0.0
+
+[processing]
+error_mode = "collect_errors"
+verbose = false
+
+[normalization]
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0
+

@@ -2,7 +2,7 @@
 
 use super::indices;
 use super::ofi::OfiSample;
-use super::time_regime::compute_time_regime;
+use super::time_regime::compute_time_regime_auto;
 use crate::contract::{FLOAT_CMP_EPS, SCHEMA_VERSION, SIGNAL_COUNT};
 
 /// Indices of MBO features used for signal computation.
@@ -179,8 +179,8 @@ pub fn compute_signals(
         signals.signals[8] = 0.0;
     }
 
-    // === Signal 93: time_regime ===
-    signals.signals[9] = compute_time_regime(timestamp_ns).as_f64();
+    // === Signal 93: time_regime (7-regime, from hft-statistics) ===
+    signals.signals[9] = compute_time_regime_auto(timestamp_ns);
 
     // === Signal 94: mbo_ready ===
     signals.signals[10] = if ofi_sample.is_warm { 1.0 } else { 0.0 };

@@ -342,7 +342,7 @@ fn is_regular_hours(timestamp: u64) -> bool {
 #[test]
 fn test_granular_level_by_level_validation() {
     let mbo_path =
-        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+        Path::new("../data/hot_store/xnas-itch-20250701.mbo.dbn");
     let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
@@ -564,7 +564,7 @@ fn test_granular_level_by_level_validation() {
 #[test]
 fn test_granular_time_of_day_analysis() {
     let mbo_path =
-        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+        Path::new("../data/hot_store/xnas-itch-20250701.mbo.dbn");
     let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
@@ -728,7 +728,7 @@ fn test_granular_time_of_day_analysis() {
 #[test]
 fn test_granular_error_pattern_detection() {
     let mbo_path =
-        Path::new("../data/NVDA_2025-02-03_to_2026-01-07/xnas-itch-20250701.mbo.dbn.zst");
+        Path::new("../data/hot_store/xnas-itch-20250701.mbo.dbn");
     let mbp_path = Path::new("../data/NVDA_MBP10_2025-07/xnas-itch-20250701.mbp-10.dbn.zst");
 
     if !mbo_path.exists() || !mbp_path.exists() {
@@ -1039,7 +1039,7 @@ fn test_granular_multi_day_consistency() {
     println!("Period: July 1-10, 2025");
     println!("{:=<80}", "");
 
-    let mbo_base = Path::new("../data/NVDA_2025-02-03_to_2026-01-07");
+    let mbo_base = Path::new("../data/hot_store");
     let mbp_base = Path::new("../data/NVDA_MBP10_2025-07");
 
     let dates = [
@@ -1049,7 +1049,7 @@ fn test_granular_multi_day_consistency() {
     let mut daily_results: Vec<(String, f64, f64, f64, f64)> = Vec::new();
 
     for date in &dates {
-        let mbo_file = mbo_base.join(format!("xnas-itch-{}.mbo.dbn.zst", date));
+        let mbo_file = mbo_base.join(format!("xnas-itch-{}.mbo.dbn", date));
         let mbp_file = mbp_base.join(format!("xnas-itch-{}.mbp-10.dbn.zst", date));
 
         if !mbo_file.exists() || !mbp_file.exists() {

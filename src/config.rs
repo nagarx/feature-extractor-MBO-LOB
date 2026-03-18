@@ -74,6 +74,21 @@ pub struct SamplingConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_count: Option<usize>,
 
+    /// Sampling interval in nanoseconds (for time-based sampling).
+    ///
+    /// Common values:
+    /// - 1s  = 1_000_000_000
+    /// - 5s  = 5_000_000_000
+    /// - 1m  = 60_000_000_000
+    /// - 5m  = 300_000_000_000
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_interval_ns: Option<u64>,
+
+    /// UTC offset in hours for time-based sampling grid alignment.
+    /// EST = -5, EDT = -4. Used to align grid to 09:30 local market open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utc_offset_hours: Option<i32>,
+
     /// Phase 1: Adaptive sampling configuration (opt-in)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adaptive: Option<AdaptiveSamplingConfig>,
@@ -227,6 +242,8 @@ impl Default for SamplingConfig {
             volume_threshold: Some(1000),          // 1000 shares
             min_time_interval_ns: Some(1_000_000), // 1ms
             event_count: None,
+            time_interval_ns: None,
+            utc_offset_hours: None,
             adaptive: None,   // Phase 1: opt-in
             multiscale: None, // Phase 1: opt-in
         }
@@ -542,8 +559,13 @@ impl SamplingConfig {
                 }
             }
             SamplingStrategy::TimeBased => {
-                if self.min_time_interval_ns.is_none() {
-                    return Err("Time-based sampling requires min_time_interval_ns".to_string());
+                if self.time_interval_ns.is_none() {
+                    return Err(
+                        "Time-based sampling requires time_interval_ns".to_string(),
+                    );
+                }
+                if self.time_interval_ns == Some(0) {
+                    return Err("time_interval_ns must be > 0".to_string());
                 }
             }
             SamplingStrategy::MultiScale => {
@@ -705,6 +727,8 @@ mod tests {
             volume_threshold: Some(1000),
             min_time_interval_ns: Some(1_000_000),
             event_count: None,
+            time_interval_ns: None,
+            utc_offset_hours: None,
             adaptive: None,
             multiscale: None,
         };
@@ -716,6 +740,8 @@ mod tests {
             volume_threshold: None,
             min_time_interval_ns: Some(1_000_000),
             event_count: None,
+            time_interval_ns: None,
+            utc_offset_hours: None,
             adaptive: None,
             multiscale: None,
         };

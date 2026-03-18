@@ -50,7 +50,7 @@ pub mod symbol;
 pub use features::{ExperimentalFeatureConfig, FeatureSetConfig};
 pub use labels::{
     ExportConflictPriority, ExportLabelConfig, ExportThresholdStrategy, ExportTimeoutStrategy,
-    LabelingStrategy,
+    LabelingStrategy, RegressionExportConfig, RegressionReturnType,
 };
 pub use normalization::{FeatureNormStrategy, NormalizationConfig};
 pub use processing::{ExperimentInfo, ProcessingConfig, SplitConfig};
@@ -82,10 +82,10 @@ use std::path::{Path, PathBuf};
 /// [symbol]
 /// name = "NVDA"
 /// exchange = "XNAS"
-/// filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+/// filename_pattern = "xnas-itch-{date}.mbo.dbn"
 ///
 /// [data]
-/// input_dir = "data/NVDA_2025-02-01_to_2025-09-30"
+/// input_dir = "data/hot_store"
 /// output_dir = "data/exports/nvda_98feat"
 ///
 /// [dates]
@@ -162,6 +162,15 @@ pub struct DatasetConfig {
     /// Defaults to raw (no normalization) for maximum flexibility
     #[serde(default)]
     pub normalization: NormalizationConfig,
+
+    /// Export forward mid-price trajectories for Python-side label computation.
+    /// When true, exports `{day}_forward_prices.npy` alongside existing outputs.
+    /// Enables computing any label type (smoothed, point-return, triple-barrier)
+    /// in Python without re-exporting from Rust.
+    ///
+    /// TOML: `export_forward_prices = true`
+    #[serde(default)]
+    pub export_forward_prices: bool,
 }
 
 impl DatasetConfig {
@@ -179,6 +188,7 @@ impl DatasetConfig {
             split: SplitConfig::default(),
             processing: ProcessingConfig::default(),
             normalization: NormalizationConfig::default(),
+            export_forward_prices: false,
         }
     }
 

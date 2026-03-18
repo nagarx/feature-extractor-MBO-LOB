@@ -39,7 +39,8 @@ impl AlignedBatchExporter {
 
         Ok(LabelingResult {
             label_indices,
-            label_matrix,
+            classification_labels: Some(label_matrix),
+            regression_labels: None,
             encoding: LabelEncoding::SignedTrend,
             distribution: label_dist,
             strategy_name: "tlob",
@@ -129,7 +130,8 @@ impl AlignedBatchExporter {
 
         Ok(LabelingResult {
             label_indices,
-            label_matrix,
+            classification_labels: Some(label_matrix),
+            regression_labels: None,
             encoding: LabelEncoding::SignedTrend,
             distribution: combined_dist,
             strategy_name: "tlob",

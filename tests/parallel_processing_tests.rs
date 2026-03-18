@@ -27,7 +27,7 @@ use std::time::Duration;
 // ============================================================================
 
 fn get_test_files() -> Vec<String> {
-    let data_dir = Path::new("../data/NVDA_2025-02-03_to_2026-01-07");
+    let data_dir = Path::new("../data/hot_store");
 
     if !data_dir.exists() {
         return Vec::new();
@@ -841,7 +841,7 @@ fn test_hot_store_produces_same_results_as_direct() {
         .to_string();
 
     // Construct compressed path
-    let compressed_path = format!("../data/NVDA_2025-02-03_to_2026-01-07/{}.zst", hot_filename);
+    let compressed_path = format!("../data/XNAS_ITCH/NVDA/mbo_2025-02-03_to_2026-01-07/{}.zst", hot_filename);
 
     if !Path::new(&compressed_path).exists() {
         println!("   ⏭️  Skipped: Corresponding compressed file not found");

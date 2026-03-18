@@ -126,6 +126,104 @@ impl AlignedBatchExporter {
         Ok(())
     }
 
+    /// Export regression labels as 2D float64 numpy array: [n_sequences, num_horizons]
+    ///
+    /// Values are continuous forward returns in bps (basis points).
+    pub(super) fn export_regression_labels(
+        &self,
+        label_matrix: &[Vec<f64>],
+        path: &Path,
+    ) -> Result<()> {
+        let n_seq = label_matrix.len();
+        let n_horizons = label_matrix.first().map(|r| r.len()).unwrap_or(0);
+
+        let flat: Vec<f64> = label_matrix
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect();
+
+        let array = Array2::from_shape_vec((n_seq, n_horizons), flat)
+            .map_err(|e| format!("Failed to create 2D regression label array: {e}"))?;
+
+        let mut file = File::create(path)?;
+        array
+            .write_npy(&mut file)
+            .map_err(|e| format!("Failed to write regression labels: {e}"))?;
+
+        let all_vals: Vec<f64> = label_matrix.iter().flat_map(|r| r.iter().copied()).collect();
+        let mean = all_vals.iter().sum::<f64>() / all_vals.len().max(1) as f64;
+        let abs_mean = all_vals.iter().map(|v| v.abs()).sum::<f64>() / all_vals.len().max(1) as f64;
+
+        println!(
+            "  ✅ Regression labels: {} [{} × {}] (mean={:.2} bps, |mean|={:.2} bps)",
+            path.display(),
+            n_seq,
+            n_horizons,
+            mean,
+            abs_mean,
+        );
+
+        Ok(())
+    }
+
+    /// Export forward mid-price trajectories as 2D float64 numpy array.
+    ///
+    /// Shape: `[n_sequences, n_columns]` where n_columns = smoothing_window + max_horizon + 1.
+    /// Values are raw USD mid_prices (NOT normalized).
+    ///
+    /// Column layout (with smoothing_window_offset = k):
+    /// - Column 0: mid_price at t-k (k events before sequence end)
+    /// - Column k: mid_price at t (base price at sequence end / prediction point)
+    /// - Column k+h: mid_price at t+h (h events forward)
+    ///
+    /// This enables Python-side computation of any label type from the same aligned samples.
+    pub(super) fn export_forward_prices(
+        &self,
+        trajectories: &[Vec<f64>],
+        path: &Path,
+    ) -> Result<()> {
+        let n_seq = trajectories.len();
+        let n_cols = trajectories.first().map(|r| r.len()).unwrap_or(0);
+
+        if n_seq == 0 || n_cols == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Empty forward price trajectories",
+            )
+            .into());
+        }
+
+        let flat: Vec<f64> = trajectories
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect();
+
+        let array = Array2::from_shape_vec((n_seq, n_cols), flat)
+            .map_err(|e| format!("Failed to create forward prices array: {e}"))?;
+
+        let mut file = File::create(path)?;
+        array
+            .write_npy(&mut file)
+            .map_err(|e| format!("Failed to write forward prices: {e}"))?;
+
+        // Compute basic statistics for logging
+        let base_col = if n_cols > 0 {
+            trajectories.iter().map(|r| r[0]).sum::<f64>() / n_seq as f64
+        } else {
+            0.0
+        };
+
+        println!(
+            "  ✅ Forward prices: {} [{} × {}] (mean_base=${:.2})",
+            path.display(),
+            n_seq,
+            n_cols,
+            base_col,
+        );
+
+        Ok(())
+    }
+
     /// Export sequences in DeepLOB format: (N, T, 4, L)
     ///
     /// Channels: [ask_prices, ask_volumes, bid_prices, bid_volumes]

@@ -9,7 +9,7 @@
 //!
 //!   # Phase 2: Decompress dataset (run separately)
 //!   ../MBO-LOB-reconstructor/target/release/decompress_to_hot_store \
-//!       -i ../data/NVDA_2025-02-01_to_2025-09-30 \
+//!       -i ../data/hot_store \
 //!       -o ../data/hot_store
 //!
 //!   # Phase 3: Benchmark with decompressed data
@@ -48,7 +48,7 @@ mod experiment {
     use std::path::{Path, PathBuf};
     use std::time::Instant;
 
-    const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-01_to_2025-09-30";
+    const COMPRESSED_DIR: &str = "../data/hot_store";
     const HOT_STORE_DIR: &str = "../data/hot_store";
     const NUM_TEST_FILES: usize = 4;
     const NUM_PARALLEL_FILES: usize = 16; // For true parallel scaling tests

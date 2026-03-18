@@ -572,4 +572,155 @@ mod tests {
         assert_eq!(sample.ofi, 60.0);
         assert_eq!(sample.event_count, 4);
     }
+
+    // ====================================================================
+    // Sign convention tests (Rule §10: >0 = Bullish, <0 = Bearish)
+    // ====================================================================
+
+    #[test]
+    fn test_ofi_sign_bid_increase_bullish() {
+        // Bid size increase at same price → positive OFI (bullish)
+        // Per Cont et al. (2014): bid_contribution = curr_size - prev_size > 0
+        let mut computer = OfiComputer::new();
+        let lob1 = make_lob(100_000_000, 100, 100_010_000, 100);
+        let lob2 = make_lob(100_000_000, 200, 100_010_000, 100); // bid +100
+        computer.update(&lob1);
+        computer.update(&lob2);
+        let sample = computer.sample_and_reset(1_000_000_000);
+        assert!(
+            sample.ofi > 0.0,
+            "Bid size increase must produce ofi > 0 (bullish). Got ofi={}",
+            sample.ofi
+        );
+        assert!(
+            sample.ofi_bid > 0.0,
+            "Bid-side OFI must be positive. Got ofi_bid={}",
+            sample.ofi_bid
+        );
+    }
+
+    #[test]
+    fn test_ofi_sign_ask_increase_bearish() {
+        // Ask size increase at same price → negative OFI (bearish)
+        // Per Cont et al.: ask_contribution = curr_size - prev_size > 0 → OFI -= contribution
+        let mut computer = OfiComputer::new();
+        let lob1 = make_lob(100_000_000, 100, 100_010_000, 100);
+        let lob2 = make_lob(100_000_000, 100, 100_010_000, 200); // ask +100
+        computer.update(&lob1);
+        computer.update(&lob2);
+        let sample = computer.sample_and_reset(1_000_000_000);
+        assert!(
+            sample.ofi < 0.0,
+            "Ask size increase must produce ofi < 0 (bearish). Got ofi={}",
+            sample.ofi
+        );
+        assert!(
+            sample.ofi_ask < 0.0,
+            "Ask-side OFI must be negative. Got ofi_ask={}",
+            sample.ofi_ask
+        );
+    }
+
+    // ====================================================================
+    // Edge case tests
+    // ====================================================================
+
+    #[test]
+    fn test_depth_norm_ofi_zero_depth() {
+        // When avg_depth is near zero, depth_norm_ofi must return 0.0 (not Inf/NaN)
+        let sample = OfiSample {
+            ofi: 100.0,
+            ofi_bid: 100.0,
+            ofi_ask: 0.0,
+            avg_depth: 0.0, // zero depth
+            event_count: 10,
+            is_warm: true,
+            dt_seconds: 1.0,
+        };
+        let result = sample.depth_norm_ofi();
+        assert_eq!(
+            result, 0.0,
+            "depth_norm_ofi must be 0.0 when avg_depth=0. Got {}",
+            result
+        );
+        assert!(result.is_finite(), "Must be finite, not NaN/Inf");
+    }
+
+    #[test]
+    fn test_warmup_boundary_exact() {
+        // Warmup requires exactly MIN_WARMUP_STATE_CHANGES effective transitions.
+        let mut computer = OfiComputer::new();
+
+        // Create an initial LOB state and then simulate state changes
+        let base_lob = make_lob(100_000_000, 100, 100_010_000, 100);
+        computer.update(&base_lob);
+
+        // Drive state changes: alternate sizes to ensure each update counts
+        for i in 1..MIN_WARMUP_STATE_CHANGES {
+            let size = 100 + (i as u32 % 2); // alternate 100/101
+            let lob = make_lob(100_000_000, size, 100_010_000, 100);
+            computer.update(&lob);
+        }
+
+        // At exactly MIN_WARMUP_STATE_CHANGES-1 effective changes: NOT warm
+        let sample_before = computer.sample_and_reset(1_000_000_000);
+        assert!(
+            !sample_before.is_warm,
+            "Should NOT be warm before {} state changes. state_changes={}",
+            MIN_WARMUP_STATE_CHANGES,
+            MIN_WARMUP_STATE_CHANGES - 1
+        );
+
+        // One more state change pushes us to exactly the threshold
+        let lob_final = make_lob(100_000_000, 150, 100_010_000, 100);
+        computer.update(&lob_final);
+
+        let sample_after = computer.sample_and_reset(2_000_000_000);
+        assert!(
+            sample_after.is_warm,
+            "Should be warm at exactly {} state changes",
+            MIN_WARMUP_STATE_CHANGES
+        );
+    }
+
+    #[test]
+    fn test_dt_seconds_computation() {
+        // Two samples 5 seconds apart → dt_seconds = 5.0
+        let mut computer = OfiComputer::new();
+        let lob = make_lob(100_000_000, 100, 100_010_000, 100);
+
+        computer.update(&lob);
+        let ts1_ns: i64 = 1_738_540_800_000_000_000; // arbitrary base
+        let _ = computer.sample_and_reset(ts1_ns);
+
+        computer.update(&lob);
+        let ts2_ns = ts1_ns + 5_000_000_000; // +5 seconds
+        let sample = computer.sample_and_reset(ts2_ns);
+
+        assert!(
+            (sample.dt_seconds - 5.0).abs() < 1e-9,
+            "dt_seconds should be 5.0 for 5-second interval. Got {}",
+            sample.dt_seconds
+        );
+    }
+
+    #[test]
+    fn test_all_ofi_sample_fields_finite() {
+        let mut computer = OfiComputer::new();
+        let lob1 = make_lob(100_000_000, 100, 100_010_000, 100);
+        let lob2 = make_lob(100_000_000, 150, 100_010_000, 80);
+        computer.update(&lob1);
+        computer.update(&lob2);
+        let sample = computer.sample_and_reset(1_000_000_000);
+
+        assert!(sample.ofi.is_finite(), "ofi must be finite");
+        assert!(sample.ofi_bid.is_finite(), "ofi_bid must be finite");
+        assert!(sample.ofi_ask.is_finite(), "ofi_ask must be finite");
+        assert!(sample.avg_depth.is_finite(), "avg_depth must be finite");
+        assert!(sample.dt_seconds.is_finite(), "dt_seconds must be finite");
+        assert!(
+            sample.depth_norm_ofi().is_finite(),
+            "depth_norm_ofi must be finite"
+        );
+    }
 }

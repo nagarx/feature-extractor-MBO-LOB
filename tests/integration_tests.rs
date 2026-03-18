@@ -34,11 +34,11 @@ use std::path::Path;
 use std::time::Instant;
 
 /// Path to NVIDIA MBO data
-const NVDA_DATA_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const NVDA_DATA_DIR: &str = "../data/hot_store";
 
 /// Get path to a specific day's data file
 fn get_data_file(date: &str) -> String {
-    format!("{NVDA_DATA_DIR}/xnas-itch-{date}.mbo.dbn.zst")
+    format!("{NVDA_DATA_DIR}/xnas-itch-{date}.mbo.dbn")
 }
 
 // =============================================================================

@@ -15,20 +15,24 @@ use std::path::{Path, PathBuf};
 // Label Encoding Contract
 // ============================================================================
 
-/// Defines the valid label range and class names for each labeling strategy.
+/// Defines the valid label encoding contract for each labeling strategy.
 ///
-/// This is the single source of truth for label encoding contracts across the
-/// export pipeline. Every labeling strategy must define its encoding here,
-/// and all validation uses this contract.
+/// This is the single source of truth for label encoding across the export
+/// pipeline. Every labeling strategy must define its encoding here, and all
+/// validation uses this contract.
+///
+/// Supports both classification (discrete i8 labels) and regression
+/// (continuous f64 labels) strategies.
 ///
 /// # Label Encoding Summary
 ///
-/// | Strategy        | Values     | Classes                          |
-/// |-----------------|------------|----------------------------------|
-/// | TLOB            | {-1, 0, 1} | Down, Stable, Up                |
-/// | Opportunity     | {-1, 0, 1} | BigDown, NoOpportunity, BigUp   |
-/// | Triple Barrier  | {0, 1, 2}  | StopLoss, Timeout, ProfitTarget |
-#[derive(Debug, Clone)]
+/// | Strategy        | Type           | Values           | Description                       |
+/// |-----------------|----------------|------------------|-----------------------------------|
+/// | TLOB            | Classification | {-1, 0, 1} i8   | Down, Stable, Up                  |
+/// | Opportunity     | Classification | {-1, 0, 1} i8   | BigDown, NoOpportunity, BigUp     |
+/// | Triple Barrier  | Classification | {0, 1, 2} i8    | StopLoss, Timeout, ProfitTarget   |
+/// | ContinuousBps   | Regression     | f64              | Forward returns in basis points   |
+#[derive(Debug, Clone, PartialEq)]
 pub enum LabelEncoding {
     /// TLOB / Multi-horizon: labels as signed integers {-1, 0, 1}
     SignedTrend,
@@ -36,28 +40,62 @@ pub enum LabelEncoding {
     SignedOpportunity,
     /// Triple Barrier: labels as class indices {0, 1, 2}
     TripleBarrierClassIndex,
+    /// Regression: continuous forward returns in basis points (f64).
+    /// Primary output is `regression_label_matrix`; classification labels are optional.
+    ContinuousBps,
 }
 
 impl LabelEncoding {
-    /// Valid label range (inclusive) for this encoding.
-    pub fn valid_range(&self) -> (i8, i8) {
+    /// Whether this encoding represents a regression (continuous) target.
+    pub fn is_regression(&self) -> bool {
+        matches!(self, LabelEncoding::ContinuousBps)
+    }
+
+    /// Whether this encoding represents a classification (discrete) target.
+    pub fn is_classification(&self) -> bool {
+        !self.is_regression()
+    }
+
+    /// The numpy dtype string for the primary label output.
+    pub fn label_dtype(&self) -> &'static str {
         match self {
-            LabelEncoding::SignedTrend | LabelEncoding::SignedOpportunity => (-1, 1),
-            LabelEncoding::TripleBarrierClassIndex => (0, 2),
+            LabelEncoding::ContinuousBps => "float64",
+            _ => "int8",
         }
     }
 
-    /// Number of distinct classes.
-    pub fn num_classes(&self) -> usize {
-        3
+    /// Valid label range (inclusive) for classification encodings.
+    ///
+    /// Returns `None` for regression encodings (continuous values have no fixed range).
+    pub fn valid_range(&self) -> Option<(i8, i8)> {
+        match self {
+            LabelEncoding::SignedTrend | LabelEncoding::SignedOpportunity => Some((-1, 1)),
+            LabelEncoding::TripleBarrierClassIndex => Some((0, 2)),
+            LabelEncoding::ContinuousBps => None,
+        }
     }
 
-    /// Human-readable class names, ordered by label value (ascending).
-    pub fn class_names(&self) -> Vec<&'static str> {
+    /// Number of distinct classes for classification encodings.
+    ///
+    /// Returns `None` for regression.
+    pub fn num_classes(&self) -> Option<usize> {
         match self {
-            LabelEncoding::SignedTrend => vec!["Down", "Stable", "Up"],
-            LabelEncoding::SignedOpportunity => vec!["BigDown", "NoOpportunity", "BigUp"],
-            LabelEncoding::TripleBarrierClassIndex => vec!["StopLoss", "Timeout", "ProfitTarget"],
+            LabelEncoding::ContinuousBps => None,
+            _ => Some(3),
+        }
+    }
+
+    /// Human-readable class names for classification encodings.
+    ///
+    /// Returns `None` for regression.
+    pub fn class_names(&self) -> Option<Vec<&'static str>> {
+        match self {
+            LabelEncoding::SignedTrend => Some(vec!["Down", "Stable", "Up"]),
+            LabelEncoding::SignedOpportunity => Some(vec!["BigDown", "NoOpportunity", "BigUp"]),
+            LabelEncoding::TripleBarrierClassIndex => {
+                Some(vec!["StopLoss", "Timeout", "ProfitTarget"])
+            }
+            LabelEncoding::ContinuousBps => None,
         }
     }
 
@@ -67,19 +105,25 @@ impl LabelEncoding {
             LabelEncoding::SignedTrend => "TLOB",
             LabelEncoding::SignedOpportunity => "Opportunity",
             LabelEncoding::TripleBarrierClassIndex => "Triple Barrier",
+            LabelEncoding::ContinuousBps => "Regression",
         }
     }
 
     /// Human-readable description of the expected range for error messages.
     pub fn expected_range_description(&self) -> String {
-        let (min, _max) = self.valid_range();
-        let names = self.class_names();
-        let mapping: Vec<String> = names
-            .iter()
-            .enumerate()
-            .map(|(i, name)| format!("{}={}", min + i as i8, name))
-            .collect();
-        format!("{{{}}}", mapping.join(", "))
+        match self {
+            LabelEncoding::ContinuousBps => "continuous f64 (basis points)".to_string(),
+            _ => {
+                let (min, _max) = self.valid_range().unwrap();
+                let names = self.class_names().unwrap();
+                let mapping: Vec<String> = names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| format!("{}={}", min + i as i8, name))
+                    .collect();
+                format!("{{{}}}", mapping.join(", "))
+            }
+        }
     }
 }
 
@@ -227,17 +271,25 @@ impl NormalizationParams {
 ///
 /// This struct eliminates ~1000 lines of duplicated code by decoupling label
 /// generation (strategy-specific) from the export pipeline (shared).
+///
+/// At least one of `classification_labels` or `regression_labels` must be `Some`.
 pub(crate) struct LabelingResult {
-    /// Label indices used for alignment (snapshot indices with valid labels)
+    /// Label indices used for alignment (snapshot indices with valid labels).
+    /// Must have the same length as whichever label matrix is present.
     pub label_indices: Vec<usize>,
-    /// Label matrix: each row has labels for all horizons.
+    /// Classification label matrix: each row has discrete labels for all horizons.
     /// For single-horizon: each row is `vec![single_label]`.
-    pub label_matrix: Vec<Vec<i8>>,
+    /// `None` for pure regression strategies.
+    pub classification_labels: Option<Vec<Vec<i8>>>,
+    /// Regression label matrix: continuous forward returns in bps (float64).
+    /// Each row has returns for all horizons: `[ret_h1, ret_h2, ...]`.
+    /// `None` for classification-only strategies.
+    pub regression_labels: Option<Vec<Vec<f64>>>,
     /// Label encoding contract for validation
     pub encoding: LabelEncoding,
     /// Label distribution for metadata/reporting
     pub distribution: HashMap<String, usize>,
-    /// Strategy name for metadata JSON ("tlob", "opportunity", "triple_barrier")
+    /// Strategy name for metadata JSON ("tlob", "opportunity", "triple_barrier", "regression")
     pub strategy_name: &'static str,
     /// Strategy-specific metadata block for the "labeling" field in metadata JSON
     pub strategy_metadata: serde_json::Value,

@@ -1,19 +1,23 @@
-//! Data Export Module
+//! Export infrastructure: configuration types + formatting utilities.
 //!
-//! Export processed features and labels to various formats for ML training.
+//! # Module Structure
 //!
-//! # Modules
+//! - **config/** — TOML/JSON-serializable configuration types for experiment reproducibility.
+//!   Shared by `export_aligned/`, the CLI tool (`export_dataset`), and tests.
+//!   Includes: `DatasetConfig`, `NormalizationConfig`, `ExportLabelConfig`, etc.
 //!
-//! - **config**: Configuration-driven, symbol-agnostic export system
-//! - **dataset_config**: Dataset configuration types
-//! - **tensor_format**: Model-specific tensor reshaping (DeepLOB, HLOB, etc.)
+//! - **tensor_format** — Tensor reshaping for model-specific formats (DeepLOB, HLOB, Image, Flat).
+//!   Used by `export_aligned/npy_export.rs` for optional format transformations.
 //!
-//! # Current Export Path
+//! # Architecture Note
 //!
-//! All new exports should use `AlignedBatchExporter` from the `export_aligned` module.
+//! The actual export ENGINE is in `export_aligned/`. This module provides the
+//! configuration and utility types that `export_aligned` consumes. This is
+//! intentional separation of concerns (config vs implementation), NOT a
+//! half-finished migration. If a new exporter is added (e.g., Parquet, streaming),
+//! it would also consume these shared config types.
 
 pub mod config;
-pub mod dataset_config;
 pub mod tensor_format;
 
 pub use config::{

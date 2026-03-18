@@ -33,6 +33,8 @@ fn test_pipeline_with_different_sampling_strategies() {
         volume_threshold: Some(500),
         min_time_interval_ns: Some(1_000_000),
         event_count: None,
+        time_interval_ns: None,
+        utc_offset_hours: None,
         adaptive: None,
         multiscale: None,
     });
@@ -45,6 +47,8 @@ fn test_pipeline_with_different_sampling_strategies() {
         volume_threshold: None,
         min_time_interval_ns: None,
         event_count: Some(50),
+        time_interval_ns: None,
+        utc_offset_hours: None,
         adaptive: None,
         multiscale: None,
     });
@@ -207,6 +211,8 @@ fn test_pipeline_config_serialization_round_trip() {
             volume_threshold: Some(2000),
             min_time_interval_ns: Some(5_000_000),
             event_count: None,
+            time_interval_ns: None,
+            utc_offset_hours: None,
             adaptive: None,
             multiscale: None,
         }),
@@ -262,11 +268,11 @@ fn test_pipeline_handles_empty_output() {
 
 #[test]
 fn test_sampling_strategy_coverage() {
-    // Verify implemented sampling strategies can be created and work
-    // Note: TimeBased is NOT implemented and will error at process() time
+    // Verify all sampling strategies can create a pipeline successfully
     let working_strategies = vec![
         SamplingStrategy::VolumeBased,
         SamplingStrategy::EventBased,
+        SamplingStrategy::TimeBased,
         SamplingStrategy::MultiScale, // Uses volume-based as base sampler
     ];
 
@@ -279,6 +285,8 @@ fn test_sampling_strategy_coverage() {
                 volume_threshold: Some(1000),
                 min_time_interval_ns: Some(1_000_000),
                 event_count: Some(100),
+                time_interval_ns: Some(5_000_000_000), // 5s (used by TimeBased)
+                utc_offset_hours: Some(-5),
                 adaptive: None,
                 multiscale: None,
             }),
@@ -294,31 +302,30 @@ fn test_sampling_strategy_coverage() {
 }
 
 #[test]
-fn test_timebased_sampling_not_implemented() {
-    // Verify that TimeBased sampling returns a clear error
-    // instead of silently falling back to another strategy
+fn test_timebased_sampling_creates_pipeline() {
+    // TimeBased sampling is now implemented via TimeBasedSampler.
+    // Verify pipeline creation succeeds with time-based config.
     let config = PipelineConfig {
         features: FeatureConfig::default(),
         sequence: SequenceConfig::default(),
         sampling: Some(SamplingConfig {
             strategy: SamplingStrategy::TimeBased,
-            volume_threshold: Some(1000),
-            min_time_interval_ns: Some(1_000_000),
-            event_count: Some(100),
+            volume_threshold: None,
+            min_time_interval_ns: None,
+            event_count: None,
+            time_interval_ns: Some(5_000_000_000), // 5 seconds
+            utc_offset_hours: Some(-5),             // EST
             adaptive: None,
             multiscale: None,
         }),
         metadata: None,
     };
 
-    // Pipeline creation succeeds (config is valid)
     let pipeline = Pipeline::from_config(config);
-    assert!(pipeline.is_ok(), "Pipeline creation should succeed");
-
-    // But if we had data to process, it would error at process() time
-    // because create_sampler() returns an error for TimeBased
-    // We can't easily test this without real data, but the error message
-    // is clear: "TimeBased sampling strategy is not yet implemented"
+    assert!(
+        pipeline.is_ok(),
+        "Pipeline with TimeBased sampling should create successfully"
+    );
 }
 
 #[test]
@@ -515,6 +522,8 @@ fn test_multiscale_arc_sharing_configuration() {
         event_count: Some(1),
         volume_threshold: None,
         min_time_interval_ns: None,
+        time_interval_ns: None,
+        utc_offset_hours: None,
         adaptive: None,
         multiscale: Some(MultiScaleSamplingConfig {
             enabled: true,

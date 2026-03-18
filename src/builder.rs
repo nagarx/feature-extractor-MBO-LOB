@@ -13,7 +13,7 @@
 //!     .build()?;
 //!
 //! // Process data
-//! let output = pipeline.process("data/NVDA.mbo.dbn.zst")?;
+//! let output = pipeline.process("data/hot_store/xnas-itch-20250203.mbo.dbn")?;
 //! ```
 //!
 //! # Feature Count Reference
@@ -446,9 +446,36 @@ impl PipelineBuilder {
         self
     }
 
+    /// Use time-based sampling at fixed wall-clock intervals.
+    ///
+    /// Grid is aligned to 09:30 local market open, matching the canonical
+    /// grid used by `mbo-statistical-profiler`'s `resample_to_grid()`.
+    /// This preserves OFI temporal persistence (ACF structure).
+    ///
+    /// # Arguments
+    ///
+    /// * `interval_ns` - Sampling interval in nanoseconds (e.g., 5_000_000_000 for 5s)
+    /// * `utc_offset_hours` - UTC offset for market open alignment (EST=-5, EDT=-4)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let builder = PipelineBuilder::new()
+    ///     .time_sampling(5_000_000_000, -5);  // 5-second bins, EST
+    /// ```
+    pub fn time_sampling(mut self, interval_ns: u64, utc_offset_hours: i32) -> Self {
+        self.sampling.strategy = SamplingStrategy::TimeBased;
+        self.sampling.time_interval_ns = Some(interval_ns);
+        self.sampling.utc_offset_hours = Some(utc_offset_hours);
+        self.sampling.volume_threshold = None;
+        self.sampling.event_count = None;
+        self
+    }
+
     /// Set minimum time interval between samples (nanoseconds).
     ///
     /// This prevents over-sampling during very active periods.
+    /// Only applies to volume-based sampling.
     /// Default: 1,000,000 ns (1 millisecond).
     pub fn min_sample_interval_ns(mut self, interval: u64) -> Self {
         self.sampling.min_time_interval_ns = Some(interval);

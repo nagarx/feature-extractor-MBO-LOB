@@ -462,10 +462,16 @@ fn test_normalization_params_save_load() {
 #[test]
 fn test_label_encoding_signed_trend_contract() {
     let enc = LabelEncoding::SignedTrend;
-    assert_eq!(enc.valid_range(), (-1, 1));
-    assert_eq!(enc.num_classes(), 3);
-    assert_eq!(enc.class_names(), vec!["Down", "Stable", "Up"]);
+    assert_eq!(enc.valid_range(), Some((-1, 1)));
+    assert_eq!(enc.num_classes(), Some(3));
+    assert_eq!(
+        enc.class_names(),
+        Some(vec!["Down", "Stable", "Up"])
+    );
     assert_eq!(enc.strategy_name(), "TLOB");
+    assert!(enc.is_classification());
+    assert!(!enc.is_regression());
+    assert_eq!(enc.label_dtype(), "int8");
 
     let desc = enc.expected_range_description();
     assert!(desc.contains("-1=Down"), "Expected '-1=Down' in: {desc}");
@@ -476,22 +482,27 @@ fn test_label_encoding_signed_trend_contract() {
 #[test]
 fn test_label_encoding_signed_opportunity_contract() {
     let enc = LabelEncoding::SignedOpportunity;
-    assert_eq!(enc.valid_range(), (-1, 1));
-    assert_eq!(enc.num_classes(), 3);
-    assert_eq!(enc.class_names(), vec!["BigDown", "NoOpportunity", "BigUp"]);
+    assert_eq!(enc.valid_range(), Some((-1, 1)));
+    assert_eq!(enc.num_classes(), Some(3));
+    assert_eq!(
+        enc.class_names(),
+        Some(vec!["BigDown", "NoOpportunity", "BigUp"])
+    );
     assert_eq!(enc.strategy_name(), "Opportunity");
+    assert!(enc.is_classification());
 }
 
 #[test]
 fn test_label_encoding_triple_barrier_contract() {
     let enc = LabelEncoding::TripleBarrierClassIndex;
-    assert_eq!(enc.valid_range(), (0, 2));
-    assert_eq!(enc.num_classes(), 3);
+    assert_eq!(enc.valid_range(), Some((0, 2)));
+    assert_eq!(enc.num_classes(), Some(3));
     assert_eq!(
         enc.class_names(),
-        vec!["StopLoss", "Timeout", "ProfitTarget"]
+        Some(vec!["StopLoss", "Timeout", "ProfitTarget"])
     );
     assert_eq!(enc.strategy_name(), "Triple Barrier");
+    assert!(enc.is_classification());
 
     let desc = enc.expected_range_description();
     assert!(
@@ -509,7 +520,24 @@ fn test_label_encoding_triple_barrier_contract() {
 }
 
 #[test]
-fn test_label_encoding_all_have_3_classes() {
+fn test_label_encoding_continuous_bps_contract() {
+    let enc = LabelEncoding::ContinuousBps;
+    assert!(enc.is_regression());
+    assert!(!enc.is_classification());
+    assert_eq!(enc.label_dtype(), "float64");
+    assert_eq!(enc.strategy_name(), "Regression");
+    assert_eq!(enc.valid_range(), None);
+    assert_eq!(enc.num_classes(), None);
+    assert_eq!(enc.class_names(), None);
+    let desc = enc.expected_range_description();
+    assert!(
+        desc.contains("continuous"),
+        "Expected 'continuous' in regression description: {desc}"
+    );
+}
+
+#[test]
+fn test_label_encoding_all_classification_have_3_classes() {
     let encodings = [
         LabelEncoding::SignedTrend,
         LabelEncoding::SignedOpportunity,
@@ -518,12 +546,12 @@ fn test_label_encoding_all_have_3_classes() {
     for enc in &encodings {
         assert_eq!(
             enc.num_classes(),
-            3,
+            Some(3),
             "{} should have 3 classes",
             enc.strategy_name()
         );
         assert_eq!(
-            enc.class_names().len(),
+            enc.class_names().unwrap().len(),
             3,
             "{} should have 3 class names",
             enc.strategy_name()
@@ -539,17 +567,17 @@ fn test_label_encoding_range_covers_all_classes() {
         LabelEncoding::TripleBarrierClassIndex,
     ];
     for enc in &encodings {
-        let (min, max) = enc.valid_range();
+        let (min, max) = enc.valid_range().unwrap();
         let span = (max - min + 1) as usize;
+        let num_classes = enc.num_classes().unwrap();
         assert_eq!(
-            span,
-            enc.num_classes(),
+            span, num_classes,
             "{}: range [{}, {}] spans {} values but num_classes={}",
             enc.strategy_name(),
             min,
             max,
             span,
-            enc.num_classes()
+            num_classes
         );
     }
 }

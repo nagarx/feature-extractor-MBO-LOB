@@ -68,6 +68,8 @@ fn main() {
             volume_threshold: Some(10_000),
             min_time_interval_ns: Some(100_000_000), // 100ms
             event_count: None,
+            time_interval_ns: None,
+            utc_offset_hours: None,
             adaptive: None,
             multiscale: None,
         })
@@ -191,6 +193,8 @@ fn main() {
         volume_threshold: Some(5000),
         min_time_interval_ns: Some(10_000_000),
         event_count: None,
+        time_interval_ns: None,
+        utc_offset_hours: None,
         adaptive: None,
         multiscale: None,
     };
@@ -205,6 +209,8 @@ fn main() {
         volume_threshold: None,
         min_time_interval_ns: None,
         event_count: Some(100),
+        time_interval_ns: None,
+        utc_offset_hours: None,
         adaptive: None,
         multiscale: None,
     };
@@ -217,14 +223,16 @@ fn main() {
     let time_sampling = SamplingConfig {
         strategy: SamplingStrategy::TimeBased,
         volume_threshold: None,
-        min_time_interval_ns: Some(1_000_000_000), // 1 second
+        min_time_interval_ns: None,
         event_count: None,
+        time_interval_ns: Some(1_000_000_000), // 1 second
+        utc_offset_hours: Some(-5),            // EST
         adaptive: None,
         multiscale: None,
     };
     println!(
         "  Time-based: every {} ms",
-        time_sampling.min_time_interval_ns.unwrap() / 1_000_000
+        time_sampling.time_interval_ns.unwrap() / 1_000_000
     );
 
     // =========================================================================

@@ -330,6 +330,7 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
 
     let mut total_days_processed = 0;
     let mut total_sequences_exported = 0;
+    let mut split_stats: Vec<(String, usize, usize)> = Vec::new(); // (name, days, sequences)
 
     for (split_name, split_dates) in splits.iter() {
         if split_dates.is_empty() {
@@ -408,7 +409,7 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
 
         // Export results in chronological order for determinism
         // Using AlignedBatchExporter for correct 1:1 sequence-label alignment
-        let base_exporter = AlignedBatchExporter::new(
+        let mut base_exporter = AlignedBatchExporter::new(
             &split_output_dir,
             config.labels.to_label_config(),
             pipeline_config.sequence.window_size,
@@ -416,6 +417,17 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
         )
         .with_normalization(config.normalization.clone())
         .with_config_hash(compute_config_hash(config));
+
+        // Enable forward price trajectory export if configured
+        if config.export_forward_prices {
+            let smoothing_window = config.labels.smoothing_window;
+            base_exporter = base_exporter.with_forward_prices(smoothing_window);
+            println!(
+                "    📈 Forward prices: ENABLED (k={}, max_H={})",
+                smoothing_window,
+                config.labels.max_horizon(),
+            );
+        }
 
         // Log normalization strategy
         if config.normalization.any_normalization() {
@@ -469,6 +481,14 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
                 opp_configs[0].threshold * 10000.0
             );
             base_exporter.with_opportunity_labels(opp_configs)
+        } else if let Some(reg_config) = config.labels.to_regression_config() {
+            // Regression labeling: continuous bps returns
+            println!(
+                "    📊 Regression mode: {:?} horizons, return_type={:?} (continuous bps, float64)",
+                reg_config.multi_horizon_config.horizons(),
+                reg_config.return_type,
+            );
+            base_exporter.with_regression_labels(reg_config)
         } else if let Some(multi_config) = config.labels.to_multi_horizon_config() {
             // Multi-horizon TLOB labeling
             println!(
@@ -505,6 +525,7 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
 
         // For aligned export: sequences == labels (1:1)
         total_sequences_exported += split_sequences;
+        split_stats.push((split_name.to_string(), days_exported.len(), split_sequences));
 
         println!(
             "  ✅ {} complete: {} sequences (aligned 1:1 with labels)",
@@ -513,8 +534,8 @@ fn run_export(config: &DatasetConfig) -> Result<(), Box<dyn std::error::Error>> 
         println!();
     }
 
-    // Save manifest
-    save_manifest(config, total_days_processed)?;
+    // Save manifest with enriched metadata
+    save_manifest(config, total_days_processed, total_sequences_exported, &split_stats)?;
 
     // Print summary
     println!("╔══════════════════════════════════════════════════════════════╗");
@@ -579,27 +600,75 @@ fn compute_config_hash(config: &DatasetConfig) -> String {
     )
 }
 
-/// Save dataset manifest for reproducibility
+/// Save dataset manifest for reproducibility.
+///
+/// Captures the complete export configuration, provenance, and statistics
+/// for downstream experiment tracking. See EXPORT_INDEX.md.
 fn save_manifest(
     config: &DatasetConfig,
     days_processed: usize,
+    total_sequences: usize,
+    split_stats: &[(String, usize, usize)], // (split_name, days, sequences)
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config_hash = compute_config_hash(config);
 
     let labeling_strategy = format!("{:?}", config.labels.strategy).to_lowercase();
+    let sampling_strategy = format!("{:?}", config.sampling.strategy).to_lowercase();
+
+    // Build split breakdown
+    let split_json: serde_json::Value = split_stats
+        .iter()
+        .map(|(name, days, seqs)| {
+            (
+                name.clone(),
+                serde_json::json!({"days": days, "sequences": seqs}),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+
+    // Build feature groups
+    let feature_groups = serde_json::json!({
+        "lob_levels": config.features.lob_levels,
+        "include_derived": config.features.include_derived,
+        "include_mbo": config.features.include_mbo,
+        "include_signals": config.features.include_signals,
+        "experimental": {
+            "enabled": config.features.experimental.enabled,
+            "groups": config.features.experimental.groups,
+        },
+    });
 
     let manifest = serde_json::json!({
         "experiment": config.experiment,
         "symbol": config.symbol.name,
+        "exchange": config.symbol.exchange,
         "feature_count": config.feature_count(),
+        "feature_groups": feature_groups,
         "days_processed": days_processed,
+        "total_sequences": total_sequences,
+        "split": split_json,
+        "date_range": {
+            "start": config.dates.start_date,
+            "end": config.dates.end_date,
+        },
         "export_timestamp": chrono::Utc::now().to_rfc3339(),
         "config_hash": config_hash,
         "schema_version": feature_extractor::contract::SCHEMA_VERSION.to_string(),
         "sequence_length": config.sequence.window_size,
         "stride": config.sequence.stride,
+        "sampling": {
+            "strategy": sampling_strategy,
+            "event_count": config.sampling.event_count,
+            "volume_threshold": config.sampling.volume_threshold,
+        },
         "labeling_strategy": labeling_strategy,
         "horizons": config.labels.horizons,
+        "label_params": {
+            "smoothing_window": config.labels.smoothing_window,
+            "threshold": config.labels.threshold,
+        },
+        "normalization": "market_structure_zscore",
         "provenance": {
             "extractor_version": env!("CARGO_PKG_VERSION"),
             "git_commit": env!("GIT_COMMIT_HASH"),

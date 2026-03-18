@@ -1,7 +1,7 @@
 # Test Inventory: Feature Extractor MBO-LOB
 
 > **Purpose**: Complete map of all tests in the repository. An LLM coder should know exactly which test file validates which module, whether it requires real data, and what invariants it checks.
-> **Last Updated**: March 5, 2026
+> **Last Updated**: March 14, 2026
 
 ---
 
@@ -9,9 +9,9 @@
 
 | Category | Count | Runtime |
 |----------|-------|---------|
-| Unit tests (`cargo test --lib`) | ~730 | ~30s |
-| Integration tests (39 files) | 389 | ~3-5 min (CI) |
-| **Total** | **~1119** | |
+| Unit tests (`cargo test --lib`) | ~797 | ~30s |
+| Integration tests (42 files) | ~409 | ~3-5 min (CI) |
+| **Total** | **~1,206** | |
 
 **CI command**: `cargo test --features "parallel,databento"` (excludes `extended_validation`)
 **Toolchain**: Rust 1.94.0
@@ -94,7 +94,7 @@ All core validation targets one canonical day (Feb 3, 2025 NVIDIA MBO data) proc
 
 ---
 
-## Integration Test Files (39 files, 389 tests)
+## Integration Test Files (39 files, 390 tests)
 
 ### Level 1: Transformation Tracing
 
@@ -167,11 +167,49 @@ All core validation targets one canonical day (Feb 3, 2025 NVIDIA MBO data) proc
 | `opportunity_labeling_tests.rs` | 13 | No | OpportunityLabelGenerator | Peak return detection, conflict resolution, edge cases |
 | `triple_barrier_integration_tests.rs` | 15 | No | TripleBarrierLabeler, TimeoutStrategy | Barrier hits, timeout strategies, risk/reward |
 
+### Regression Tests
+
+#### Regression Config Tests (`src/export/config/labels.rs` inline tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_to_regression_config_returns_some_for_regression_strategy` | to_regression_config() returns Some with correct horizons |
+| `test_to_regression_config_returns_none_for_classification` | to_regression_config() returns None for TLOB |
+| `test_to_regression_config_single_horizon_regression` | Single-horizon regression synthesizes horizons |
+| `test_to_regression_config_with_return_type` | Custom return_type is preserved |
+| `test_to_regression_config_default_return_type` | Default return_type is SmoothedReturn |
+| `test_regression_validation_requires_smoothing` | smoothing_window=0 rejected |
+| `test_regression_strategy_description` | Description mentions Regression |
+| `test_regression_return_type_serde_roundtrip` | All RegressionReturnType variants serialize/deserialize |
+| `test_regression_toml_config_parsing` | TOML with return_type parses correctly |
+| `test_regression_toml_config_default_return_type` | TOML without return_type defaults correctly |
+| `test_regression_labeling_strategy_enum` | LabelingStrategy::Regression has correct properties |
+
+#### Regression Validation Tests (`src/export_aligned/validation.rs`)
+
+| Test | Purpose |
+|------|---------|
+| `test_validate_regression_labels_valid` | Valid regression labels pass |
+| `test_validate_regression_labels_length_mismatch` | Sequence/label count mismatch rejected |
+| `test_validate_regression_labels_nan_rejected` | NaN labels rejected |
+| `test_validate_regression_labels_inf_rejected` | Inf labels rejected |
+| `test_validate_regression_labels_inconsistent_width` | Inconsistent horizon width rejected |
+| `test_validate_regression_labels_empty` | Empty inputs accepted |
+| `test_validate_regression_labels_neg_inf_rejected` | Negative infinity rejected |
+
+#### LabelEncoding Regression Tests (`tests/aligned_exporter_tests.rs`)
+
+| Test | Purpose |
+|------|---------|
+| `test_label_encoding_continuous_bps_contract` | ContinuousBps encoding has correct properties |
+
+**Total: 19 new regression tests.**
+
 ### Export Tests
 
 | File | Tests | Real Data | Module(s) Tested | Key Invariants |
 |------|-------|-----------|------------------|----------------|
-| `aligned_exporter_tests.rs` | 26 | No | AlignedBatchExporter | Alignment, normalization, NPY output shapes |
+| `aligned_exporter_tests.rs` | 27 | No | AlignedBatchExporter | Alignment, normalization, NPY output shapes, regression label encoding |
 | `export_tests.rs` | 5 | No | Export legacy, TensorFormatter | Basic export functionality |
 | `dataset_config_integration.rs` | 16 | Yes | DatasetConfig TOML parsing | Config validation, pipeline config generation |
 | `fair_validation_with_warnings.rs` | 2 | No | Export validation | Warning-level vs error-level validation |
@@ -218,7 +256,7 @@ All core validation targets one canonical day (Feb 3, 2025 NVIDIA MBO data) proc
 
 ---
 
-## Unit Tests (~730 tests, `cargo test --lib`)
+## Unit Tests (~748 tests, `cargo test --lib`)
 
 Key modules with inline `#[cfg(test)] mod tests`:
 
@@ -236,8 +274,9 @@ Key modules with inline `#[cfg(test)] mod tests`:
 | `preprocessing/adaptive_sampling.rs` | ~15 | Volatility-adaptive threshold computation |
 | `sequence_builder/builder.rs` | ~23 | Circular buffer, push/build, stride |
 | `sequence_builder/multiscale.rs` | ~26 | Multi-scale windowing, decimation |
-| `export/config/labels.rs` | ~39 | ExportLabelConfig TOML parsing, validation |
+| `export/config/labels.rs` | ~50 | ExportLabelConfig TOML parsing, validation, regression config |
 | `export_aligned/mod.rs` | ~20 | Export alignment, normalization |
+| `export_aligned/validation.rs` | ~7 | Regression label validation (NaN, Inf, shape, empty) |
 | `features/extractor.rs` | ~15 | Feature composition, config validation |
 | `pipeline.rs` | ~10 | Pipeline construction, process flow |
 | `batch.rs` | ~9 | Batch processing, cancellation |
@@ -256,4 +295,4 @@ Key modules with inline `#[cfg(test)] mod tests`:
 
 ---
 
-*Last updated: March 5, 2026*
+*Last updated: March 14, 2026*

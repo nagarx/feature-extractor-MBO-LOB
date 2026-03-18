@@ -25,11 +25,11 @@ description = "Raw LOB data for TLOB model with BiN normalization layer"
 [symbol]
 name = "NVDA"
 exchange = "XNAS"
-filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
 tick_size = 0.01
 
 [data]
-input_dir = "data/NVDA_2025-02-01_to_2025-09-30"
+input_dir = "../data/hot_store"
 output_dir = "data/exports/nvda_tlob_raw"
 
 [dates]

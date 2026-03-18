@@ -19,7 +19,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-const MBO_DATA_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const MBO_DATA_DIR: &str = "../data/hot_store";
 const MBP10_DATA_DIR: &str = "../data/NVDA_MBP10_2025-07";
 
 /// Convert fixed-point price to cents
@@ -74,7 +74,7 @@ fn test_investigate_large_errors() {
 }
 
 fn investigate_day_errors(day: &str) {
-    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn.zst", day));
+    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn", day));
     let mbp_path = Path::new(MBP10_DATA_DIR).join(format!("xnas-itch-{}.mbp-10.dbn.zst", day));
 
     if !mbo_path.exists() || !mbp_path.exists() {
@@ -301,7 +301,7 @@ fn test_size_mismatch_investigation() {
     }
 
     let day = "20250701";
-    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn.zst", day));
+    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn", day));
     let mbp_path = Path::new(MBP10_DATA_DIR).join(format!("xnas-itch-{}.mbp-10.dbn.zst", day));
 
     println!("\n🔍 INVESTIGATING SIZE MISMATCHES");
@@ -473,7 +473,7 @@ fn test_early_day_accuracy_drop() {
     println!("Hypothesis: Early morning pre-market hours have more discrepancies\n");
 
     let day = "20250701";
-    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn.zst", day));
+    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn", day));
     let mbp_path = Path::new(MBP10_DATA_DIR).join(format!("xnas-itch-{}.mbp-10.dbn.zst", day));
 
     let loader = DbnLoader::new(&mbo_path).expect("Failed to load MBO");

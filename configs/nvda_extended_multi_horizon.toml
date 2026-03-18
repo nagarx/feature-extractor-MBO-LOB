@@ -12,7 +12,7 @@
 #   2. Decompress to hot store:
 #      cd MBO-LOB-reconstructor
 #      cargo run --release --bin decompress_to_hot_store -- \
-#          --input ../data/NVDA_2025-02-01_to_2025-09-30 \
+#          --input ../data/hot_store \
 #          --output ../data/hot_store
 #      cargo run --release --bin decompress_to_hot_store -- \
 #          --input ../data/NVDA_2025-09-29_to_2026-01-08 \
@@ -38,7 +38,7 @@ tags = [
 [symbol]
 name = "NVDA"
 exchange = "XNAS"
-filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
 tick_size = 0.01
 
 [data]
@@ -49,7 +49,7 @@ output_dir = "../data/exports/nvda_extended_multi_horizon"
 
 # Note: input_dir is not used when hot_store_dir is provided
 # The hot store should contain all files from both date ranges
-input_dir = "../data/NVDA_2025-02-01_to_2025-09-30"
+input_dir = "../data/hot_store"
 
 [dates]
 # Extended date range: Feb 3, 2025 to Jan 6, 2026

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Test configuration
-const MBO_DATA_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const MBO_DATA_DIR: &str = "../data/hot_store";
 const MBP10_DATA_DIR: &str = "../data/NVDA_MBP10_2025-07";
 
 /// Results structure for fair comparison
@@ -327,10 +327,10 @@ fn test_fair_validation_with_warnings() {
     let mut total_results = FairValidationResults::default();
     let mut days_processed = 0;
 
-    // Look for July files (xnas-itch-202507*.mbo.dbn.zst)
+    // Look for July files (xnas-itch-202507*.mbo.dbn)
     for day in 1..=31 {
         let date_str = format!("202507{:02}", day);
-        let mbo_file = format!("{}/xnas-itch-{}.mbo.dbn.zst", MBO_DATA_DIR, date_str);
+        let mbo_file = format!("{}/xnas-itch-{}.mbo.dbn", MBO_DATA_DIR, date_str);
 
         if let Some((day_results, _stats)) = validate_day(&mbo_file, &mbp_snapshots) {
             if day_results.aligned_comparisons > 0 {
@@ -602,7 +602,7 @@ fn test_warning_stats_export() {
     let mut test_file = None;
     for day in 1..=31 {
         let date_str = format!("202507{:02}", day);
-        let mbo_file = format!("{}/xnas-itch-{}.mbo.dbn.zst", MBO_DATA_DIR, date_str);
+        let mbo_file = format!("{}/xnas-itch-{}.mbo.dbn", MBO_DATA_DIR, date_str);
         if Path::new(&mbo_file).exists() {
             test_file = Some(mbo_file);
             break;

@@ -360,10 +360,12 @@ fn experimental_feature_indices_exhaustive() {
         entries.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
     );
 
+    let exp_end = 98 + contract::EXPERIMENTAL_FEATURE_COUNT;
     for (name, idx) in &entries {
         assert!(
-            (98..116).contains(idx),
-            "Experimental feature '{name}' has index {idx}, expected range [98, 115]"
+            (98..exp_end).contains(idx),
+            "Experimental feature '{name}' has index {idx}, expected range [98, {}]",
+            exp_end - 1
         );
     }
 }

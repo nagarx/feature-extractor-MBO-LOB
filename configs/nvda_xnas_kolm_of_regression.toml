@@ -1,0 +1,110 @@
+# =============================================================================
+# NVDA XNAS Kolm Per-Level OF — Fine-Grained Point-Return Regression
+# =============================================================================
+#
+# Implements Kolm, Turiel & Westray (2023) approach:
+#   - 20-dim per-level OF features (bid/ask separate)
+#   - event_count=100 (~195ms per sample at NVDA's ~12M events/day)
+#   - Short horizons [1,2,3,5] corresponding to ~0.2s-1.0s
+#   - Point-to-point returns (no smoothing)
+#
+# Horizon calibration (Kolm Section 3.2.1):
+#   NVDA Delta_t = 299ms (2.34e7 / 78,340 price_changes_per_day)
+#   H1 = 195ms ~ Kolm h3 (within effective range)
+#   H2 = 390ms ~ Kolm h7 (within effective range)
+#   H3 = 585ms ~ Kolm h10 (at effective horizon boundary)
+#   H5 = 975ms (beyond — included for decay analysis)
+#
+# Feature layout (128 features):
+#   0-39:   LOB (ask/bid prices and sizes, 10 levels)
+#   40-47:  Derived (mid_price, spread, etc.)
+#   48-83:  MBO (order flow, lifecycle, queue, size)
+#   84-97:  Signals (OFI, pressure, regime, etc.)
+#   98-105: Experimental: institutional_v2
+#   106-111: Experimental: volatility
+#   112-115: Experimental: seasonality
+#   116-127: NOT INCLUDED (mlofi excluded to avoid redundancy with kolm_of)
+#   → Actual indices 98-115 (18 features) + kolm_of at 116-135 (20 features)
+#
+# NOTE: With mlofi excluded and kolm_of included, the feature count is
+# 98 + 8 + 6 + 4 + 20 = 136 features. The kolm_of features appear at
+# indices 116-135 (immediately after seasonality, filling the mlofi gap).
+#
+# Output files per day:
+#   {day}_sequences.npy          [N, 20, 128] float32
+#   {day}_regression_labels.npy  [N, 4] float64 (4 horizons, bps)
+#   {day}_metadata.json
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA XNAS Kolm Per-Level OF Regression"
+description = "Kolm et al. 2023: 20-dim OF, event_count=100, point-return at short horizons"
+version = "1.0.0"
+tags = ["nvda", "xnas", "kolm-of", "regression", "point-return", "fine-grained"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/hot_store"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_xnas_kolm_of_regression"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+exclude_dates = [
+    "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27",
+    "2025-12-25", "2026-01-01",
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 100
+
+[features.experimental]
+enabled = true
+groups = ["institutional_v2", "volatility", "seasonality", "kolm_of"]
+
+[sampling]
+strategy = "event_based"
+event_count = 100
+
+[sequence]
+window_size = 20
+stride = 10
+max_buffer_size = 200000
+
+[labels]
+strategy = "regression"
+horizon = 1
+horizons = [1, 2, 3, 5]
+smoothing_window = 1
+threshold = 0.0008
+return_type = "point_return"
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = false
+
+[normalization]
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

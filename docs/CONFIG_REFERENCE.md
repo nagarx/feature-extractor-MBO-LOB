@@ -77,17 +77,27 @@ It is converted to internal types via `config.to_pipeline_config()`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | false | Enable +18 experimental features (indices 98-115) |
-| `groups` | Vec\<String\> | all | Which groups: `"institutional_v2"`, `"volatility"`, `"seasonality"` |
+| `enabled` | bool | false | Enable up to 50 experimental features (indices 98-147) |
+| `groups` | Vec\<String\> | all | Which groups: `"institutional_v2"`, `"volatility"`, `"seasonality"`, `"mlofi"`, `"kolm_of"` |
 
 ### `[sampling]`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `strategy` | String | `"event_based"` | `"event_based"` or `"volume_based"` |
+| `strategy` | String | `"event_based"` | `"event_based"`, `"volume_based"`, or `"time_based"` |
 | `event_count` | usize | 1000 | Events between samples (if event_based) |
 | `volume_threshold` | usize | 1000 | Shares between samples (if volume_based) |
-| `min_time_interval_ns` | u64 | 1000000 | Minimum 1ms between samples |
+| `min_time_interval_ns` | u64 | 1000000 | Minimum ns between samples (volume_based only) |
+| `time_interval_ns` | u64 | -- | Grid interval in nanoseconds (if time_based). E.g., 5000000000 = 5s |
+| `utc_offset_hours` | i32 | -5 | UTC offset for 09:30 market open alignment (if time_based). EST=-5, EDT=-4 |
+
+**Example: Time-based sampling** (preserves OFI persistence, matches mbo-statistical-profiler grid):
+```toml
+[sampling]
+strategy = "time_based"
+time_interval_ns = 5000000000  # 5 seconds
+utc_offset_hours = -5          # EST
+```
 
 ### `[sequence]`
 
@@ -101,7 +111,7 @@ It is converted to internal types via `config.to_pipeline_config()`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `strategy` | String | `"tlob"` | `"tlob"`, `"opportunity"`, `"triple_barrier"` |
+| `strategy` | String | `"tlob"` | `"tlob"`, `"opportunity"`, `"triple_barrier"`, `"regression"` |
 | `horizon` | usize | 50 | Single-horizon look-ahead |
 | `horizons` | Vec\<usize\> | \[\] | Multi-horizon list (overrides horizon) |
 | `smoothing_window` | usize | 10 | TLOB smoothing window (k) |
@@ -161,6 +171,33 @@ volatility_floor = 0.3
 volatility_cap = 3.0
 ```
 
+### Regression Strategy (`strategy = "regression"`)
+
+Generates continuous forward returns in basis points (float64) instead of discrete class labels.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy` | string | - | Must be `"regression"` |
+| `horizons` | array | required | Prediction horizons, e.g. `[10, 60, 300]` |
+| `horizon` | int | 50 | Single horizon (used if `horizons` is empty) |
+| `smoothing_window` | int | 10 | Smoothing window for SmoothedReturn |
+| `threshold` | float | 0.0008 | Threshold for internal threshold_strategy |
+| `return_type` | string | `"smoothed_return"` | Return formula: `smoothed_return`, `point_return`, `peak_return`, `mean_return`, `dominant_return` |
+
+Example TOML:
+```toml
+[labels]
+strategy = "regression"
+horizons = [10, 60, 300]
+smoothing_window = 10
+return_type = "point_return"
+```
+
+Output files:
+- `{day}_regression_labels.npy` — `[N, num_horizons]` float64, values in basis points
+- `{day}_sequences.npy` — same as classification
+- `{day}_metadata.json` — includes `label_dtype: "float64"` and `return_type`
+
 ### `[normalization]` (optional)
 
 | Field | Type | Default | Description |
@@ -197,7 +234,11 @@ volatility_cap = 3.0
 | `nvda_98feat_v2.toml` | 98 | TLOB | TlobDynamic | Event 1000 | Dynamic threshold per TLOB paper |
 | `nvda_98feat_full.toml` | 98 | TLOB | Fixed | Event 1000 | Full 98-feature dataset |
 | `nvda_84feat_baseline.toml` | 84 | TLOB | Fixed | Event 1000 | Baseline without signals |
-| `nvda_116feat_full_analysis.toml` | 116 | TLOB | Fixed | Event 1000 | Full with experimental features |
+| `nvda_116feat_full_analysis.toml` | 116 | TLOB | Fixed | Event 1000 | With 3 experimental groups (no mlofi/kolm_of) |
+| `nvda_xnas_128feat_full.toml` | 128 | TLOB | Fixed | Event 1000 | With 4 experimental groups (incl. mlofi) |
+| `nvda_xnas_128feat_regression.toml` | 128 | Regression | SmoothedReturn | Event 1000 | Regression with smoothed avg labels |
+| `nvda_xnas_128feat_regression_pointreturn.toml` | 128 | Regression | PointReturn | Event 1000 | Regression with point-to-point labels |
+| `nvda_xnas_kolm_of_regression.toml` | 136 | Regression | PointReturn | Event 100 | Kolm OF + short horizons [1,2,3,5] |
 
 ### Multi-Horizon Configs
 
@@ -222,6 +263,12 @@ volatility_cap = 3.0
 | Config File | Features | Threshold | Use Case |
 |-------------|----------|-----------|----------|
 | `nvda_bigmove_detection.toml` | 98 | 50+ bps, high imbalance | Big move / whale detection |
+
+### Regression Configs
+
+| Config File | Features | Labeling | Horizons | Use Case |
+|-------------|----------|----------|----------|----------|
+| `nvda_xnas_128feat_regression.toml` | 128 | Regression (continuous bps) | Configurable | Regression targets for ML |
 
 ### Long-Run Configs
 
@@ -260,8 +307,9 @@ The transformation from TOML to internal types happens in `DatasetConfig::to_pip
 }
 
 [sampling]  →  SamplingConfig {
-    strategy (VolumeBased | EventBased),
-    volume_threshold, event_count, min_time_interval_ns
+    strategy (VolumeBased | EventBased | TimeBased),
+    volume_threshold, event_count, min_time_interval_ns,
+    time_interval_ns, utc_offset_hours
 }
 
 [labels]  →  ExportLabelConfig → LabelConfig | MultiHorizonConfig |

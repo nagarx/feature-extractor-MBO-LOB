@@ -634,7 +634,11 @@ impl MultiLevelOfiTracker {
         self.levels
     }
 
-    /// Reset the tracker.
+    /// Full reset: clear all state including previous book snapshot.
+    ///
+    /// Used between trading days to prevent cross-day state leakage.
+    /// After reset(), the tracker is uninitialized and the first `update()`
+    /// call will capture the initial book state without computing deltas.
     pub fn reset(&mut self) {
         self.ofi_bid_per_level.fill(0.0);
         self.ofi_ask_per_level.fill(0.0);
@@ -644,6 +648,26 @@ impl MultiLevelOfiTracker {
         self.prev_ask_sizes.fill(0);
         self.initialized = false;
         self.update_count = 0;
+    }
+
+    /// Reset OFI accumulators only, preserving the previous book snapshot.
+    ///
+    /// Used at sample points to scope OFI to the current sampling interval.
+    /// After this call, the next `update()` computes deltas from the current
+    /// book state (not from zero), so the next interval accumulates correctly.
+    ///
+    /// Unlike `reset()`, this does NOT clear `prev_*` state or `initialized`.
+    ///
+    /// # Pattern
+    ///
+    /// ```ignore
+    /// // At each sample point:
+    /// let mlofi = tracker.get_mlofi();       // read interval OFI
+    /// tracker.sample_and_reset_accumulators(); // zero for next interval
+    /// ```
+    pub fn sample_and_reset_accumulators(&mut self) {
+        self.ofi_bid_per_level.fill(0.0);
+        self.ofi_ask_per_level.fill(0.0);
     }
 
     /// Extract MLOFI features as a vector.
@@ -910,5 +934,90 @@ mod tests {
         lob.best_bid = Some(bid_price);
         lob.best_ask = Some(ask_price);
         lob
+    }
+
+    #[test]
+    fn test_sample_and_reset_accumulators_zeroes_ofi() {
+        let mut tracker = MultiLevelOfiTracker::new(10);
+
+        let lob1 = create_test_lob(100_000_000_000, 100_010_000_000, 100, 100);
+        let lob2 = create_test_lob(100_000_000_000, 100_010_000_000, 150, 80);
+        tracker.update(&lob1);
+        tracker.update(&lob2);
+
+        // OFI should be non-zero after two updates with different sizes
+        assert!(tracker.get_mlofi().abs() > 0.0, "OFI should be non-zero before reset");
+
+        // Sample and reset accumulators
+        tracker.sample_and_reset_accumulators();
+
+        // OFI should be zero after sample_and_reset_accumulators
+        assert_eq!(
+            tracker.get_mlofi(),
+            0.0,
+            "OFI must be zero after sample_and_reset_accumulators"
+        );
+    }
+
+    #[test]
+    fn test_sample_reset_preserves_prev_state() {
+        let mut tracker = MultiLevelOfiTracker::new(10);
+
+        let lob1 = create_test_lob(100_000_000_000, 100_010_000_000, 100, 100);
+        let lob2 = create_test_lob(100_000_000_000, 100_010_000_000, 150, 80);
+        tracker.update(&lob1);
+        tracker.update(&lob2);
+
+        // Interval 1: OFI from lob1 → lob2
+        let ofi_interval_1 = tracker.get_mlofi();
+        assert!(ofi_interval_1.abs() > 0.0);
+
+        // Reset accumulators only (keep prev state)
+        tracker.sample_and_reset_accumulators();
+
+        // Interval 2: same update (lob2 → lob2, no change) → OFI should be 0
+        tracker.update(&lob2);
+        let ofi_interval_2 = tracker.get_mlofi();
+        assert_eq!(
+            ofi_interval_2, 0.0,
+            "Same state → OFI delta should be 0, got {}. \
+             This proves prev_state was preserved across sample_and_reset.",
+            ofi_interval_2
+        );
+
+        // Interval 2 continued: now change sizes again
+        let lob3 = create_test_lob(100_000_000_000, 100_010_000_000, 200, 60);
+        tracker.update(&lob3);
+        let ofi_interval_2b = tracker.get_mlofi();
+        assert!(
+            ofi_interval_2b.abs() > 0.0,
+            "After real change, OFI should be non-zero in new interval"
+        );
+    }
+
+    #[test]
+    fn test_full_reset_vs_sample_reset() {
+        let mut tracker = MultiLevelOfiTracker::new(10);
+
+        let lob1 = create_test_lob(100_000_000_000, 100_010_000_000, 100, 100);
+        let lob2 = create_test_lob(100_000_000_000, 100_010_000_000, 150, 80);
+        tracker.update(&lob1);
+        tracker.update(&lob2);
+
+        // Full reset: clears everything including prev state
+        let mut full_reset = tracker.clone();
+        full_reset.reset();
+        assert_eq!(full_reset.get_mlofi(), 0.0);
+        assert_eq!(full_reset.update_count(), 0, "Full reset clears update_count");
+
+        // Sample reset: clears OFI but keeps prev state
+        let mut sample_reset = tracker.clone();
+        sample_reset.sample_and_reset_accumulators();
+        assert_eq!(sample_reset.get_mlofi(), 0.0);
+        assert_eq!(
+            sample_reset.update_count(),
+            2,
+            "sample_and_reset preserves update_count"
+        );
     }
 }

@@ -1471,4 +1471,83 @@ mod tests {
             assert!(v.abs() < 1e-10);
         }
     }
+
+    // ====================================================================
+    // Edge case tests — zero variance, single sample (Rule §2)
+    // ====================================================================
+
+    #[test]
+    fn test_zscore_identical_values_zero_variance() {
+        // All values = 42.0 → variance = 0 → std clamped to min_std
+        // normalize should produce 0.0 (value == mean)
+        let mut normalizer = ZScoreNormalizer::new();
+        for _ in 0..10 {
+            normalizer.update(42.0);
+        }
+        let result = normalizer.normalize(42.0);
+        assert!(
+            result.is_finite(),
+            "Must be finite when variance=0, got {}",
+            result
+        );
+        assert!(
+            result.abs() < 1e-6,
+            "normalize(mean) should be ~0.0 when all values identical. Got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_zscore_single_sample_returns_neutral() {
+        // Only 1 sample → count < 2 → normalize returns 0.0 (neutral)
+        let mut normalizer = ZScoreNormalizer::new();
+        normalizer.update(100.0);
+        let result = normalizer.normalize(100.0);
+        assert_eq!(
+            result, 0.0,
+            "With only 1 sample, normalize must return 0.0 (neutral). Got {}",
+            result
+        );
+        assert!(!normalizer.is_ready(), "Not ready with < 2 samples");
+    }
+
+    #[test]
+    fn test_zscore_std_clamped_to_min_std() {
+        // Zero variance → std should be clamped to min_std (not 0.0)
+        let mut normalizer = ZScoreNormalizer::new();
+        for _ in 0..5 {
+            normalizer.update(42.0);
+        }
+        let std = normalizer.std();
+        assert!(
+            std > 0.0,
+            "std must be > 0 (clamped to min_std) even with zero variance. Got {}",
+            std
+        );
+        assert!(std.is_finite(), "std must be finite");
+    }
+
+    #[test]
+    fn test_per_feature_normalizer_all_finite() {
+        // Verify PerFeatureNormalizer produces all-finite output
+        let mut normalizer = PerFeatureNormalizer::new(4);
+        // Feed 10 batches of 4 features
+        for i in 0..10 {
+            let features = vec![
+                100.0 + i as f64,
+                200.0 + i as f64 * 2.0,
+                0.5, // constant (zero variance)
+                -50.0 + i as f64,
+            ];
+            normalizer.update_batch(&features);
+        }
+        let normalized = normalizer.normalize_features(&[102.0, 205.0, 0.5, -48.0]);
+        for (i, &val) in normalized.iter().enumerate() {
+            assert!(
+                val.is_finite(),
+                "Feature {} must be finite after normalization. Got {}",
+                i, val
+            );
+        }
+    }
 }

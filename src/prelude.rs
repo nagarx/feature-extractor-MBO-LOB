@@ -77,10 +77,13 @@ pub use crate::pipeline::{Pipeline, PipelineOutput};
 // Feature Extraction
 // ============================================================================
 
-pub use crate::features::fi2010::{FI2010Config, FI2010Extractor};
 pub use crate::features::mbo_features::{MboAggregator, MboEvent};
-pub use crate::features::order_flow::{OrderFlowFeatures, OrderFlowTracker};
 pub use crate::features::{FeatureConfig, FeatureExtractor};
+
+#[cfg(feature = "legacy_features")]
+pub use crate::features::fi2010::{FI2010Config, FI2010Extractor};
+#[cfg(feature = "legacy_features")]
+pub use crate::features::order_flow::{OrderFlowFeatures, OrderFlowTracker};
 
 // ============================================================================
 // Sequence Building

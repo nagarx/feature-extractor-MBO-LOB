@@ -20,7 +20,7 @@ use std::path::Path;
 // ============================================================================
 
 /// Compressed data directory (fallback if hot store unavailable)
-const COMPRESSED_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const COMPRESSED_DIR: &str = "../data/hot_store";
 
 /// Information about which data source is being used
 #[derive(Debug, Clone, Copy)]

@@ -20,7 +20,7 @@ use std::io::BufReader;
 use std::path::Path;
 
 // Data directories
-const MBO_DATA_DIR: &str = "../data/NVDA_2025-02-03_to_2026-01-07";
+const MBO_DATA_DIR: &str = "../data/hot_store";
 const MBP10_DATA_DIR: &str = "../data/NVDA_MBP10_2025-07";
 
 /// Test configuration for fair validation
@@ -368,7 +368,7 @@ fn validate_day(
     let day = mbo_path
         .file_name()
         .and_then(|n| n.to_str())
-        .map(|s| s.replace("xnas-itch-", "").replace(".mbo.dbn.zst", ""))
+        .map(|s| s.replace("xnas-itch-", "").replace(".mbo.dbn", ""))
         .unwrap_or_else(|| "unknown".to_string());
 
     let mut stats = DayValidationStats::new(&day);
@@ -570,7 +570,7 @@ fn test_comprehensive_real_data_validation() {
             break;
         }
 
-        let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn.zst", day));
+        let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn", day));
         let mbp_path = Path::new(MBP10_DATA_DIR).join(format!("xnas-itch-{}.mbp-10.dbn.zst", day));
 
         if !mbo_path.exists() {
@@ -675,7 +675,7 @@ fn test_warning_analysis() {
 
     // Test on a single day for detailed warning analysis
     let test_day = "20250701";
-    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn.zst", test_day));
+    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn", test_day));
 
     if !mbo_path.exists() {
         println!("⚠️  Test file not found, skipping");
@@ -805,7 +805,7 @@ fn test_feature_extraction_on_real_data() {
     use feature_extractor::{FeatureConfig, FeatureExtractor};
 
     let test_day = "20250701";
-    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn.zst", test_day));
+    let mbo_path = Path::new(MBO_DATA_DIR).join(format!("xnas-itch-{}.mbo.dbn", test_day));
 
     if !mbo_path.exists() {
         println!("⚠️  Test file not found, skipping");

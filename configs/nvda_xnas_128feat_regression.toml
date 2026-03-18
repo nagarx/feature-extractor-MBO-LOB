@@ -1,0 +1,89 @@
+# =============================================================================
+# NVDA XNAS 128-Feature — Pure Regression Labels
+# =============================================================================
+#
+# Same features as all other 128-feat configs. Labels are continuous forward
+# returns in bps (float64) instead of discretized Up/Down/Stable (int8).
+#
+# Output files per day:
+#   {day}_sequences.npy          [N, 100, 128] float32  (same as classification)
+#   {day}_labels.npy             [N, 3] int8            (classification, for compatibility)
+#   {day}_regression_labels.npy  [N, 3] float64         (continuous bps returns)
+#   {day}_metadata.json          (includes label_encoding: "continuous_bps")
+#
+# The regression labels use the same TLOB smoothed-average formula but
+# output the continuous return value instead of discretizing.
+#
+# =============================================================================
+
+[experiment]
+name = "NVDA XNAS 128-Feature Regression (H60 Primary)"
+description = "Pure regression labels: continuous forward returns in bps, float64"
+version = "1.0.0"
+tags = ["nvda", "xnas", "128-features", "regression", "continuous-bps", "h60-primary"]
+
+[symbol]
+name = "NVDA"
+exchange = "XNAS"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
+tick_size = 0.01
+
+[data]
+input_dir = "../data/hot_store"
+hot_store_dir = "../data/hot_store"
+output_dir = "../data/exports/nvda_xnas_128feat_regression"
+
+[dates]
+start_date = "2025-02-03"
+end_date = "2026-01-06"
+exclude_dates = [
+    "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27",
+    "2025-12-25", "2026-01-01",
+]
+
+[features]
+lob_levels = 10
+include_derived = true
+include_mbo = true
+include_signals = true
+mbo_window_size = 1000
+
+[features.experimental]
+enabled = true
+groups = ["institutional_v2", "volatility", "seasonality", "mlofi"]
+
+[sampling]
+strategy = "event_based"
+event_count = 1000
+
+[sequence]
+window_size = 100
+stride = 10
+max_buffer_size = 50000
+
+# REGRESSION: continuous forward returns in bps
+[labels]
+strategy = "regression"
+horizon = 60
+horizons = [10, 60, 300]
+smoothing_window = 10
+threshold = 0.0008
+
+[split]
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
+
+[processing]
+error_mode = "collect_errors"
+verbose = false
+
+[normalization]
+lob_prices = "none"
+lob_sizes = "none"
+derived = "none"
+mbo = "none"
+signals = "none"
+reference_price = "mid_price"
+bilinear_scale_factor = 50.0

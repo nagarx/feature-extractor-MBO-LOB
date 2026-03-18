@@ -54,12 +54,12 @@ tags = [
 [symbol]
 name = "NVDA"
 exchange = "XNAS"
-filename_pattern = "xnas-itch-{date}.mbo.dbn.zst"
+filename_pattern = "xnas-itch-{date}.mbo.dbn"
 tick_size = 0.01
 
 [data]
 # Input: Raw MBO data (11 months: Feb 2025 - Jan 2026)
-input_dir = "../data/NVDA_2025-02-03_to_2026-01-07"
+input_dir = "../data/hot_store"
 
 # Hot store: Pre-decompressed files for faster processing
 hot_store_dir = "../data/hot_store"

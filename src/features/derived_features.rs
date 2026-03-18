@@ -288,4 +288,146 @@ mod tests {
         assert!(features[6] > features[0]); // Weighted > simple mid
         assert!(features[6] < 100.01); // But still less than best ask
     }
+
+    // ====================================================================
+    // Golden value tests — hand-calculated expected values (Rule §6)
+    // ====================================================================
+
+    /// Helper: create a LobState with specified bid/ask prices and sizes.
+    /// Prices in nanodollars. Only populates level 0.
+    fn make_lob(
+        bid_price_nd: i64,
+        ask_price_nd: i64,
+        bid_size: u32,
+        ask_size: u32,
+    ) -> LobState {
+        let mut state = LobState::new(10);
+        state.bid_prices[0] = bid_price_nd;
+        state.bid_sizes[0] = bid_size;
+        state.ask_prices[0] = ask_price_nd;
+        state.ask_sizes[0] = ask_size;
+        state.best_bid = Some(bid_price_nd);
+        state.best_ask = Some(ask_price_nd);
+        state
+    }
+
+    #[test]
+    fn test_golden_mid_price() {
+        // bid = $100.00, ask = $100.02
+        // mid = (100.00 + 100.02) / 2 = 100.01
+        let state = make_lob(100_000_000_000, 100_020_000_000, 100, 100);
+        let f = compute_derived_features(&state, 10).unwrap();
+        assert!(
+            (f[0] - 100.01).abs() < 1e-10,
+            "mid_price: expected 100.01, got {}. Formula: (bid + ask) / 2",
+            f[0]
+        );
+    }
+
+    #[test]
+    fn test_golden_spread_bps() {
+        // bid = $100.00, ask = $100.02 → spread = $0.02, mid = $100.01
+        // spread_bps = (0.02 / 100.01) * 10000 = 1.99980002... bps
+        let state = make_lob(100_000_000_000, 100_020_000_000, 100, 100);
+        let f = compute_derived_features(&state, 10).unwrap();
+        let expected_bps = (0.02 / 100.01) * 10_000.0;
+        assert!(
+            (f[2] - expected_bps).abs() < 1e-8,
+            "spread_bps: expected {}, got {}. Formula: (spread / mid) * 10000",
+            expected_bps, f[2]
+        );
+    }
+
+    #[test]
+    fn test_golden_volume_imbalance() {
+        // bid_vol = 300, ask_vol = 100 → total = 400
+        // vi = (300 - 100) / 400 = 0.5
+        let state = make_lob(100_000_000_000, 100_010_000_000, 300, 100);
+        let f = compute_derived_features(&state, 10).unwrap();
+        assert!(
+            (f[5] - 0.5).abs() < 1e-10,
+            "volume_imbalance: expected 0.5, got {}. Formula: (bid-ask)/total",
+            f[5]
+        );
+    }
+
+    #[test]
+    fn test_golden_weighted_mid_price() {
+        // bid=$100.00 × 200, ask=$100.02 × 100
+        // wmp = (100.00 * 100 + 100.02 * 200) / (200 + 100)
+        //     = (10000 + 20004) / 300 = 30004 / 300 = 100.01333...
+        let state = make_lob(100_000_000_000, 100_020_000_000, 200, 100);
+        let f = compute_derived_features(&state, 10).unwrap();
+        let expected_wmp = (100.00 * 100.0 + 100.02 * 200.0) / 300.0;
+        assert!(
+            (f[6] - expected_wmp).abs() < 1e-8,
+            "weighted_mid_price: expected {}, got {}. Formula: (bid*ask_size + ask*bid_size) / total",
+            expected_wmp, f[6]
+        );
+    }
+
+    // ====================================================================
+    // Edge case tests — zero/boundary values (Rule §2)
+    // ====================================================================
+
+    #[test]
+    fn test_zero_total_volume() {
+        // All sizes = 0 → volume_imbalance = 0.0, no div-by-zero
+        let state = make_lob(100_000_000_000, 100_010_000_000, 0, 0);
+        let f = compute_derived_features(&state, 10).unwrap();
+        assert_eq!(f[3], 0.0, "total_bid_volume should be 0");
+        assert_eq!(f[4], 0.0, "total_ask_volume should be 0");
+        assert_eq!(
+            f[5], 0.0,
+            "volume_imbalance must be 0.0 when total_volume=0, not NaN/Inf"
+        );
+        assert!(f[5].is_finite(), "volume_imbalance must be finite");
+    }
+
+    #[test]
+    fn test_zero_best_sizes() {
+        // Best sizes = 0 → weighted_mid_price falls back to mid_price
+        let state = make_lob(100_000_000_000, 100_010_000_000, 0, 0);
+        let f = compute_derived_features(&state, 10).unwrap();
+        let mid_price = f[0];
+        assert_eq!(
+            f[6], mid_price,
+            "weighted_mid_price must fall back to mid_price when best sizes are 0"
+        );
+        assert_eq!(
+            f[7], 0.0,
+            "price_impact must be 0.0 when wmp == mid (no imbalance)"
+        );
+    }
+
+    #[test]
+    fn test_single_level_depth() {
+        // Only level 0 populated → avg depth = 0 ticks (only best level)
+        let state = make_lob(100_000_000_000, 100_010_000_000, 100, 100);
+        let depth = compute_depth_features(&state, 10, 0.01);
+        assert_eq!(depth[0], 1.0, "active_bid_levels should be 1");
+        assert_eq!(depth[1], 1.0, "active_ask_levels should be 1");
+        assert_eq!(
+            depth[2], 0.0,
+            "avg_bid_depth should be 0 ticks (only best level)"
+        );
+        assert_eq!(
+            depth[3], 0.0,
+            "avg_ask_depth should be 0 ticks (only best level)"
+        );
+    }
+
+    #[test]
+    fn test_all_features_finite() {
+        // Comprehensive finiteness check on standard inputs
+        let state = create_test_lob_state();
+        let f = compute_derived_features(&state, 10).unwrap();
+        for (i, &val) in f.iter().enumerate() {
+            assert!(
+                val.is_finite(),
+                "Feature {} must be finite, got {}",
+                i, val
+            );
+        }
+    }
 }

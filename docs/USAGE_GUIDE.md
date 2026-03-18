@@ -95,11 +95,11 @@ let pipeline = PipelineBuilder::new()
     .with_trading_signals()   // +14 signals (OFI, microprice, time regime, safety gates)
     .build()?;
 
-// With experimental features (116 features = 98 + 18)
+// With experimental features (up to 148 features = 98 + 50)
 // Requires experimental config in DatasetConfig TOML:
 //   [features.experimental]
 //   enabled = true
-//   groups = ["institutional_v2", "volatility", "seasonality"]
+//   groups = ["institutional_v2", "volatility", "seasonality", "mlofi", "kolm_of"]
 ```
 
 > **Note**: Trading signals require exactly 10 LOB levels (`lob_levels(10)`).
@@ -185,7 +185,7 @@ Controls when to sample LOB snapshots:
 |----------|-------------|----------|
 | `VolumeBased` | Sample after N shares traded | Activity-weighted sampling |
 | `EventBased` | Sample after N MBO events | Uniform event-time sampling |
-| `TimeBased` | Sample at fixed intervals | Calendar-time analysis (**not yet implemented**) |
+| `TimeBased` | Sample at fixed wall-clock intervals, grid-aligned to 09:30 ET | Calendar-time analysis, OFI persistence preservation. Config: `time_interval_ns`, `utc_offset_hours` |
 
 ## Feature Sets
 
@@ -244,7 +244,7 @@ Categorical indices [92, 93, 94, 97] must NOT be normalized.
 
 Source: `src/features/signals/` (directory module)
 
-### Experimental Features (18, indices 98-115)
+### Experimental Features (up to 50, indices 98-147)
 
 Opt-in features enabled via `DatasetConfig` TOML:
 

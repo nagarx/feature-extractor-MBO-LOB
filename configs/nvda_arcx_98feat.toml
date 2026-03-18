@@ -23,7 +23,7 @@
 # Prerequisites:
 #   cd MBO-LOB-reconstructor
 #   cargo run --release --bin decompress_to_hot_store -- \
-#       --input ../data/ARCX_PILLAR/NVDA/mbo_2025-02-03_to_2026-01-07 \
+#       --input ../data/hot_store \
 #       --output ../data/hot_store
 #
 # Usage:
@@ -49,11 +49,11 @@ tags = [
 [symbol]
 name = "NVDA"
 exchange = "ARCX"
-filename_pattern = "arcx-pillar-{date}.mbo.dbn.zst"
+filename_pattern = "arcx-pillar-{date}.mbo.dbn"
 tick_size = 0.01
 
 [data]
-input_dir = "../data/ARCX_PILLAR/NVDA/mbo_2025-02-03_to_2026-01-07"
+input_dir = "../data/hot_store"
 hot_store_dir = "../data/hot_store"
 output_dir = "../data/exports/arcx_pillar/nvda_98feat"
 
